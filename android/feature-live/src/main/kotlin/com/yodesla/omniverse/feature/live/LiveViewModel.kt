@@ -163,7 +163,7 @@ class LiveViewModel(
     init {
         viewModelScope.launch {
             val all = sources.sources().first()
-            val src = all.firstOrNull()
+            val src = all.firstLiveCapable()
             if (src == null) {
                 _state.update { it.copy(loading = false, noSources = true) }
                 return@launch

@@ -43,6 +43,7 @@ import com.yodesla.omniverse.core.data.Visibility
 import com.yodesla.omniverse.core.data.guide.GuideFilter
 import com.yodesla.omniverse.core.data.guide.GuideFilterClassifier
 import com.yodesla.omniverse.feature.live.LiveViewModel
+import com.yodesla.omniverse.feature.live.firstLiveCapable
 import com.yodesla.omniverse.feature.live.mergeCategoryOrder
 
 @Immutable
@@ -159,7 +160,7 @@ class GuideViewModel(
             }
         }
         viewModelScope.launch {
-            val src = sources.sources().first().firstOrNull() ?: run {
+            val src = sources.sources().first().firstLiveCapable() ?: run {
                 _state.update { it.copy(loading = false) }
                 return@launch
             }

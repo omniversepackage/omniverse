@@ -1,0 +1,38 @@
+# secrets / signing — never commit
+keys/
+local.properties
+secrets.properties
+*.jks
+*.keystore
+# build outputs
+dist/
+.gradle/
+build/
+**/build/
+.kotlin/
+*.apk
+*.aab
+# IDE / OS
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+# qwen queue runtime
+qwen-queue/logs/
+qwen-queue/work/
+qwen-queue/STOP
+# python
+.venv/
+__pycache__/
+.pytest_cache/
+coordination/
+
+# local agent queue noise
+qwen-queue-b/logs/
+qwen-queue-b/*.py
+qwen-queue-b/*.txt
+
+# local build logs
+build-*.log
+qa-20*/
+*tmp-check.txt

@@ -1,0 +1,5 @@
+-- v12 -> v13: TMDB synopsis (task 84f). Purely additive: tmdb_meta gains the plot summary TMDB's
+-- movie/tv detail response already returns, so a title with no provider plot still has a synopsis.
+-- The column is appended (ADD COLUMN), matching its position at the end of the tmdb_meta DDL in
+-- Tmdb.sq (verifyMigrations checks the two agree). Nothing existing is touched.
+ALTER TABLE tmdb_meta ADD COLUMN overview TEXT;

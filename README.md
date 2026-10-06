@@ -25,3 +25,19 @@ Omniverse checks for new versions by itself and offers to install them. Nothing 
 
 ## Releases
 Every version is listed under [Releases](../../releases), with its SHA-256 checksum.
+
+## Source code
+
+The app source is published in this repository for transparency. The Android TV app and
+shared Kotlin modules are under `android/` and `core/`; Gradle build logic and wrapper
+files are included. Local signing keys and machine-specific configuration are not.
+
+To run the test suite and build a debug APK, install JDK 17 and the Android SDK, set
+`ANDROID_HOME` to that SDK, then run:
+
+```sh
+./gradlew test :android:app:assembleDebug
+```
+
+This source snapshot does not include a separate license grant. The app's third-party
+notices are in [NOTICE.md](NOTICE.md).

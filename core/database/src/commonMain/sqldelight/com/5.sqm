@@ -1,0 +1,2 @@
+-- v5 -> v6: source-provided movie genre for local smart collections.
+ALTER TABLE vod ADD COLUMN genre TEXT;

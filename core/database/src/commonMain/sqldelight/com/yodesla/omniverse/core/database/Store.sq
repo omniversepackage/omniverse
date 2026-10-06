@@ -1,0 +1,104 @@
+-- Write-side queries used by sync and source management (db.storeQueries).
+
+sourceById:
+SELECT * FROM source WHERE id = ?;
+
+maxSourceSort:
+SELECT max(sort_index) FROM source;
+
+updateSourceConfig:
+UPDATE source SET name = :name, config_json = :configJson WHERE id = :id;
+
+updateSourceSync:
+UPDATE source SET
+    sync_gen = :gen,
+    last_sync_live_ms = coalesce(:liveMs, last_sync_live_ms),
+    last_sync_vod_ms = coalesce(:vodMs, last_sync_vod_ms),
+    last_sync_series_ms = coalesce(:seriesMs, last_sync_series_ms),
+    last_sync_epg_ms = coalesce(:epgMs, last_sync_epg_ms)
+WHERE id = :id;
+
+deleteSourceAndCatalog {
+    DELETE FROM category WHERE source_id = :id;
+    DELETE FROM channel WHERE source_id = :id;
+    DELETE FROM channel_category WHERE source_id = :id;
+    DELETE FROM vod WHERE source_id = :id;
+    DELETE FROM series WHERE source_id = :id;
+    DELETE FROM programme WHERE source_id = :id;
+    DELETE FROM search_index WHERE source_id = :id;
+    DELETE FROM source WHERE id = :id;
+}
+
+upsertCategory:
+INSERT OR REPLACE INTO category(source_id, kind, remote_id, name, parent_id, sort_index, sync_gen, removed_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?, NULL);
+
+markMissingCategoriesRemoved:
+UPDATE category SET removed_ms = :now
+WHERE source_id = :sourceId AND kind = :kind AND sync_gen < :gen AND removed_ms IS NULL;
+
+deleteChannelCategories:
+DELETE FROM channel_category WHERE source_id = ? AND channel_id = ?;
+
+insertChannelCategory:
+INSERT OR IGNORE INTO channel_category(source_id, channel_id, category_id) VALUES (?, ?, ?);
+
+distinctEpgKeys:
+SELECT DISTINCT epg_channel_id FROM channel
+WHERE source_id = ? AND removed_ms IS NULL AND epg_channel_id IS NOT NULL;
+
+maxCatchupDays:
+SELECT max(catchup_days) FROM channel WHERE source_id = ? AND removed_ms IS NULL;
+
+upsertVod:
+INSERT OR REPLACE INTO vod(source_id, remote_id, name, poster_url, primary_category_id, rating, year, added_ms, container_ext, tmdb_id, sort_index, sync_gen, removed_ms, match_key, genre)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?);
+
+markMissingVodRemoved:
+UPDATE vod SET removed_ms = :now WHERE source_id = :sourceId AND sync_gen < :gen AND removed_ms IS NULL;
+
+upsertSeries:
+INSERT OR REPLACE INTO series(source_id, remote_id, name, poster_url, backdrop_url, primary_category_id, plot, genre, rating, year, last_modified_ms, sort_index, sync_gen, removed_ms, match_key, tmdb_id)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?);
+
+markMissingSeriesRemoved:
+UPDATE series SET removed_ms = :now WHERE source_id = :sourceId AND sync_gen < :gen AND removed_ms IS NULL;
+
+upsertProgramme:
+INSERT OR REPLACE INTO programme(source_id, channel_key, start_ms, end_ms, title, subtitle, description, category, episode_num, icon_url, has_archive)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- A re-synced schedule replaces what it overlaps: providers shift start times, and a plain
+-- upsert (keyed on start_ms) would leave the old slot behind as a ghost programme.
+deleteOverlappingProgrammes:
+DELETE FROM programme
+WHERE source_id = :sourceId AND channel_key = :channelKey AND start_ms <> :startMs
+  AND start_ms < :endMs AND end_ms > :startMs;
+
+pruneProgrammes:
+DELETE FROM programme WHERE source_id = :sourceId AND (end_ms < :beforeMs OR start_ms > :afterMs);
+
+deleteSearchRows:
+DELETE FROM search_index WHERE source_id = ? AND kind = ?;
+
+rebuildSearchLive:
+INSERT INTO search_index(title, kind, source_id, remote_id)
+SELECT name, 'LIVE', source_id, remote_id FROM channel WHERE source_id = ? AND removed_ms IS NULL;
+
+rebuildSearchVod:
+INSERT INTO search_index(title, kind, source_id, remote_id)
+SELECT name, 'VOD', source_id, remote_id FROM vod WHERE source_id = ? AND removed_ms IS NULL;
+
+rebuildSearchSeries:
+INSERT INTO search_index(title, kind, source_id, remote_id)
+SELECT name, 'SERIES', source_id, remote_id FROM series WHERE source_id = ? AND removed_ms IS NULL;
+
+purgeRemoved {
+    DELETE FROM category WHERE source_id = :sourceId AND removed_ms IS NOT NULL AND removed_ms < :beforeMs;
+    DELETE FROM channel WHERE source_id = :sourceId AND removed_ms IS NOT NULL AND removed_ms < :beforeMs;
+    DELETE FROM vod WHERE source_id = :sourceId AND removed_ms IS NOT NULL AND removed_ms < :beforeMs;
+    DELETE FROM series WHERE source_id = :sourceId AND removed_ms IS NOT NULL AND removed_ms < :beforeMs;
+    DELETE FROM channel_category WHERE source_id = :sourceId AND NOT EXISTS (
+        SELECT 1 FROM channel c WHERE c.source_id = channel_category.source_id AND c.remote_id = channel_category.channel_id
+    );
+}

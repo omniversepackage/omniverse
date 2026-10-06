@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="multiview_saved_groups">Saved groups</string>
+    <string name="multiview_save_group">Save group</string>
+    <string name="multiview_group_channels">%1$s · %2$d channels</string>
+    <string name="multiview_group_channel">%1$s · 1 channel</string>
+    <string name="multiview_rename">Rename</string>
+    <string name="multiview_delete">Delete</string>
+    <string name="multiview_group_name">Group name</string>
+    <string name="multiview_save">Save</string>
+    <string name="multiview_cancel">Cancel</string>
+    <string name="multiview_group_too_few">Not enough channels left in this group to watch together.</string>
+    <string name="multiview_swap_channel">Swap channel</string>
+    <string name="multiview_retry">Retry</string>
+    <string name="multiview_tile_options">Tile options</string>
+    <string name="multiview_speaker">Audio is on this channel</string>
+    <string name="multiview_swap_for">Swap “%1$s” for…</string>
+    <string name="multiview_remove_tile">Remove from Multiview</string>
+    <string name="multiview_save_group_tile">Save as group</string>
+    <string name="multiview_end">End Multiview</string>
+    <string name="multiview_open">Multiview · %1$d</string>
+    <string name="live_categories_hint">OK Guide · Hold OK Options · → Channels</string>
+    <string name="live_lang_filter_chip">%1$s · %2$d hidden</string>
+    <string name="live_reconnecting">Reconnecting… (%1$d/%2$d)</string>
+    <string name="live_try_again">Try again</string>
+    <string name="live_try_source">Try %1$s on %2$s</string>
+    <!-- Task 85: guide time navigation (day strip + ±2 h jumps). -->
+    <string name="guide_day_today">Today</string>
+    <string name="guide_day_tomorrow">Tomorrow</string>
+    <string name="guide_now">Now</string>
+    <string name="guide_time_hint">Rewind / Fast-forward ±2 h</string>
+</resources>

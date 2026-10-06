@@ -1,0 +1,59 @@
+-- TMDB artwork/details cache (tasks 84d, 84f). Public TMDB ids only — no provider URLs, no user data.
+-- fetched_ms: when the last lookup attempt landed. A row with any content column set is fresh for
+-- 30 days; an all-null row is a miss/failure and is retried after 1 day (see TmdbEnricher).
+-- Only PATHS are stored; image URLs are built at read time (Tmdb.imageUrl).
+-- overview (task 84f) sits last so the fresh CREATE TABLE and the v12 -> v13 ALTER ADD COLUMN agree.
+-- Task 87b: TWO backdrops per title — backdrop_path is the billboard/hero art (best textless),
+-- card_backdrop_path is a DIFFERENT backdrop for landscape cards (never the same path).
+
+CREATE TABLE tmdb_meta (
+    tmdb_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    backdrop_path TEXT,
+    logo_path TEXT,
+    poster_path TEXT,
+    certification TEXT,
+    runtime_min INTEGER,
+    genres TEXT,
+    tagline TEXT,
+    fetched_ms INTEGER NOT NULL,
+    overview TEXT,
+    card_backdrop_path TEXT,
+    PRIMARY KEY (tmdb_id, kind)
+);
+
+CREATE TABLE tmdb_episode (
+    tmdb_id TEXT NOT NULL,
+    season INTEGER NOT NULL,
+    episode INTEGER NOT NULL,
+    still_path TEXT,
+    name TEXT,
+    overview TEXT,
+    PRIMARY KEY (tmdb_id, season, episode)
+);
+
+tmdbMeta:
+SELECT * FROM tmdb_meta WHERE tmdb_id = :tmdbId AND kind = :kind;
+
+upsertTmdbMeta:
+INSERT OR REPLACE INTO tmdb_meta(tmdb_id, kind, backdrop_path, logo_path, poster_path, certification, runtime_min, genres, tagline, fetched_ms, overview, card_backdrop_path)
+VALUES (:tmdbId, :kind, :backdropPath, :logoPath, :posterPath, :certification, :runtimeMin, :genres, :tagline, :fetchedMs, :overview, :cardBackdropPath);
+
+-- Failed/empty attempt: seed an all-null row so the 1-day backoff applies to a title never seen.
+insertTmdbMetaMiss:
+INSERT OR IGNORE INTO tmdb_meta(tmdb_id, kind, backdrop_path, logo_path, poster_path, certification, runtime_min, genres, tagline, fetched_ms, overview, card_backdrop_path)
+VALUES (:tmdbId, :kind, NULL, NULL, NULL, NULL, NULL, NULL, NULL, :fetchedMs, NULL, NULL);
+
+-- ...and stamp the attempt time on whatever row now exists (good columns are kept).
+touchTmdbMeta:
+UPDATE tmdb_meta SET fetched_ms = :fetchedMs WHERE tmdb_id = :tmdbId AND kind = :kind;
+
+tmdbEpisodeStills:
+SELECT * FROM tmdb_episode WHERE tmdb_id = :tmdbId AND season = :season ORDER BY episode;
+
+deleteTmdbEpisodes:
+DELETE FROM tmdb_episode WHERE tmdb_id = :tmdbId AND season = :season;
+
+upsertTmdbEpisode:
+INSERT OR REPLACE INTO tmdb_episode(tmdb_id, season, episode, still_path, name, overview)
+VALUES (:tmdbId, :season, :episode, :stillPath, :name, :overview);

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Task 70: how the system offers this screensaver. <dream> only carries settingsActivity;
+     non-interactive behaviour is set in code (DreamService.setInteractive(false)). -->
+<dream xmlns:android="http://schemas.android.com/apk/res/android"
+    android:settingsActivity="com.yodesla.omniverse.app/.MainActivity" />

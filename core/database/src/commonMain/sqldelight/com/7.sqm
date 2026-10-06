@@ -1,0 +1,2 @@
+-- v7 -> v8: keep exact-ID representative selection indexed for large VOD catalogs.
+CREATE INDEX vod_by_tmdb ON vod(tmdb_id);

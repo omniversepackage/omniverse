@@ -1,0 +1,26 @@
+-- v11 -> v12: TMDB artwork/details cache (task 84d). Purely additive: two new cache tables,
+-- DDL identical to Tmdb.sq (verifyMigrations checks it). Nothing existing is touched.
+
+CREATE TABLE tmdb_meta (
+    tmdb_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    backdrop_path TEXT,
+    logo_path TEXT,
+    poster_path TEXT,
+    certification TEXT,
+    runtime_min INTEGER,
+    genres TEXT,
+    tagline TEXT,
+    fetched_ms INTEGER NOT NULL,
+    PRIMARY KEY (tmdb_id, kind)
+);
+
+CREATE TABLE tmdb_episode (
+    tmdb_id TEXT NOT NULL,
+    season INTEGER NOT NULL,
+    episode INTEGER NOT NULL,
+    still_path TEXT,
+    name TEXT,
+    overview TEXT,
+    PRIMARY KEY (tmdb_id, season, episode)
+);

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Most IPTV panels and their logo/stream hosts are plain HTTP, and hosts are user-supplied,
+     so cleartext must be allowed globally. The app sends nothing sensitive except the provider
+     login, which the provider itself requires in its (HTTP) URLs. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

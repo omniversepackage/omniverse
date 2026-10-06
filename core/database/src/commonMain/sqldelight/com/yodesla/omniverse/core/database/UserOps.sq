@@ -1,0 +1,370 @@
+-- User-data operations (db.userOpsQueries). Tables live in UserData.sq.
+
+removeFavorite:
+DELETE FROM favorite WHERE profile_id = ? AND list_id = ? AND source_id = ? AND kind = ? AND remote_id = ?;
+
+favoritesByKind:
+SELECT * FROM favorite
+WHERE profile_id = :profileId AND list_id = 'favorites' AND (:kind IS NULL OR kind = :kind)
+ORDER BY sort_index;
+
+isFavorite:
+SELECT count(*) FROM favorite
+WHERE profile_id = ? AND list_id = 'favorites' AND source_id = ? AND kind = ? AND remote_id = ?;
+
+maxFavoriteSort:
+SELECT max(sort_index) FROM favorite WHERE profile_id = ? AND list_id = ?;
+
+-- Task 90: the exact favourite row (order + added time) before removal, so undo restores its slot.
+favoriteRow:
+SELECT * FROM favorite WHERE profile_id = ? AND list_id = ? AND source_id = ? AND kind = ? AND remote_id = ?;
+
+-- Task 97: the "Play next" queue — the same favorite table under list_id = 'playnext', so backups,
+-- profile deletion and the sort machinery cover it without a schema change. Viewer order = sort_index.
+playNext:
+SELECT * FROM favorite
+WHERE profile_id = :profileId AND list_id = 'playnext'
+ORDER BY sort_index;
+
+isInPlayNext:
+SELECT count(*) FROM favorite
+WHERE profile_id = ? AND list_id = 'playnext' AND source_id = ? AND kind = ? AND remote_id = ?;
+
+-- Task 97: re-point one queue row's order (the Move up / Move down swap writes both neighbours).
+updateFavoriteSort:
+UPDATE favorite SET sort_index = ? WHERE profile_id = ? AND list_id = ? AND source_id = ? AND kind = ? AND remote_id = ?;
+
+progressByKey:
+SELECT * FROM progress WHERE profile_id = ? AND source_id = ? AND kind = ? AND remote_id = ?;
+
+upsertRecent:
+INSERT OR REPLACE INTO recent_channel(profile_id, source_id, remote_id, watched_ms) VALUES (?, ?, ?, ?);
+
+recentChannels:
+SELECT * FROM recent_channel WHERE profile_id = :profileId ORDER BY watched_ms DESC LIMIT :limit;
+
+addHidden:
+INSERT OR IGNORE INTO hidden(profile_id, source_id, kind, remote_id) VALUES (?, ?, ?, ?);
+
+-- "Remove from Continue Watching": the title's own row plus every episode / file version under it.
+deleteProgressFor:
+DELETE FROM progress
+WHERE profile_id = :profileId AND source_id = :sourceId
+  AND ((kind = :kind AND remote_id = :remoteId) OR parent_id = :remoteId);
+
+-- Task 90: the exact rows [deleteProgressFor] will remove, captured first so undo can put them back.
+progressForDismiss:
+SELECT * FROM progress
+WHERE profile_id = :profileId AND source_id = :sourceId
+  AND ((kind = :kind AND remote_id = :remoteId) OR parent_id = :remoteId);
+
+removeHidden:
+DELETE FROM hidden WHERE profile_id = ? AND source_id = ? AND kind = ? AND remote_id = ?;
+
+-- Libraries/categories the viewer switched off (kind CATEGORY_LIVE / CATEGORY_VOD / CATEGORY_SERIES).
+hiddenCategories:
+SELECT source_id, kind, remote_id FROM hidden WHERE profile_id = ? AND substr(kind, 1, 9) = 'CATEGORY_';
+
+-- Per-item display overrides (task 33). Read-through: NULL column = provider value.
+-- Never written back to Plex/IPTV providers.
+itemOverrideByKey:
+SELECT * FROM item_override WHERE profile_id = ? AND source_id = ? AND kind = ? AND remote_id = ?;
+
+upsertItemOverride:
+INSERT OR REPLACE INTO item_override(profile_id, source_id, kind, remote_id, display_title, sort_title, edition_label, custom_poster_url)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+
+removeItemOverride:
+DELETE FROM item_override WHERE profile_id = ? AND source_id = ? AND kind = ? AND remote_id = ?;
+
+itemOverrides:
+SELECT * FROM item_override WHERE profile_id = :profileId;
+
+-- Title-level display overrides (task 35): one row per (profile, content_kind, id_namespace,
+-- external_id); NULL column = provider value. Never written back to providers.
+titleOverrideByKey:
+SELECT * FROM title_override WHERE profile_id = ? AND content_kind = ? AND id_namespace = ? AND external_id = ?;
+
+titleOverrides:
+SELECT * FROM title_override WHERE profile_id = :profileId ORDER BY content_kind, id_namespace, external_id;
+
+upsertTitleOverride:
+INSERT OR REPLACE INTO title_override(profile_id, content_kind, id_namespace, external_id, display_title, sort_title, custom_poster_url)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+removeTitleOverride:
+DELETE FROM title_override WHERE profile_id = ? AND content_kind = ? AND id_namespace = ? AND external_id = ?;
+
+-- Collections (task 33).
+listCollections:
+SELECT * FROM collection WHERE profile_id = :profileId ORDER BY sort_order, name;
+
+getCollection:
+SELECT * FROM collection WHERE id = ? AND profile_id = ?;
+
+insertCollection:
+INSERT INTO collection(id, profile_id, name, content_kind, pinned_home, mode, smart_filter_json, sort_order)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+
+updateCollection:
+UPDATE collection
+SET name = ?, content_kind = ?, pinned_home = ?, mode = ?, smart_filter_json = ?, sort_order = ?
+WHERE id = ? AND profile_id = ?;
+
+deleteCollection:
+DELETE FROM collection WHERE id = ? AND profile_id = ?;
+
+-- Manual membership (task 33). Sync must NEVER delete these rows.
+addCollectionMembership:
+INSERT OR REPLACE INTO collection_membership(profile_id, collection_id, source_id, kind, remote_id, sort_index)
+VALUES (?, ?, ?, ?, ?, ?);
+
+removeCollectionMembership:
+DELETE FROM collection_membership
+WHERE profile_id = ? AND collection_id = ? AND source_id = ? AND kind = ? AND remote_id = ?;
+
+removeAllCollectionMemberships:
+DELETE FROM collection_membership WHERE profile_id = ? AND collection_id = ?;
+
+collectionMemberships:
+SELECT * FROM collection_membership WHERE profile_id = :profileId AND collection_id = :collectionId ORDER BY sort_index;
+
+maxMembershipSort:
+SELECT max(sort_index) FROM collection_membership WHERE profile_id = ? AND collection_id = ?;
+
+-- Title-level manual collection membership (task 39): keyed by external title ID instead
+-- of a concrete (source_id, remote_id) item. Sync must NEVER delete these rows.
+addCollectionTitleMembership:
+INSERT OR REPLACE INTO collection_title_membership(profile_id, collection_id, content_kind, id_namespace, external_id, sort_index)
+VALUES (?, ?, ?, ?, ?, ?);
+
+removeCollectionTitleMembership:
+DELETE FROM collection_title_membership
+WHERE profile_id = ? AND collection_id = ? AND content_kind = ? AND id_namespace = ? AND external_id = ?;
+
+removeAllCollectionTitleMemberships:
+DELETE FROM collection_title_membership WHERE profile_id = ? AND collection_id = ?;
+
+collectionTitleMemberships:
+SELECT * FROM collection_title_membership WHERE profile_id = :profileId AND collection_id = :collectionId ORDER BY sort_index;
+
+maxTitleMembershipSort:
+SELECT max(sort_index) FROM collection_title_membership WHERE profile_id = ? AND collection_id = ?;
+
+localSkipPoints:
+SELECT point_type, position_ms FROM local_skip_point
+WHERE profile_id = :profileId AND source_id = :sourceId AND kind = :kind AND remote_id = :remoteId;
+
+upsertLocalSkipPoint:
+INSERT OR REPLACE INTO local_skip_point(profile_id, source_id, kind, remote_id, point_type, position_ms)
+VALUES (?, ?, ?, ?, ?, ?);
+
+removeLocalSkipPoint:
+DELETE FROM local_skip_point
+WHERE profile_id = ? AND source_id = ? AND kind = ? AND remote_id = ? AND point_type = ?;
+
+-- Task 56: forget exactly one progress row (mark unwatched) without touching sibling rows.
+deleteProgressByKey:
+DELETE FROM progress WHERE profile_id = ? AND source_id = ? AND kind = ? AND remote_id = ?;
+
+-- Task 57: shows whose MOST RECENT progress row is a completed episode (the binge rolled past an
+-- episode, so the show dropped out of Continue Watching). One row per show: the completed episode
+-- itself, newest activity first, only activity at or after :sinceMs. Shows whose latest row is a
+-- partial watch stay in Continue Watching and are excluded here.
+-- Task 63 (M12): same-millisecond completions (season marks) tie on updated_ms. The show's latest
+-- row is picked deterministically: newest updated_ms, then highest rowid (rows are rowid tables, so
+-- a later write always gets the larger rowid — the last-written episode wins, exactly one row per
+-- show, so :limit counts shows and never burns slots on tied duplicates).
+completedShows:
+SELECT p.source_id, p.parent_id, p.remote_id, p.updated_ms
+FROM progress p
+WHERE p.profile_id = :profileId AND p.parent_id IS NOT NULL
+  AND p.kind = 'EPISODE' AND p.completed = 1 AND p.updated_ms >= :sinceMs
+  AND p.rowid = (
+      SELECT c.rowid FROM progress c
+      WHERE c.profile_id = :profileId AND c.source_id = p.source_id AND c.parent_id = p.parent_id
+      ORDER BY c.updated_ms DESC, c.rowid DESC
+      LIMIT 1
+  )
+ORDER BY p.updated_ms DESC, p.rowid DESC
+LIMIT :limit;
+
+-- Task 63 (M11): every saved progress row — finished watches included, unlike continueWatching —
+-- newest first. Recommendation exclusion must use this, not the presentation-limited CW list.
+savedProgress:
+SELECT source_id, kind, remote_id, parent_id, position_ms, duration_ms, updated_ms, completed
+FROM progress WHERE profile_id = :profileId ORDER BY updated_ms DESC, rowid DESC LIMIT :limit;
+
+-- Task 63 (M6): the trustworthy (TMDB) identity of a concrete catalog item, if it has one.
+-- :kind is 'VOD' or 'SERIES'. Returns the nonempty tmdb_id or no row.
+itemTmdbId:
+SELECT tmdb_id FROM vod
+WHERE :kind = 'VOD' AND source_id = :sourceId AND remote_id = :remoteId AND tmdb_id IS NOT NULL AND tmdb_id != ''
+UNION ALL
+SELECT tmdb_id FROM series
+WHERE :kind = 'SERIES' AND source_id = :sourceId AND remote_id = :remoteId AND tmdb_id IS NOT NULL AND tmdb_id != '';
+
+-- Task 63 (M6): title-level dismissal. Delete the progress of EVERY copy that shares the exact
+-- tmdb_id (movie rows, series rows, and the episodes / media variants hanging under each copy —
+-- matched per source so a same-numbered id in another source is never touched).
+deleteProgressForTitle:
+DELETE FROM progress
+WHERE profile_id = :profileId AND (
+    (kind = 'VOD' AND EXISTS (
+        SELECT 1 FROM vod o
+        WHERE o.tmdb_id = :tmdbId AND o.source_id = progress.source_id
+          AND (o.remote_id = progress.remote_id OR o.remote_id = progress.parent_id)
+    ))
+    OR (kind IN ('SERIES', 'EPISODE') AND EXISTS (
+        SELECT 1 FROM series o
+        WHERE o.tmdb_id = :tmdbId AND o.source_id = progress.source_id
+          AND (o.remote_id = progress.remote_id OR o.remote_id = progress.parent_id)
+    ))
+);
+
+-- Task 90: the exact rows [deleteProgressForTitle] will remove, captured first so undo can restore them.
+progressForTitleDismiss:
+SELECT * FROM progress
+WHERE profile_id = :profileId AND (
+    (kind = 'VOD' AND EXISTS (
+        SELECT 1 FROM vod o
+        WHERE o.tmdb_id = :tmdbId AND o.source_id = progress.source_id
+          AND (o.remote_id = progress.remote_id OR o.remote_id = progress.parent_id)
+    ))
+    OR (kind IN ('SERIES', 'EPISODE') AND EXISTS (
+        SELECT 1 FROM series o
+        WHERE o.tmdb_id = :tmdbId AND o.source_id = progress.source_id
+          AND (o.remote_id = progress.remote_id OR o.remote_id = progress.parent_id)
+    ))
+);
+
+-- Task 60 (Settings > Backup & restore): bulk reads for export and bulk writes for import.
+-- Export never reads source.config_json (it holds provider credentials). backupSourceRefs is only
+-- the id + name + kind label that tells the restore screen which sources the file was taken from,
+-- because restored rows reference source ids the viewer has to re-add. The clear* statements run
+-- only in Replace mode, and only over tables a backup file actually carries: settings are cleared
+-- key by key from Kotlin so secret rows (PIN, sealed tokens) are never dropped.
+
+backupSourceRefs:
+SELECT id, kind, name FROM source ORDER BY sort_index, name;
+
+backupProfiles:
+SELECT * FROM profile ORDER BY sort, created_ms, id;
+
+backupFavorites:
+SELECT * FROM favorite ORDER BY profile_id, list_id, sort_index;
+
+backupProgress:
+SELECT * FROM progress ORDER BY profile_id, updated_ms;
+
+backupHidden:
+SELECT * FROM hidden ORDER BY profile_id, source_id, kind, remote_id;
+
+backupItemOverrides:
+SELECT * FROM item_override ORDER BY profile_id, source_id, kind, remote_id;
+
+backupTitleOverrides:
+SELECT * FROM title_override ORDER BY profile_id, content_kind, id_namespace, external_id;
+
+backupCollections:
+SELECT * FROM collection ORDER BY profile_id, sort_order, name;
+
+backupCollectionMemberships:
+SELECT * FROM collection_membership ORDER BY profile_id, collection_id, sort_index;
+
+backupCollectionTitleMemberships:
+SELECT * FROM collection_title_membership ORDER BY profile_id, collection_id, sort_index;
+
+backupSkipPoints:
+SELECT * FROM local_skip_point ORDER BY profile_id, source_id, kind, remote_id, point_type;
+
+backupSettings:
+SELECT key, value FROM setting ORDER BY key;
+
+deleteSettingByKey:
+DELETE FROM setting WHERE key = ?;
+
+clearFavorites:
+DELETE FROM favorite;
+
+clearProgress:
+DELETE FROM progress;
+
+clearHidden:
+DELETE FROM hidden;
+
+clearItemOverrides:
+DELETE FROM item_override;
+
+clearTitleOverrides:
+DELETE FROM title_override;
+
+clearCollections:
+DELETE FROM collection;
+
+clearCollectionMemberships:
+DELETE FROM collection_membership;
+
+clearCollectionTitleMemberships:
+DELETE FROM collection_title_membership;
+
+clearSkipPoints:
+DELETE FROM local_skip_point;
+
+clearProfiles:
+DELETE FROM profile;
+
+upsertBackupProfile:
+INSERT OR REPLACE INTO profile(id, name, avatar, is_kids, is_guest, sort, created_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+upsertBackupCollection:
+INSERT OR REPLACE INTO collection(id, profile_id, name, content_kind, pinned_home, mode, smart_filter_json, sort_order)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+
+-- Task 89: Continue Watching, deduped to ONE row per exact title. Every copy of a title (Plex + IPTV,
+-- two IPTV categories sharing a stream, a Plex onDeck import plus a local watch) is one progress row
+-- keyed by (source_id, kind, remote_id); the raw continueWatching query returns them all, so the same
+-- movie can appear twice. Here each in-progress row (completed = 0) is resolved to the title it belongs
+-- to — the exact TMDB id of its VOD row, its SERIES row, or the parent SERIES of an EPISODE — and only
+-- the single most-recently-watched VISIBLE copy of that title survives. Grouping is by non-empty exact
+-- TMDB id only; a copy with no TMDB id is its own card (title/year is never trusted to merge editions,
+-- same contract as Read.sq's one-card-per-id browse queries). A copy whose category is switched off for
+-- this profile (:excludedKeys, "KIND|source|category") is never the representative, so a locked newest
+-- copy cannot hide a visible older one. Representative order: newest updated_ms, then highest rowid
+-- (rowid tables: the last write wins), matching completedShows' tie-break. Movies CW, Home CW and the
+-- Netflix "Continue Watching for …" row all read this one query.
+continueWatchingDeduped:
+WITH cand AS (
+    SELECT
+        p.rowid AS rid, p.source_id, p.kind, p.remote_id, p.parent_id,
+        p.position_ms, p.duration_ms, p.updated_ms,
+        CASE p.kind
+            WHEN 'VOD'     THEN (SELECT v.tmdb_id FROM vod v WHERE v.source_id = p.source_id AND v.remote_id = p.remote_id)
+            WHEN 'SERIES'  THEN (SELECT s.tmdb_id FROM series s WHERE s.source_id = p.source_id AND s.remote_id = p.remote_id)
+            WHEN 'EPISODE' THEN (SELECT s.tmdb_id FROM series s WHERE s.source_id = p.source_id AND s.remote_id = p.parent_id)
+            ELSE NULL
+        END AS tmdb_id,
+        CASE p.kind WHEN 'VOD' THEN 'VOD' ELSE 'SERIES' END AS title_kind,
+        CASE p.kind
+            WHEN 'VOD'     THEN (SELECT v.primary_category_id FROM vod v WHERE v.source_id = p.source_id AND v.remote_id = p.remote_id)
+            WHEN 'SERIES'  THEN (SELECT s.primary_category_id FROM series s WHERE s.source_id = p.source_id AND s.remote_id = p.remote_id)
+            WHEN 'EPISODE' THEN (SELECT s.primary_category_id FROM series s WHERE s.source_id = p.source_id AND s.remote_id = p.parent_id)
+            ELSE NULL
+        END AS category_id
+    FROM progress p
+    WHERE p.profile_id = :profileId AND p.completed = 0
+)
+SELECT c.source_id, c.kind, c.remote_id, c.parent_id, c.position_ms, c.duration_ms, c.updated_ms
+FROM cand c
+WHERE (c.category_id IS NULL OR (c.title_kind || '|' || c.source_id || '|' || c.category_id) NOT IN :excludedKeys)
+  AND NOT EXISTS (
+      SELECT 1 FROM cand q
+      WHERE q.tmdb_id IS NOT NULL AND q.tmdb_id != ''
+        AND c.tmdb_id IS NOT NULL AND c.tmdb_id != ''
+        AND q.title_kind = c.title_kind AND q.tmdb_id = c.tmdb_id
+        AND (q.category_id IS NULL OR (q.title_kind || '|' || q.source_id || '|' || q.category_id) NOT IN :excludedKeys)
+        AND (q.updated_ms > c.updated_ms OR (q.updated_ms = c.updated_ms AND q.rid > c.rid))
+  )
+ORDER BY c.updated_ms DESC, c.rid DESC
+LIMIT :limit;

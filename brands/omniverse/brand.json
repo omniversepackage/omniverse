@@ -1,0 +1,20 @@
+{
+  "id": "omniverse",
+  "appName": "Omniverse",
+  "applicationId": "com.yodesla.omniverse",
+  "accentColor": "#D8B67A",
+  "defaultExperienceMode": "simple",
+  "features": {
+    "allowM3u": true,
+    "allowAddSource": true,
+    "allowMultipleSources": true,
+    "allowFullControlMode": true,
+    "allowRecording": true,
+    "allowLibrarySources": true
+  },
+  "lockedPortal": null,
+  "supportUrl": null,
+  "disclaimer": "Omniverse is a media player. It does not provide, host or include any content, channels or playlists. Use it only with sources you are entitled to watch.",
+  "updateManifestUrl": "https://github.com/omniversepackage/omniverse/releases/latest/download/manifest.json",
+  "publicBuild": false
+}

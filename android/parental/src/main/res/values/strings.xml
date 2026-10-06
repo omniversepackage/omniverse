@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="parental_title">Parental controls</string>
+    <string name="parental_set_pin">Set a PIN</string>
+    <string name="parental_new_pin_title">Enter a new PIN</string>
+    <string name="parental_confirm_pin_title">Enter it again</string>
+    <string name="parental_current_pin_title">Enter your PIN</string>
+    <string name="parental_mismatch">The PINs don\'t match. Start again.</string>
+    <string name="parental_wrong_pin">Wrong PIN</string>
+    <string name="parental_locked_out">Too many wrong PINs. Try again in a minute.</string>
+    <string name="parental_suggested">Suggested</string>
+    <string name="parental_kind_live">Live TV</string>
+    <string name="parental_kind_vod">Movies</string>
+    <string name="parental_kind_series">Shows</string>
+    <string name="parental_locked">Locked</string>
+    <string name="parental_open">Open</string>
+    <string name="parental_change_pin">Change PIN</string>
+    <string name="parental_turn_off">Turn off</string>
+    <string name="pinpad_delete">Del</string>
+    <string name="pinpad_cancel">Cancel</string>
+    <string name="parental_unlock">Unlock (enter PIN)</string>
+    <string name="parental_hidden_hint">Locked categories are hidden. Enter the PIN to manage them.</string>
+    <string name="parental_show_all">Show all categories (%1$d more)</string>
+    <string name="parental_lock_again">Lock again</string>
+</resources>

@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Welcome -->
+    <string name="onboarding_welcome_title">Welcome to %1$s</string>
+    <string name="onboarding_mode_simple">Keep it simple</string>
+    <string name="onboarding_mode_simple_sub">Just watch: a few polished screens, no settings to touch.</string>
+    <string name="onboarding_mode_full">Give me full control</string>
+    <string name="onboarding_mode_full_sub">Every setting exposed, for tinkerers and power users.</string>
+
+    <!-- Add source -->
+    <string name="onboarding_add_source_title">Add your source</string>
+    <string name="onboarding_relogin_title">Re-enter login · %1$s</string>
+    <string name="onboarding_tab_xtream">Xtream login</string>
+    <string name="onboarding_tab_m3u">M3U link</string>
+    <string name="onboarding_field_server">Server URL</string>
+    <string name="onboarding_field_username">Username</string>
+    <string name="onboarding_field_password">Password</string>
+    <string name="onboarding_field_name">Name (optional)</string>
+    <string name="onboarding_field_playlist">Playlist URL</string>
+    <string name="onboarding_field_epg">EPG URL (optional)</string>
+    <string name="onboarding_continue">Continue</string>
+    <string name="onboarding_show_password">Show password</string>
+    <string name="onboarding_hide_password">Hide password</string>
+
+    <!-- Validation -->
+    <string name="onboarding_err_server">Enter the address of your Xtream server.</string>
+    <string name="onboarding_err_playlist">Enter the address of your M3U playlist.</string>
+    <string name="onboarding_err_scheme">The address must start with http:// or https://</string>
+    <string name="onboarding_err_username">Enter your username.</string>
+    <string name="onboarding_err_password">Enter your password.</string>
+
+    <!-- Validate / account -->
+    <string name="onboarding_checking">Checking your account…</string>
+    <string name="onboarding_account_until">Account active until %1$s</string>
+    <string name="onboarding_account_no_expiry">No expiry date</string>
+    <string name="onboarding_account_screens">Up to %1$d screen at once</string>
+    <string name="onboarding_account_screens_many">Up to %1$d screens at once</string>
+
+    <!-- Errors (validate + sync) -->
+    <string name="onboarding_err_auth">That username or password wasn\'t accepted.</string>
+    <string name="onboarding_err_expired">This subscription has expired.</string>
+    <string name="onboarding_err_network">Couldn\'t reach the server. Check the address and your internet connection.</string>
+    <string name="onboarding_err_http">The server answered, but not like an IPTV server. Check the address.</string>
+    <string name="onboarding_sync_error_title">Sync problem</string>
+    <string name="onboarding_try_again">Try again</string>
+
+    <!-- Syncing -->
+    <string name="onboarding_stage_account">Signing in</string>
+    <string name="onboarding_stage_channels">Loading channels</string>
+    <string name="onboarding_stage_guide">Loading the TV guide</string>
+    <string name="onboarding_stage_movies">Loading movies</string>
+    <string name="onboarding_stage_shows">Loading shows</string>
+    <string name="onboarding_stage_finalize">Finishing up</string>
+    <string name="onboarding_unit_channels">channels</string>
+    <string name="onboarding_unit_programmes">guide entries</string>
+    <string name="onboarding_unit_movies">movies</string>
+    <string name="onboarding_unit_shows">shows</string>
+    <string name="onboarding_count">%1$s %2$s</string>
+    <string name="onboarding_note_retry_later">Movies couldn\'t be loaded right now, we\'ll retry later.</string>
+    <string name="onboarding_start_watching">Start watching</string>
+
+    <!-- Done -->
+    <string name="onboarding_done_title">You\'re all set</string>
+    <string name="onboarding_done_sub">Enjoy %1$s.</string>
+    <string name="onboarding_phone_title">Easier from your phone</string>
+    <string name="onboarding_phone_body">open %1$s</string>
+    <string name="onboarding_phone_code">Code %1$s</string>
+    <string name="onboarding_tab_plex">Plex</string>
+    <string name="onboarding_plex_step">On your phone or computer, go to</string>
+    <string name="onboarding_plex_waiting">and enter this code. This screen continues by itself.</string>
+    <string name="onboarding_plex_getting_code">Getting a code from Plex…</string>
+    <string name="onboarding_plex_pick">Choose Plex servers</string>
+    <string name="onboarding_plex_pick_multiple">Select every server you want, including libraries friends have shared with you.</string>
+    <string name="onboarding_plex_add_selected">Add selected (%1$d)</string>
+    <string name="onboarding_plex_added_count">Adding %1$d Plex servers</string>
+    <string name="onboarding_plex_skipped_count">%1$d skipped (already added or unavailable)</string>
+    <string name="onboarding_plex_already_added">Those Plex servers are already in Omniverse.</string>
+    <string name="onboarding_plex_failed">Plex did not link (the code expired or no server was reachable).</string>
+    <string name="onboarding_plex_retry">Get a new code</string>
+</resources>

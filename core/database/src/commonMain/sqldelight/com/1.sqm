@@ -1,0 +1,6 @@
+-- v1 -> v2: cross-source matching key (Plex + IPTV merge in Movies/Shows).
+-- Filled by the next sync; NULL rows simply don't merge until then.
+ALTER TABLE vod ADD COLUMN match_key TEXT;
+ALTER TABLE series ADD COLUMN match_key TEXT;
+CREATE INDEX vod_by_match ON vod(match_key);
+CREATE INDEX series_by_match ON series(match_key);

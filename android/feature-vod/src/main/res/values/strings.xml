@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="metadata_attribution_license">CC BY-SA 4.0 license</string>
+    <string name="detail_more_sources">More…</string>
+    <string name="editions_sources_title">Editions &amp; sources</string>
+    <string name="editions_sources_hint">Choose an edition and source — the copy you last watched or picked plays first</string>
+    <string name="edition_unlabelled">Edition not labelled</string>
+    <string name="current_source">Current source</string>
+    <string name="vod_reconnecting">Reconnecting… (%1$d/%2$d)</string>
+    <string name="edition_resume_format">Resume %1$d min</string>
+    <string name="crunchyroll_continue_watching">Continue Watching</string>
+    <string name="crunchyroll_start_watching">▶ Start watching</string>
+    <string name="crunchyroll_continue_watching_button">▶ Continue watching</string>
+    <string name="crunchyroll_my_list_add">Add to My List</string>
+    <string name="crunchyroll_my_list_remove">Remove from My List</string>
+    <string name="crunchyroll_empty">Nothing here yet</string>
+    <string name="crunchyroll_anime_library">Anime library</string>
+    <string name="vod_anime_library_title">Anime library</string>
+    <string name="vod_library_title">Library</string>
+    <string name="sleep_timer_title">Sleep timer</string>
+    <string name="sleep_timer_hint">Playback stops and you leave the player when it fires.</string>
+    <string name="sleep_timer_off">Off</string>
+    <string name="sleep_timer_minutes_format">%1$d minutes</string>
+    <string name="sleep_timer_end_of_episode">End of this episode</string>
+    <string name="sleep_timer_end_of_movie">End of this movie</string>
+    <string name="sleep_timer_choice_off">Off</string>
+    <string name="sleep_timer_choice_minutes_format">%1$d min</string>
+    <string name="sleep_timer_choice_end_of_episode">End of episode</string>
+    <string name="sleep_timer_choice_end_of_movie">End of movie</string>
+    <string name="sleep_timer_button_format">Sleep: %1$s</string>
+    <string name="sleep_timer_warning_format">Sleeping in %1$d s — press OK to keep watching</string>
+    <string name="vod_playback_stopped_try_copy">Playback stopped. Try another copy.</string>
+    <string name="vod_switching_copy_format">Switching to %1$s in %2$d…</string>
+    <string name="vod_cancel_switch">Cancel</string>
+    <string name="vod_try_another_copy">Try another copy</string>
+    <string name="vod_choose_copy_title">Try another copy</string>
+    <string name="vod_choose_copy_hint">This copy stopped. Pick another copy of the same title.</string>
+    <string name="kids_time_warning_limit_format">%1$d min left today</string>
+    <string name="kids_time_warning_bedtime_format">Bedtime in %1$d min</string>
+    <string name="kids_time_up_title">Time is up for today</string>
+    <string name="kids_time_up_limit">This profile has used up its daily watching limit.</string>
+    <string name="kids_time_up_bedtime">This profile is in its bedtime window.</string>
+    <string name="kids_time_up_pin">Enter PIN for 30 more minutes</string>
+    <string name="kids_time_up_no_pin">Ask a grown-up to set a parental PIN for more time.</string>
+    <string name="kids_time_up_stop">Stop watching</string>
+</resources>

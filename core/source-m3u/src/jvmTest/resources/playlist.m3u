@@ -1,0 +1,28 @@
+#EXTM3U url-tvg="http://epg.test/guide.xml"
+#EXTINF:-1 tvg-id="ch1.test" tvg-logo="http://logo.test/1.png" group-title="News" chno="101",Channel One
+http://stream.test/live/ch1.m3u8
+#EXTINF:-1 tvg-id="ch2.test" group-title="News" chno="102",Channel Two
+http://stream.test/live/ch2.ts
+#EXTINF:-1 tvg-id="ch3.test" group-title="Sports" chno="201" catchup="xc" catchup-days="14",Channel Three
+#EXTVLCOPT:http-referrer=http://stream.test/
+http://stream.test/live/user/pass/3.ts
+#EXTINF:-1 group-title="Sports" chno="202",Channel Four
+http://stream.test/live/ch4.m3u8
+#EXTINF:-1 group-title="Kids",Channel Five
+http://stream.test/live/ch5.m3u8
+#EXTINF:-1,Channel Six
+http://stream.test/live/ch6.m3u8
+#EXTINF:5400 tvg-id="m1.test" group-title="Action",Movie One
+http://vod.test/movie/movie1.mp4
+#EXTINF:6100 group-title="Action",Movie Two
+http://vod.test/movie/movie2.mkv
+#EXTINF:5000 group-title="Drama",Movie Three
+http://vod.test/movie/movie3.m3u8
+#EXTINF:2800 tvg-id="e1.test" group-title="Series",Show Name S01E01
+http://vod.test/series/show/s01e01.mp4
+#EXTINF:2800 tvg-id="e2.test" group-title="Series",Show Name S01E02
+http://vod.test/series/show/s01e02.mp4
+#EXTINF:2900 tvg-id="e3.test" group-title="Series",Show Name S02E01
+http://vod.test/series/show/s02e01.mkv
+#EXTINF:2900 tvg-id="e4.test" group-title="Series",Show Name S02E02
+http://vod.test/series/show/s02e02.mkv

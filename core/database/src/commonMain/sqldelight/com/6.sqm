@@ -1,0 +1,13 @@
+-- v6 -> v7: title-level display overrides (task 35). Purely additive; existing
+-- tables/rows untouched. Profile-scoped, app-owned: sync must NEVER delete from
+-- this table, and nothing here is written back to providers.
+CREATE TABLE title_override (
+    profile_id TEXT NOT NULL DEFAULT 'default',
+    content_kind TEXT NOT NULL,
+    id_namespace TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    display_title TEXT,
+    sort_title TEXT,
+    custom_poster_url TEXT,
+    PRIMARY KEY (profile_id, content_kind, id_namespace, external_id)
+);

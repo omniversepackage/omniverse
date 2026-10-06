@@ -1,0 +1,33 @@
+{
+  "MediaContainer": {
+    "size": 3,
+    "Metadata": [
+      {
+        "ratingKey": "77",
+        "type": "movie",
+        "title": "Detail Movie",
+        "duration": 7200000,
+        "viewOffset": 1800000,
+        "lastViewedAt": 1700000500
+      },
+      {
+        "ratingKey": "e1",
+        "type": "episode",
+        "title": "Pilot",
+        "parentRatingKey": "season51",
+        "grandparentRatingKey": "50",
+        "grandparentTitle": "My Show",
+        "duration": 1800000,
+        "viewOffset": 600000,
+        "lastViewedAt": 1700000600
+      },
+      {
+        "ratingKey": "99",
+        "type": "movie",
+        "title": "Never Started",
+        "duration": 5000000,
+        "lastViewedAt": 1700000700
+      }
+    ]
+  }
+}

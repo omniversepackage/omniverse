@@ -1,0 +1,14 @@
+-- v8 -> v9: title-level manual collection membership (task 39). Purely additive; existing
+-- tables/rows untouched, including concrete-item collection_membership. Profile-scoped,
+-- app-owned, manual-only: source sync must NEVER delete from this table, and nothing here
+-- is written back to providers. Must match the collection_title_membership DDL in UserData.sq.
+CREATE TABLE collection_title_membership (
+    profile_id TEXT NOT NULL DEFAULT 'default',
+    collection_id TEXT NOT NULL,
+    content_kind TEXT NOT NULL,
+    id_namespace TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    sort_index INTEGER NOT NULL,
+    PRIMARY KEY (profile_id, collection_id, content_kind, id_namespace, external_id)
+);
+CREATE INDEX title_membership_collection ON collection_title_membership(profile_id, collection_id, sort_index);

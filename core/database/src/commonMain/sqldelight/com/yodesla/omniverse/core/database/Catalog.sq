@@ -1,0 +1,172 @@
+-- Synced catalog. Rewritten by sync; NEVER holds user data (see UserData.sq).
+-- Times: UTC epoch ms. sync_gen: generation of the last sync that saw the row;
+-- rows not seen by the latest sync get removed_ms set (soft delete), purged after 7 days.
+
+CREATE TABLE source (
+    id TEXT NOT NULL PRIMARY KEY,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    -- Serialized SourceConfig. Contains credentials: never log, never export unencrypted.
+    config_json TEXT NOT NULL,
+    sort_index INTEGER NOT NULL DEFAULT 0,
+    last_sync_live_ms INTEGER,
+    last_sync_vod_ms INTEGER,
+    last_sync_series_ms INTEGER,
+    last_sync_epg_ms INTEGER,
+    sync_gen INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE category (
+    source_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    remote_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    parent_id TEXT,
+    sort_index INTEGER NOT NULL,
+    sync_gen INTEGER NOT NULL,
+    removed_ms INTEGER,
+    PRIMARY KEY (source_id, kind, remote_id)
+);
+
+CREATE TABLE channel (
+    source_id TEXT NOT NULL,
+    remote_id TEXT NOT NULL,
+    number INTEGER,
+    name TEXT NOT NULL,
+    logo_url TEXT,
+    epg_channel_id TEXT,
+    primary_category_id TEXT NOT NULL,
+    catchup_days INTEGER NOT NULL DEFAULT 0,
+    added_ms INTEGER,
+    sort_index INTEGER NOT NULL,
+    sync_gen INTEGER NOT NULL,
+    removed_ms INTEGER,
+    PRIMARY KEY (source_id, remote_id)
+);
+CREATE INDEX channel_by_category ON channel(source_id, primary_category_id, sort_index);
+CREATE INDEX channel_by_epg ON channel(epg_channel_id);
+
+-- Channels can live in several categories (Xtream category_ids).
+CREATE TABLE channel_category (
+    source_id TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    category_id TEXT NOT NULL,
+    PRIMARY KEY (source_id, category_id, channel_id)
+);
+-- Sync deletes/re-inserts a channel's links by (source_id, channel_id): without this index every
+-- delete scanned the whole table (O(n^2): 20k channels took 60 s on the emulator).
+CREATE INDEX channel_category_by_channel ON channel_category(source_id, channel_id);
+
+CREATE TABLE vod (
+    source_id TEXT NOT NULL,
+    remote_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    poster_url TEXT,
+    primary_category_id TEXT NOT NULL,
+    rating REAL,
+    year INTEGER,
+    added_ms INTEGER,
+    container_ext TEXT,
+    tmdb_id TEXT,
+    sort_index INTEGER NOT NULL,
+    sync_gen INTEGER NOT NULL,
+    removed_ms INTEGER,
+    -- Normalized "title|year" for cross-source matching (Plex vs IPTV). Added in migration 1.
+    match_key TEXT,
+    genre TEXT,
+    PRIMARY KEY (source_id, remote_id)
+);
+CREATE INDEX vod_by_category ON vod(source_id, primary_category_id, sort_index);
+CREATE INDEX vod_by_added ON vod(source_id, added_ms DESC);
+CREATE INDEX vod_by_match ON vod(match_key);
+CREATE INDEX vod_by_tmdb ON vod(tmdb_id);
+
+CREATE TABLE series (
+    source_id TEXT NOT NULL,
+    remote_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    poster_url TEXT,
+    backdrop_url TEXT,
+    primary_category_id TEXT NOT NULL,
+    plot TEXT,
+    genre TEXT,
+    rating REAL,
+    year INTEGER,
+    last_modified_ms INTEGER,
+    sort_index INTEGER NOT NULL,
+    sync_gen INTEGER NOT NULL,
+    removed_ms INTEGER,
+    match_key TEXT,
+    tmdb_id TEXT,
+    PRIMARY KEY (source_id, remote_id)
+);
+CREATE INDEX series_by_category ON series(source_id, primary_category_id, sort_index);
+CREATE INDEX series_by_modified ON series(source_id, last_modified_ms DESC);
+CREATE INDEX series_by_match ON series(match_key);
+CREATE INDEX series_by_tmdb ON series(tmdb_id);
+
+-- Guide. Pruned to the configured window by sync.
+CREATE TABLE programme (
+    source_id TEXT NOT NULL,
+    channel_key TEXT NOT NULL,
+    start_ms INTEGER NOT NULL,
+    end_ms INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    subtitle TEXT,
+    description TEXT,
+    category TEXT,
+    episode_num TEXT,
+    icon_url TEXT,
+    has_archive INTEGER NOT NULL DEFAULT 0,
+    -- Keyed for the hot read path (channel_key + time) so each insert updates ONE b-tree
+    -- (the old PK + separate time index doubled EPG write cost).
+    PRIMARY KEY (channel_key, start_ms, source_id)
+) WITHOUT ROWID;
+
+-- Unified search (FTS4 with prefix indexes). kind = LIVE | VOD | SERIES.
+CREATE VIRTUAL TABLE search_index USING fts4(
+    title,
+    kind,
+    source_id,
+    remote_id,
+    notindexed=kind,
+    notindexed=source_id,
+    notindexed=remote_id,
+    prefix="2,3,4"
+);
+
+-- ---------- queries used by Phase 0/1 contracts (Qwen extends in P1.5) ----------
+
+upsertSource:
+INSERT OR REPLACE INTO source(id, kind, name, config_json, sort_index, last_sync_live_ms, last_sync_vod_ms, last_sync_series_ms, last_sync_epg_ms, sync_gen)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+allSources:
+SELECT * FROM source ORDER BY sort_index, name;
+
+upsertChannel:
+INSERT OR REPLACE INTO channel(source_id, remote_id, number, name, logo_url, epg_channel_id, primary_category_id, catchup_days, added_ms, sort_index, sync_gen, removed_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL);
+
+markMissingChannelsRemoved:
+UPDATE channel SET removed_ms = :now WHERE source_id = :sourceId AND sync_gen < :gen AND removed_ms IS NULL;
+
+channelsInCategory:
+SELECT c.* FROM channel c
+JOIN channel_category cc ON cc.source_id = c.source_id AND cc.channel_id = c.remote_id
+WHERE cc.source_id = :sourceId AND cc.category_id = :categoryId AND c.removed_ms IS NULL
+ORDER BY c.sort_index
+LIMIT :limit OFFSET :offset;
+
+countChannels:
+SELECT count(*) FROM channel WHERE source_id = ? AND removed_ms IS NULL;
+
+programmesForChannel:
+SELECT * FROM programme
+WHERE source_id = :sourceId AND channel_key = :channelKey AND end_ms > :fromMs AND start_ms < :toMs
+ORDER BY start_ms;
+
+searchTitles:
+SELECT title, kind, source_id, remote_id FROM search_index
+WHERE search_index MATCH :query
+LIMIT :limit;

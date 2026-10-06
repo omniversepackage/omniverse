@@ -1,0 +1,20 @@
+{
+  "MediaContainer": {
+    "size": 2,
+    "Metadata": [
+      {
+        "ratingKey": "e1",
+        "index": 1,
+        "title": "Pilot",
+        "summary": "It begins.",
+        "duration": 3000000,
+        "thumb": "/library/sections/2/items/e1/thumb.jpg"
+      },
+      {
+        "ratingKey": "e2",
+        "index": 2,
+        "title": "Second"
+      }
+    ]
+  }
+}

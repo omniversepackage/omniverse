@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tv generator-info-name="omniverse-test">
+  <channel id="ch1.test">
+    <display-name>Channel One</display-name>
+  </channel>
+  <channel id="ch3.test">
+    <display-name>Channel Three</display-name>
+  </channel>
+  <programme start="20260926120000 +0000" stop="20260926130000 +0000" channel="ch1.test">
+    <title>News at Noon</title>
+  </programme>
+  <programme start="20260926130000 +0000" stop="20260926140000 +0000" channel="ch1.test">
+    <title>Lunch Report</title>
+  </programme>
+  <programme start="20260926120000 +0000" stop="20260926123000 +0000" channel="ch3.test">
+    <title>Match Centre</title>
+  </programme>
+</tv>

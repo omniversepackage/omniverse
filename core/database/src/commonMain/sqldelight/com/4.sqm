@@ -1,0 +1,10 @@
+-- v4 -> v5: viewer-set intro/credits points for streams without provider markers.
+CREATE TABLE local_skip_point (
+    profile_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    remote_id TEXT NOT NULL,
+    point_type TEXT NOT NULL,
+    position_ms INTEGER NOT NULL,
+    PRIMARY KEY (profile_id, source_id, kind, remote_id, point_type)
+);

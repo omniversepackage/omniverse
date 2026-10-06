@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Diagnostics (tasks 78 + 104): on-device crash log. app_name itself is a generated resValue. -->
+    <string name="diagnostics_title">Diagnostics</string>
+    <string name="diagnostics_note">Crash reports stay on this device — nothing is ever uploaded. Show this screen to whoever is helping you.</string>
+    <string name="diagnostics_delete">Delete crash logs</string>
+    <string name="diagnostics_save">Save to Downloads</string>
+    <string name="diagnostics_close">Close</string>
+    <string name="diagnostics_no_crashes">No crashes</string>
+    <string name="diagnostics_crash_reports">Crash reports (%1$d)</string>
+    <string name="diagnostics_view_latest">View the latest — %1$s</string>
+    <string name="diagnostics_public_build">public build</string>
+    <string name="diagnostics_dev_build">standard build</string>
+    <string name="crash_card_text">Omniverse closed unexpectedly last time — details in Settings › Diagnostics</string>
+    <!-- Voice / global search (task 80): hint in the system search field. -->
+    <string name="search_hint">Search channels, movies and shows</string>
+</resources>

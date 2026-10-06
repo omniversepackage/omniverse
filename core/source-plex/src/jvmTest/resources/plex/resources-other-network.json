@@ -1,0 +1,11 @@
+[
+  {
+    "name": "Friend Server", "product": "Plex Media Server", "provides": "server", "owned": false,
+    "publicAddressMatches": false,
+    "clientIdentifier": "ci-friend", "accessToken": "tok-friend",
+    "connections": [
+      {"protocol": "https", "address": "192.168.1.10", "port": 32400, "uri": "https://192-168-1-10.fff.plex.direct:32400", "local": true, "relay": false},
+      {"protocol": "https", "address": "203.0.113.7", "port": 32400, "uri": "https://203-0-113-7.fff.plex.direct:32400", "local": false, "relay": false}
+    ]
+  }
+]

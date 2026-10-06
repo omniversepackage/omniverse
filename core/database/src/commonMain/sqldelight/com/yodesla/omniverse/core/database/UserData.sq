@@ -1,0 +1,179 @@
+-- User data. Keyed by (source_id, kind, remote_id) = ContentKey. Sync must NEVER delete from these
+-- tables; orphans (item gone from provider) are kept so favorites/progress survive a provider hiccup.
+-- profile_id: local profiles (Phase 4). "default" until then.
+
+CREATE TABLE favorite (
+    profile_id TEXT NOT NULL DEFAULT 'default',
+    list_id TEXT NOT NULL DEFAULT 'favorites',
+    source_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    remote_id TEXT NOT NULL,
+    sort_index INTEGER NOT NULL,
+    added_ms INTEGER NOT NULL,
+    PRIMARY KEY (profile_id, list_id, source_id, kind, remote_id)
+);
+
+-- Hidden channels/categories (Full-control group manager).
+CREATE TABLE hidden (
+    profile_id TEXT NOT NULL DEFAULT 'default',
+    source_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    remote_id TEXT NOT NULL,
+    PRIMARY KEY (profile_id, source_id, kind, remote_id)
+);
+
+-- User overrides: custom name / order / channel number / EPG match.
+CREATE TABLE override (
+    source_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    remote_id TEXT NOT NULL,
+    custom_name TEXT,
+    custom_sort INTEGER,
+    custom_number INTEGER,
+    custom_epg_key TEXT,
+    epg_offset_minutes INTEGER,
+    PRIMARY KEY (source_id, kind, remote_id)
+);
+
+CREATE TABLE progress (
+    profile_id TEXT NOT NULL DEFAULT 'default',
+    source_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    remote_id TEXT NOT NULL,
+    -- For episodes: the series id, so "Continue watching" can show the show.
+    parent_id TEXT,
+    position_ms INTEGER NOT NULL,
+    duration_ms INTEGER,
+    updated_ms INTEGER NOT NULL,
+    completed INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (profile_id, source_id, kind, remote_id)
+);
+CREATE INDEX progress_recent ON progress(profile_id, updated_ms DESC);
+
+-- Recently watched live channels (last-channel toggle, "recent" row).
+CREATE TABLE recent_channel (
+    profile_id TEXT NOT NULL DEFAULT 'default',
+    source_id TEXT NOT NULL,
+    remote_id TEXT NOT NULL,
+    watched_ms INTEGER NOT NULL,
+    PRIMARY KEY (profile_id, source_id, remote_id)
+);
+
+CREATE TABLE setting (
+    key TEXT NOT NULL PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+-- Viewer-set skip points are scoped to one playable item and profile. No provider
+-- credentials or playback URLs are stored here; source sync never deletes them.
+CREATE TABLE local_skip_point (
+    profile_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    remote_id TEXT NOT NULL,
+    point_type TEXT NOT NULL,
+    position_ms INTEGER NOT NULL,
+    PRIMARY KEY (profile_id, source_id, kind, remote_id, point_type)
+);
+
+-- App-local library customization (task 33). Profile-scoped, app-owned: sync must
+-- NEVER delete from these tables, and nothing here is written back to providers.
+-- display_title/sort_title/edition_label/custom_poster_url are all nullable; a NULL
+-- column means "use the provider value".
+
+CREATE TABLE item_override (
+    profile_id TEXT NOT NULL DEFAULT 'default',
+    source_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    remote_id TEXT NOT NULL,
+    display_title TEXT,
+    sort_title TEXT,
+    edition_label TEXT,
+    custom_poster_url TEXT,
+    PRIMARY KEY (profile_id, source_id, kind, remote_id)
+);
+
+-- Title-level display overrides (task 35): keyed by a trustworthy source-supplied external
+-- identity (id_namespace 'tmdb' today) instead of a concrete (source_id, remote_id) item, so
+-- one row customizes the display of EVERY item of a title. content_kind is 'VOD' or 'SERIES';
+-- external_id is the exact nonempty ID string. Profile-scoped, app-owned: sync must NEVER
+-- delete from this table, and nothing here is written back to providers.
+-- display_title/sort_title/custom_poster_url are nullable; NULL = use the provider value.
+-- No edition label here: that stays per concrete item in item_override.
+CREATE TABLE title_override (
+    profile_id TEXT NOT NULL DEFAULT 'default',
+    content_kind TEXT NOT NULL,
+    id_namespace TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    display_title TEXT,
+    sort_title TEXT,
+    custom_poster_url TEXT,
+    PRIMARY KEY (profile_id, content_kind, id_namespace, external_id)
+);
+
+-- Local collections: VOD or SERIES, manual membership or smart filter.
+-- id is a stable app-generated id (e.g. UUID); pinned_home surfaces on Home;
+-- smart_filter_json is opaque JSON, only meaningful when mode = 'smart'.
+CREATE TABLE collection (
+    id TEXT NOT NULL,
+    profile_id TEXT NOT NULL DEFAULT 'default',
+    name TEXT NOT NULL,
+    content_kind TEXT NOT NULL,
+    pinned_home INTEGER NOT NULL DEFAULT 0,
+    mode TEXT NOT NULL DEFAULT 'manual',
+    smart_filter_json TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (id)
+);
+CREATE INDEX collection_profile ON collection(profile_id, sort_order);
+
+-- Manual collection membership. Source sync must NEVER delete these rows;
+-- a member whose provider item vanished stays (same rule as favorite/progress).
+CREATE TABLE collection_membership (
+    profile_id TEXT NOT NULL DEFAULT 'default',
+    collection_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    remote_id TEXT NOT NULL,
+    sort_index INTEGER NOT NULL,
+    PRIMARY KEY (profile_id, collection_id, source_id, kind, remote_id)
+);
+CREATE INDEX membership_collection ON collection_membership(collection_id, sort_index);
+
+-- Title-level manual collection membership (task 39). Adds a whole title to a manual
+-- collection keyed by (content_kind, id_namespace, external_id) -- 'tmdb' today -- instead
+-- of one concrete (source_id, remote_id) item, so it applies across every source carrying
+-- that title and survives a provider re-ID of a single item. Coexists with the concrete-item
+-- collection_membership above; both are profile-scoped, app-owned, manual-only and must
+-- NEVER be deleted by source sync (a title that left every provider stays, like favorites).
+-- content_kind is 'VOD' or 'SERIES'; external_id is a nonempty exact ID string.
+CREATE TABLE collection_title_membership (
+    profile_id TEXT NOT NULL DEFAULT 'default',
+    collection_id TEXT NOT NULL,
+    content_kind TEXT NOT NULL,
+    id_namespace TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    sort_index INTEGER NOT NULL,
+    PRIMARY KEY (profile_id, collection_id, content_kind, id_namespace, external_id)
+);
+CREATE INDEX title_membership_collection ON collection_title_membership(profile_id, collection_id, sort_index);
+
+upsertProgress:
+INSERT OR REPLACE INTO progress(profile_id, source_id, kind, remote_id, parent_id, position_ms, duration_ms, updated_ms, completed)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+continueWatching:
+SELECT * FROM progress WHERE profile_id = :profileId AND completed = 0 ORDER BY updated_ms DESC LIMIT :limit;
+
+addFavorite:
+INSERT OR REPLACE INTO favorite(profile_id, list_id, source_id, kind, remote_id, sort_index, added_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+favorites:
+SELECT * FROM favorite WHERE profile_id = :profileId AND list_id = :listId ORDER BY sort_index;
+
+getSetting:
+SELECT value FROM setting WHERE key = ?;
+
+putSetting:
+INSERT OR REPLACE INTO setting(key, value) VALUES (?, ?);

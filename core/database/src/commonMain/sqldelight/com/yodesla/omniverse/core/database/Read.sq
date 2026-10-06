@@ -1,0 +1,1459 @@
+-- Read-side queries used by repositories / UI (db.readQueries). Hidden items are filtered via the
+-- hidden table (UserData.sq); kind values there: LIVE, CATEGORY_LIVE, CATEGORY_VOD, CATEGORY_SERIES.
+
+visibleCategories:
+SELECT c.* FROM category c
+WHERE c.source_id = :sourceId AND c.kind = :kind AND c.removed_ms IS NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM hidden h
+    WHERE h.profile_id = :profileId AND h.source_id = c.source_id AND h.kind = :hiddenKind AND h.remote_id = c.remote_id
+  )
+ORDER BY c.sort_index;
+
+allCategories:
+SELECT * FROM category WHERE source_id = :sourceId AND kind = :kind AND removed_ms IS NULL ORDER BY sort_index;
+
+countChannelsInCategoryVisible:
+SELECT count(*) FROM channel c
+JOIN channel_category cc ON cc.source_id = c.source_id AND cc.channel_id = c.remote_id
+WHERE cc.source_id = :sourceId AND cc.category_id = :categoryId AND c.removed_ms IS NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM hidden h
+    WHERE h.profile_id = :profileId AND h.source_id = c.source_id AND h.kind = 'LIVE' AND h.remote_id = c.remote_id
+  );
+
+channelsInCategoryVisible:
+SELECT c.* FROM channel c
+JOIN channel_category cc ON cc.source_id = c.source_id AND cc.channel_id = c.remote_id
+WHERE cc.source_id = :sourceId AND cc.category_id = :categoryId AND c.removed_ms IS NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM hidden h
+    WHERE h.profile_id = :profileId AND h.source_id = c.source_id AND h.kind = 'LIVE' AND h.remote_id = c.remote_id
+  )
+ORDER BY c.sort_index
+LIMIT :limit OFFSET :offset;
+
+channelIdsInCategory:
+SELECT c.remote_id FROM channel c
+JOIN channel_category cc ON cc.source_id = c.source_id AND cc.channel_id = c.remote_id
+WHERE cc.source_id = :sourceId AND cc.category_id = :categoryId AND c.removed_ms IS NULL
+ORDER BY c.sort_index;
+
+-- Zapping order: same filter as the visible list (no removed, no user-hidden channels).
+channelIdsInCategoryVisible:
+SELECT c.remote_id FROM channel c
+JOIN channel_category cc ON cc.source_id = c.source_id AND cc.channel_id = c.remote_id
+WHERE cc.source_id = :sourceId AND cc.category_id = :categoryId AND c.removed_ms IS NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM hidden h
+    WHERE h.profile_id = :profileId AND h.source_id = c.source_id AND h.kind = 'LIVE' AND h.remote_id = c.remote_id
+  )
+ORDER BY c.sort_index;
+
+channelByKey:
+SELECT * FROM channel WHERE source_id = ? AND remote_id = ?;
+
+countVod:
+SELECT count(*) FROM vod
+WHERE source_id = :sourceId AND removed_ms IS NULL AND (:categoryId IS NULL OR primary_category_id = :categoryId)
+  -- One card per exact TMDB id within this page's scope; the detail page lists the other copies.
+  AND (tmdb_id IS NULL OR tmdb_id = '' OR NOT EXISTS (
+    SELECT 1 FROM vod d WHERE d.source_id = vod.source_id AND d.tmdb_id = vod.tmdb_id AND d.removed_ms IS NULL
+      AND (:categoryId IS NULL OR d.primary_category_id = :categoryId)
+      AND (d.sort_index < vod.sort_index OR (d.sort_index = vod.sort_index AND d.remote_id < vod.remote_id))));
+
+vodPage:
+SELECT * FROM vod
+WHERE source_id = :sourceId AND removed_ms IS NULL AND (:categoryId IS NULL OR primary_category_id = :categoryId)
+  -- One card per exact TMDB id within this page's scope; the detail page lists the other copies.
+  AND (tmdb_id IS NULL OR tmdb_id = '' OR NOT EXISTS (
+    SELECT 1 FROM vod d WHERE d.source_id = vod.source_id AND d.tmdb_id = vod.tmdb_id AND d.removed_ms IS NULL
+      AND (:categoryId IS NULL OR d.primary_category_id = :categoryId)
+      AND (d.sort_index < vod.sort_index OR (d.sort_index = vod.sort_index AND d.remote_id < vod.remote_id))))
+ORDER BY sort_index
+LIMIT :limit OFFSET :offset;
+
+vodByKey:
+SELECT * FROM vod WHERE source_id = ? AND remote_id = ?;
+
+seriesByKey:
+SELECT * FROM series WHERE source_id = ? AND remote_id = ?;
+
+recentVod:
+-- Visibility and one-card-per-title are applied BEFORE the limit so the shelf cannot under-fill
+-- or promote a locked copy to the representative. Representative = newest visible copy.
+SELECT * FROM vod
+WHERE removed_ms IS NULL
+  AND (primary_category_id IS NULL OR ('VOD|' || source_id || '|' || primary_category_id) NOT IN :excludedKeys)
+  AND (tmdb_id IS NULL OR tmdb_id = '' OR NOT EXISTS (
+    SELECT 1 FROM vod w
+    WHERE w.tmdb_id = vod.tmdb_id AND w.removed_ms IS NULL
+      AND (w.primary_category_id IS NULL OR ('VOD|' || w.source_id || '|' || w.primary_category_id) NOT IN :excludedKeys)
+      AND (COALESCE(w.added_ms, -1) > COALESCE(vod.added_ms, -1)
+        OR (COALESCE(w.added_ms, -1) = COALESCE(vod.added_ms, -1)
+          AND (w.source_id < vod.source_id
+            OR (w.source_id = vod.source_id AND w.remote_id < vod.remote_id))))))
+ORDER BY added_ms DESC, source_id, remote_id
+LIMIT :limit;
+
+-- Exact external-ID matches only. A title/year guess is not enough to merge editions.
+otherVodWithSameTmdb:
+SELECT other.source_id, other.remote_id, other.name, other.poster_url,
+       other.primary_category_id, other.rating, other.year, other.tmdb_id
+FROM vod current JOIN vod other ON other.tmdb_id = current.tmdb_id
+WHERE current.source_id = :sourceId AND current.remote_id = :remoteId
+  AND current.tmdb_id IS NOT NULL AND current.tmdb_id != ''
+  AND other.removed_ms IS NULL
+  AND (other.source_id != current.source_id OR other.remote_id != current.remote_id)
+ORDER BY other.source_id, other.remote_id;
+
+-- Resolve a saved title membership to available variants. Callers must apply
+-- current parental visibility before choosing the first representative.
+vodByTmdb:
+SELECT v.source_id, v.remote_id, v.name, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id
+FROM vod v JOIN source s ON s.id = v.source_id
+WHERE v.tmdb_id = :tmdbId AND v.removed_ms IS NULL
+ORDER BY CASE s.kind WHEN 'PLEX' THEN 0 ELSE 1 END, s.sort_index, v.sort_index, v.source_id, v.remote_id;
+
+countSeries:
+SELECT count(*) FROM series
+WHERE source_id = :sourceId AND removed_ms IS NULL AND (:categoryId IS NULL OR primary_category_id = :categoryId)
+  -- One card per exact TMDB id within this page's scope; the detail page lists the other copies.
+  AND (tmdb_id IS NULL OR tmdb_id = '' OR NOT EXISTS (
+    SELECT 1 FROM series d WHERE d.source_id = series.source_id AND d.tmdb_id = series.tmdb_id AND d.removed_ms IS NULL
+      AND (:categoryId IS NULL OR d.primary_category_id = :categoryId)
+      AND (d.sort_index < series.sort_index OR (d.sort_index = series.sort_index AND d.remote_id < series.remote_id))));
+
+seriesPage:
+SELECT * FROM series
+WHERE source_id = :sourceId AND removed_ms IS NULL AND (:categoryId IS NULL OR primary_category_id = :categoryId)
+  -- One card per exact TMDB id within this page's scope; the detail page lists the other copies.
+  AND (tmdb_id IS NULL OR tmdb_id = '' OR NOT EXISTS (
+    SELECT 1 FROM series d WHERE d.source_id = series.source_id AND d.tmdb_id = series.tmdb_id AND d.removed_ms IS NULL
+      AND (:categoryId IS NULL OR d.primary_category_id = :categoryId)
+      AND (d.sort_index < series.sort_index OR (d.sort_index = series.sort_index AND d.remote_id < series.remote_id))))
+ORDER BY sort_index
+LIMIT :limit OFFSET :offset;
+
+recentSeries:
+-- Same rule as recentVod, ranked by last_modified_ms (series has no added_ms column).
+SELECT * FROM series
+WHERE removed_ms IS NULL
+  AND (primary_category_id IS NULL OR ('SERIES|' || source_id || '|' || primary_category_id) NOT IN :excludedKeys)
+  AND (tmdb_id IS NULL OR tmdb_id = '' OR NOT EXISTS (
+    SELECT 1 FROM series w
+    WHERE w.tmdb_id = series.tmdb_id AND w.removed_ms IS NULL
+      AND (w.primary_category_id IS NULL OR ('SERIES|' || w.source_id || '|' || w.primary_category_id) NOT IN :excludedKeys)
+      AND (COALESCE(w.last_modified_ms, -1) > COALESCE(series.last_modified_ms, -1)
+        OR (COALESCE(w.last_modified_ms, -1) = COALESCE(series.last_modified_ms, -1)
+          AND (w.source_id < series.source_id
+            OR (w.source_id = series.source_id AND w.remote_id < series.remote_id))))))
+ORDER BY last_modified_ms DESC, source_id, remote_id
+LIMIT :limit;
+
+countByKind:
+SELECT 'LIVE' AS kind, count(*) AS n FROM channel WHERE source_id = :sourceId AND removed_ms IS NULL
+UNION ALL
+SELECT 'VOD' AS kind, count(*) AS n FROM vod WHERE source_id = :sourceId AND removed_ms IS NULL
+UNION ALL
+SELECT 'SERIES' AS kind, count(*) AS n FROM series WHERE source_id = :sourceId AND removed_ms IS NULL;
+
+programmesForKeysBetween:
+SELECT * FROM programme
+WHERE source_id = :sourceId AND channel_key IN :keys AND end_ms > :fromMs AND start_ms < :toMs
+ORDER BY channel_key, start_ms;
+
+-- "On TV" search: programmes airing now or later (until :untilMs) whose title contains the
+-- caller's sanitized text (no % or _ reach :pattern). Joined to the provider's own channel.
+searchProgrammes:
+SELECT p.title, p.start_ms, p.end_ms, p.has_archive, c.source_id, c.remote_id, c.name, c.logo_url, c.primary_category_id
+FROM programme p JOIN channel c ON c.source_id = p.source_id AND c.epg_channel_id = p.channel_key
+WHERE p.end_ms > :nowMs AND p.start_ms < :untilMs AND p.title LIKE :pattern AND c.removed_ms IS NULL
+ORDER BY p.start_ms, c.sort_index
+LIMIT :limit;
+
+-- Live Sports: channels that are clearly sports outlets (their programmes are read by key).
+sportsChannels:
+SELECT c.source_id, c.remote_id, c.name, c.logo_url, c.primary_category_id, c.epg_channel_id, cat.name AS category_name
+FROM channel c
+LEFT JOIN category cat ON cat.source_id = c.source_id AND cat.kind = 'LIVE' AND cat.remote_id = c.primary_category_id
+WHERE c.removed_ms IS NULL AND (c.name LIKE '%sport%' OR cat.name LIKE '%sport%' OR c.name LIKE '%espn%' OR c.name LIKE '%dazn%' OR c.name LIKE '%bein%' OR c.name LIKE '%tsn%' OR c.name LIKE '%ufc%' OR c.name LIKE '%nfl%' OR c.name LIKE '%nba%' OR c.name LIKE '%nhl%' OR c.name LIKE '%mlb%' OR c.name LIKE '%golf%' OR c.name LIKE '%tennis%')
+ORDER BY c.number IS NULL, c.number, c.sort_index
+LIMIT :limit;
+
+-- Live Sports: "event channels" whose NAME carries the matchup (EPG often empty or generic).
+sportsEventChannels:
+SELECT c.source_id, c.remote_id, c.name, c.logo_url, c.primary_category_id, c.epg_channel_id, cat.name AS category_name
+FROM channel c
+LEFT JOIN category cat ON cat.source_id = c.source_id AND cat.kind = 'LIVE' AND cat.remote_id = c.primary_category_id
+WHERE c.removed_ms IS NULL AND (c.name LIKE '% vs%' OR c.name LIKE '% v %' OR c.name LIKE '% @ %' OR c.name LIKE '% at %')
+ORDER BY c.number IS NULL, c.number, c.sort_index
+LIMIT :limit;
+
+-- Live Sports: channels whose name mentions a TV network ("%prime video%"); scored in Kotlin.
+channelsNameLike:
+SELECT c.source_id, c.remote_id, c.number, c.name, c.logo_url, c.epg_channel_id, c.catchup_days, c.primary_category_id
+FROM channel c
+WHERE c.removed_ms IS NULL AND c.name LIKE :pattern
+ORDER BY c.number IS NULL, c.number, c.sort_index
+LIMIT :limit;
+
+searchByKind:
+SELECT title, kind, source_id, remote_id FROM search_index
+WHERE search_index MATCH :query AND kind = :kind
+LIMIT :limit;
+
+-- "All" across every source: one representative per nonempty exact tmdb_id.
+-- Visibility (the caller passes the current session's excluded category keys;
+-- a PIN-unlocked session passes an empty collection) is applied BEFORE ranking:
+-- only visible rows compete. Representative order: visible Plex first, then
+-- source sort order, row sort order, source_id, remote_id (a total order, since
+-- (source_id, remote_id) is the PK). Blank/null IDs are never grouped. The count
+-- and page queries share this predicate verbatim so paging stays consistent.
+countVodAll:
+SELECT count(*) FROM vod v JOIN source s ON s.id = v.source_id
+WHERE v.removed_ms IS NULL
+  AND (v.primary_category_id IS NULL OR ('VOD|' || v.source_id || '|' || v.primary_category_id) NOT IN :excludedKeys)
+  AND (v.tmdb_id IS NULL OR v.tmdb_id = '' OR NOT EXISTS (
+    SELECT 1 FROM vod w JOIN source sw ON sw.id = w.source_id
+    WHERE w.tmdb_id = v.tmdb_id AND w.removed_ms IS NULL
+      AND (w.primary_category_id IS NULL OR ('VOD|' || w.source_id || '|' || w.primary_category_id) NOT IN :excludedKeys)
+      AND ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) < (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+        OR ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) = (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+          AND (sw.sort_index < s.sort_index
+            OR (sw.sort_index = s.sort_index AND (w.sort_index < v.sort_index
+              OR (w.sort_index = v.sort_index AND (w.source_id < v.source_id
+                OR (w.source_id = v.source_id AND w.remote_id < v.remote_id))))))))));
+
+vodPageAll:
+SELECT v.source_id, v.remote_id, v.name, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id
+FROM vod v JOIN source s ON s.id = v.source_id
+JOIN (SELECT source_id AS cid, count(*) AS n FROM vod WHERE removed_ms IS NULL GROUP BY source_id) c ON c.cid = v.source_id
+WHERE v.removed_ms IS NULL
+  AND (v.primary_category_id IS NULL OR ('VOD|' || v.source_id || '|' || v.primary_category_id) NOT IN :excludedKeys)
+  AND (v.tmdb_id IS NULL OR v.tmdb_id = '' OR NOT EXISTS (
+    SELECT 1 FROM vod w JOIN source sw ON sw.id = w.source_id
+    WHERE w.tmdb_id = v.tmdb_id AND w.removed_ms IS NULL
+      AND (w.primary_category_id IS NULL OR ('VOD|' || w.source_id || '|' || w.primary_category_id) NOT IN :excludedKeys)
+      AND ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) < (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+        OR ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) = (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+          AND (sw.sort_index < s.sort_index
+            OR (sw.sort_index = s.sort_index AND (w.sort_index < v.sort_index
+              OR (w.sort_index = v.sort_index AND (w.source_id < v.source_id
+                OR (w.source_id = v.source_id AND w.remote_id < v.remote_id))))))))))
+ORDER BY (v.sort_index + 0.5) * 1.0 / c.n, CASE s.kind WHEN 'PLEX' THEN 0 ELSE 1 END, s.sort_index, v.remote_id
+LIMIT :limit OFFSET :offset;
+
+vodPageAllAlphabetic:
+SELECT v.source_id, v.remote_id, v.name, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id
+FROM vod v JOIN source s ON s.id = v.source_id
+LEFT JOIN item_override o ON o.profile_id = :profileId AND o.source_id = v.source_id AND o.kind = 'VOD' AND o.remote_id = v.remote_id
+LEFT JOIN title_override t ON t.profile_id = :profileId AND t.content_kind = 'VOD' AND t.id_namespace = 'tmdb' AND t.external_id = v.tmdb_id
+WHERE v.removed_ms IS NULL
+  AND (v.primary_category_id IS NULL OR ('VOD|' || v.source_id || '|' || v.primary_category_id) NOT IN :excludedKeys)
+  AND (v.tmdb_id IS NULL OR v.tmdb_id = '' OR NOT EXISTS (
+    SELECT 1 FROM vod w JOIN source sw ON sw.id = w.source_id
+    WHERE w.tmdb_id = v.tmdb_id AND w.removed_ms IS NULL
+      AND (w.primary_category_id IS NULL OR ('VOD|' || w.source_id || '|' || w.primary_category_id) NOT IN :excludedKeys)
+      AND ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) < (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+        OR ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) = (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+          AND (sw.sort_index < s.sort_index
+            OR (sw.sort_index = s.sort_index AND (w.sort_index < v.sort_index
+              OR (w.sort_index = v.sort_index AND (w.source_id < v.source_id
+                OR (w.source_id = v.source_id AND w.remote_id < v.remote_id))))))))))
+ORDER BY COALESCE(t.sort_title, o.sort_title, v.name) COLLATE NOCASE, v.year, v.source_id, v.remote_id
+LIMIT :limit OFFSET :offset;
+
+countSeriesAll:
+SELECT count(*) FROM series v JOIN source s ON s.id = v.source_id
+WHERE v.removed_ms IS NULL
+  AND (v.primary_category_id IS NULL OR ('SERIES|' || v.source_id || '|' || v.primary_category_id) NOT IN :excludedKeys)
+  AND (v.tmdb_id IS NULL OR v.tmdb_id = '' OR NOT EXISTS (
+    SELECT 1 FROM series w JOIN source sw ON sw.id = w.source_id
+    WHERE w.tmdb_id = v.tmdb_id AND w.removed_ms IS NULL
+      AND (w.primary_category_id IS NULL OR ('SERIES|' || w.source_id || '|' || w.primary_category_id) NOT IN :excludedKeys)
+      AND ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) < (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+        OR ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) = (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+          AND (sw.sort_index < s.sort_index
+            OR (sw.sort_index = s.sort_index AND (w.sort_index < v.sort_index
+              OR (w.sort_index = v.sort_index AND (w.source_id < v.source_id
+                OR (w.source_id = v.source_id AND w.remote_id < v.remote_id))))))))));
+
+otherSeriesWithSameTmdb:
+SELECT other.source_id, other.remote_id, other.name, other.poster_url,
+       other.primary_category_id, other.rating, other.year, other.tmdb_id
+FROM series current JOIN series other ON other.tmdb_id = current.tmdb_id
+WHERE current.source_id = :sourceId AND current.remote_id = :remoteId
+  AND current.tmdb_id IS NOT NULL AND current.tmdb_id != ''
+  AND other.removed_ms IS NULL
+  AND (other.source_id != current.source_id OR other.remote_id != current.remote_id)
+ORDER BY other.source_id, other.remote_id;
+
+seriesByTmdb:
+SELECT v.source_id, v.remote_id, v.name, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id
+FROM series v JOIN source s ON s.id = v.source_id
+WHERE v.tmdb_id = :tmdbId AND v.removed_ms IS NULL
+ORDER BY CASE s.kind WHEN 'PLEX' THEN 0 ELSE 1 END, s.sort_index, v.sort_index, v.source_id, v.remote_id;
+
+smartVodCandidates:
+WITH RECURSIVE genre_token(token, rest) AS (
+    SELECT '', replace(COALESCE(:genresCsv, ''), '|', ',') || ','
+    UNION ALL
+    SELECT trim(substr(rest, 1, instr(rest, ',') - 1)), substr(rest, instr(rest, ',') + 1)
+    FROM genre_token WHERE rest <> ''
+)
+SELECT v.source_id, v.remote_id, v.name, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id FROM vod v
+WHERE v.removed_ms IS NULL
+  AND (:sourceFilter IS NULL OR v.source_id = :sourceFilter)
+  AND (:titleNeedle IS NULL OR instr(lower(v.name), lower(:titleNeedle)) > 0)
+  AND (:yearFrom IS NULL OR v.year >= :yearFrom)
+  AND (:yearTo IS NULL OR v.year <= :yearTo)
+  AND (:minRating IS NULL OR v.rating >= :minRating)
+  AND (:genreNeedle IS NULL OR instr(lower(v.genre), lower(:genreNeedle)) > 0)
+  AND (:started IS NULL OR (:started = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = v.remote_id OR p.parent_id = v.remote_id) AND p.position_ms > 5000))
+    OR (:started = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = v.remote_id OR p.parent_id = v.remote_id) AND p.position_ms > 5000)))
+  AND (:hasEditionLabel IS NULL OR (:hasEditionLabel = 1 AND EXISTS (
+      SELECT 1 FROM item_override o WHERE o.profile_id = :profileId AND o.source_id = v.source_id
+      AND o.kind = 'VOD' AND o.remote_id = v.remote_id
+      AND o.edition_label IS NOT NULL AND trim(o.edition_label) <> ''))
+    OR (:hasEditionLabel = 0 AND NOT EXISTS (
+      SELECT 1 FROM item_override o WHERE o.profile_id = :profileId AND o.source_id = v.source_id
+      AND o.kind = 'VOD' AND o.remote_id = v.remote_id
+      AND o.edition_label IS NOT NULL AND trim(o.edition_label) <> '')))
+  AND (:completed IS NULL OR (:completed = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = v.remote_id OR p.parent_id = v.remote_id) AND p.completed = 1))
+    OR (:completed = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = v.remote_id OR p.parent_id = v.remote_id) AND p.completed = 1)))
+  AND (:genresCsv IS NULL OR EXISTS (SELECT 1 FROM genre_token t WHERE t.token <> '' AND instr(lower(v.genre), lower(t.token)) > 0))
+  AND (:runtimeAtLeast IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = v.tmdb_id AND tm.kind = 'MOVIE'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min >= :runtimeAtLeast))
+  AND (:runtimeAtMost IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = v.tmdb_id AND tm.kind = 'MOVIE'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min <= :runtimeAtMost))
+  AND (:plexOnly IS NULL OR (:plexOnly = 1 AND EXISTS (
+      SELECT 1 FROM source sp WHERE sp.id = v.source_id AND sp.kind = 'PLEX')))
+  AND (:uhdOnly IS NULL OR (:uhdOnly = 1 AND (instr(lower(v.name), '4k') > 0 OR instr(lower(v.name), 'uhd') > 0 OR instr(lower(v.name), '2160') > 0)))
+  AND (:categoryId IS NULL OR v.primary_category_id = :categoryId)
+ORDER BY v.rating DESC, v.name COLLATE NOCASE
+LIMIT :limit;
+
+smartSeriesCandidates:
+WITH RECURSIVE genre_token(token, rest) AS (
+    SELECT '', replace(COALESCE(:genresCsv, ''), '|', ',') || ','
+    UNION ALL
+    SELECT trim(substr(rest, 1, instr(rest, ',') - 1)), substr(rest, instr(rest, ',') + 1)
+    FROM genre_token WHERE rest <> ''
+)
+SELECT v.source_id, v.remote_id, v.name, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id FROM series v
+WHERE v.removed_ms IS NULL
+  AND (:sourceFilter IS NULL OR v.source_id = :sourceFilter)
+  AND (:titleNeedle IS NULL OR instr(lower(v.name), lower(:titleNeedle)) > 0)
+  AND (:yearFrom IS NULL OR v.year >= :yearFrom)
+  AND (:yearTo IS NULL OR v.year <= :yearTo)
+  AND (:minRating IS NULL OR v.rating >= :minRating)
+  AND (:genreNeedle IS NULL OR instr(lower(v.genre), lower(:genreNeedle)) > 0)
+  AND (:started IS NULL OR (:started = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND p.kind = 'EPISODE' AND p.parent_id = v.remote_id AND p.position_ms > 5000))
+    OR (:started = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND p.kind = 'EPISODE' AND p.parent_id = v.remote_id AND p.position_ms > 5000)))
+  AND (:hasEditionLabel IS NULL OR (:hasEditionLabel = 1 AND EXISTS (
+      SELECT 1 FROM item_override o WHERE o.profile_id = :profileId AND o.source_id = v.source_id
+      AND o.kind = 'SERIES' AND o.remote_id = v.remote_id
+      AND o.edition_label IS NOT NULL AND trim(o.edition_label) <> ''))
+    OR (:hasEditionLabel = 0 AND NOT EXISTS (
+      SELECT 1 FROM item_override o WHERE o.profile_id = :profileId AND o.source_id = v.source_id
+      AND o.kind = 'SERIES' AND o.remote_id = v.remote_id
+      AND o.edition_label IS NOT NULL AND trim(o.edition_label) <> '')))
+  AND (:completed IS NULL OR (:completed = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = v.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = v.remote_id)) AND p.completed = 1))
+    OR (:completed = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = v.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = v.remote_id)) AND p.completed = 1)))
+  AND (:genresCsv IS NULL OR EXISTS (SELECT 1 FROM genre_token t WHERE t.token <> '' AND instr(lower(v.genre), lower(t.token)) > 0))
+  AND (:runtimeAtLeast IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = v.tmdb_id AND tm.kind = 'SERIES'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min >= :runtimeAtLeast))
+  AND (:runtimeAtMost IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = v.tmdb_id AND tm.kind = 'SERIES'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min <= :runtimeAtMost))
+  AND (:plexOnly IS NULL OR (:plexOnly = 1 AND EXISTS (
+      SELECT 1 FROM source sp WHERE sp.id = v.source_id AND sp.kind = 'PLEX')))
+  AND (:uhdOnly IS NULL OR (:uhdOnly = 1 AND (instr(lower(v.name), '4k') > 0 OR instr(lower(v.name), 'uhd') > 0 OR instr(lower(v.name), '2160') > 0)))
+  AND (:categoryId IS NULL OR v.primary_category_id = :categoryId)
+ORDER BY v.rating DESC, v.name COLLATE NOCASE
+LIMIT :limit;
+
+seriesPageAll:
+SELECT v.source_id, v.remote_id, v.name, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id, v.backdrop_url, v.plot
+FROM series v JOIN source s ON s.id = v.source_id
+JOIN (SELECT source_id AS cid, count(*) AS n FROM series WHERE removed_ms IS NULL GROUP BY source_id) c ON c.cid = v.source_id
+WHERE v.removed_ms IS NULL
+  AND (v.primary_category_id IS NULL OR ('SERIES|' || v.source_id || '|' || v.primary_category_id) NOT IN :excludedKeys)
+  AND (v.tmdb_id IS NULL OR v.tmdb_id = '' OR NOT EXISTS (
+    SELECT 1 FROM series w JOIN source sw ON sw.id = w.source_id
+    WHERE w.tmdb_id = v.tmdb_id AND w.removed_ms IS NULL
+      AND (w.primary_category_id IS NULL OR ('SERIES|' || w.source_id || '|' || w.primary_category_id) NOT IN :excludedKeys)
+      AND ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) < (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+        OR ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) = (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+          AND (sw.sort_index < s.sort_index
+            OR (sw.sort_index = s.sort_index AND (w.sort_index < v.sort_index
+              OR (w.sort_index = v.sort_index AND (w.source_id < v.source_id
+                OR (w.source_id = v.source_id AND w.remote_id < v.remote_id))))))))))
+ORDER BY (v.sort_index + 0.5) * 1.0 / c.n, CASE s.kind WHEN 'PLEX' THEN 0 ELSE 1 END, s.sort_index, v.remote_id
+LIMIT :limit OFFSET :offset;
+
+seriesPageAllAlphabetic:
+SELECT v.source_id, v.remote_id, v.name, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id, v.backdrop_url, v.plot
+FROM series v JOIN source s ON s.id = v.source_id
+LEFT JOIN item_override o ON o.profile_id = :profileId AND o.source_id = v.source_id AND o.kind = 'SERIES' AND o.remote_id = v.remote_id
+LEFT JOIN title_override t ON t.profile_id = :profileId AND t.content_kind = 'SERIES' AND t.id_namespace = 'tmdb' AND t.external_id = v.tmdb_id
+WHERE v.removed_ms IS NULL
+  AND (v.primary_category_id IS NULL OR ('SERIES|' || v.source_id || '|' || v.primary_category_id) NOT IN :excludedKeys)
+  AND (v.tmdb_id IS NULL OR v.tmdb_id = '' OR NOT EXISTS (
+    SELECT 1 FROM series w JOIN source sw ON sw.id = w.source_id
+    WHERE w.tmdb_id = v.tmdb_id AND w.removed_ms IS NULL
+      AND (w.primary_category_id IS NULL OR ('SERIES|' || w.source_id || '|' || w.primary_category_id) NOT IN :excludedKeys)
+      AND ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) < (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+        OR ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) = (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+          AND (sw.sort_index < s.sort_index
+            OR (sw.sort_index = s.sort_index AND (w.sort_index < v.sort_index
+              OR (w.sort_index = v.sort_index AND (w.source_id < v.source_id
+                OR (w.source_id = v.source_id AND w.remote_id < v.remote_id))))))))))
+ORDER BY COALESCE(t.sort_title, o.sort_title, v.name) COLLATE NOCASE, v.year, v.source_id, v.remote_id
+LIMIT :limit OFFSET :offset;
+
+-- "All channels": every visible channel that sits in at least one category NOT in :excluded
+-- (the caller passes parental-locked categories). Same rule as browsing one category.
+countChannelsAllVisible:
+SELECT count(*) FROM channel c
+WHERE c.source_id = :sourceId AND c.removed_ms IS NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM hidden h
+    WHERE h.profile_id = :profileId AND h.source_id = c.source_id AND h.kind = 'LIVE' AND h.remote_id = c.remote_id
+  )
+  AND EXISTS (
+    SELECT 1 FROM channel_category cc
+    WHERE cc.source_id = c.source_id AND cc.channel_id = c.remote_id AND cc.category_id NOT IN :excluded
+  );
+
+channelsAllVisible:
+SELECT c.* FROM channel c
+WHERE c.source_id = :sourceId AND c.removed_ms IS NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM hidden h
+    WHERE h.profile_id = :profileId AND h.source_id = c.source_id AND h.kind = 'LIVE' AND h.remote_id = c.remote_id
+  )
+  AND EXISTS (
+    SELECT 1 FROM channel_category cc
+    WHERE cc.source_id = c.source_id AND cc.channel_id = c.remote_id AND cc.category_id NOT IN :excluded
+  )
+ORDER BY c.number IS NULL, c.number, c.sort_index
+LIMIT :limit OFFSET :offset;
+
+channelIdsAllVisible:
+SELECT c.remote_id FROM channel c
+WHERE c.source_id = :sourceId AND c.removed_ms IS NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM hidden h
+    WHERE h.profile_id = :profileId AND h.source_id = c.source_id AND h.kind = 'LIVE' AND h.remote_id = c.remote_id
+  )
+  AND EXISTS (
+    SELECT 1 FROM channel_category cc
+    WHERE cc.source_id = c.source_id AND cc.channel_id = c.remote_id AND cc.category_id NOT IN :excluded
+  )
+ORDER BY c.number IS NULL, c.number, c.sort_index;
+
+-- "Because you watched" candidates (task 53): live catalog rows of the seed's kind whose provider
+-- genre shares at least one token with the seed genre (tokens split on , and |; LIKE-style
+-- substring match on purpose - providers write "Action|Thriller" and "Action, Thriller" alike).
+-- The seed row itself and soft-deleted rows are excluded here; scoring, visibility and saved-
+-- progress exclusions are the caller's job (same contract as exactMovieMatches/titleCandidates).
+similarCandidates:
+WITH RECURSIVE seed_token(token, rest) AS (
+    SELECT '', replace(COALESCE(:seedGenre, ''), '|', ',') || ','
+    UNION ALL
+    SELECT trim(substr(rest, 1, instr(rest, ',') - 1)), substr(rest, instr(rest, ',') + 1)
+    FROM seed_token WHERE rest <> ''
+)
+SELECT v.source_id, v.remote_id, v.name, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id, v.genre
+FROM vod v
+WHERE :kind = 'VOD' AND v.removed_ms IS NULL
+  AND (v.source_id != :sourceId OR v.remote_id != :remoteId)
+  AND EXISTS (SELECT 1 FROM seed_token t WHERE t.token <> '' AND instr(lower(v.genre), lower(t.token)) > 0)
+UNION ALL
+SELECT s.source_id, s.remote_id, s.name, s.poster_url, s.primary_category_id, s.rating, s.year, s.tmdb_id, s.genre
+FROM series s
+WHERE :kind = 'SERIES' AND s.removed_ms IS NULL
+  AND (s.source_id != :sourceId OR s.remote_id != :remoteId)
+  AND EXISTS (SELECT 1 FROM seed_token t WHERE t.token <> '' AND instr(lower(s.genre), lower(t.token)) > 0)
+ORDER BY rating DESC, name COLLATE NOCASE
+LIMIT :limit;
+
+-- Task 82: recent movie/show titles for typo-tolerant "did you mean" matching (most-recent first,
+-- capped). vod recency = added_ms, series recency = last_modified_ms; nulls sort last. kind lets the
+-- caller rebuild the ContentKey; primary_category_id lets it apply the current profile's visibility.
+recentTitles:
+SELECT source_id, remote_id, name, poster_url, primary_category_id, rating, year, tmdb_id,
+       'VOD' AS kind, added_ms AS recency
+FROM vod WHERE removed_ms IS NULL
+UNION ALL
+SELECT source_id, remote_id, name, poster_url, primary_category_id, rating, year, tmdb_id,
+       'SERIES' AS kind, last_modified_ms AS recency
+FROM series WHERE removed_ms IS NULL
+-- Compound SELECTs may only ORDER BY result columns on the TV's older SQLite (an expression crashed the Shield).
+-- DESC already puts NULL recency last.
+ORDER BY recency DESC
+LIMIT :limit;
+
+-- Task 85: how far the guide can actually go — the latest programme end stored for a source
+-- (0 when the guide is empty). Drives the header's day strip and the forward jump limit.
+maxProgrammeEnd:
+SELECT COALESCE(max(end_ms), 0) AS max_end_ms FROM programme WHERE source_id = :sourceId;
+
+-- TMDB art cache (tasks 84d, 84f): batch read for poster rows (callers must pass a non-empty id
+-- set). kind values: MOVIE, SERIES. Only cached rows come back; absent ids simply have no art.
+tmdbMetaForIds:
+SELECT tmdb_id, kind, backdrop_path, logo_path, poster_path, certification, runtime_min, overview, card_backdrop_path
+FROM tmdb_meta
+WHERE kind = :kind AND tmdb_id IN :ids;
+
+-- Browse filters (task 84i): Movies/Shows browse with year/rating/genre/watched-state/runtime/
+-- version applied in SQL so paging and the count stay correct. genre_token splits :genresCsv on
+-- , and | (same trick as similarCandidates); a null csv means "no genre filter". Runtime reads
+-- the TMDB cache (tmdb_meta.runtime_min) - rows without a cached runtime drop out when a bound
+-- is set. :sort (0 provider / 1 A–Z / 2 release year newest / 3 rating highest) orders the
+-- all-sources pages; single-source browse uses the *Sorted queries (task 115).
+
+countVodFiltered:
+WITH RECURSIVE genre_token(token, rest) AS (
+    SELECT '', replace(COALESCE(:genresCsv, ''), '|', ',') || ','
+    UNION ALL
+    SELECT trim(substr(rest, 1, instr(rest, ',') - 1)), substr(rest, instr(rest, ',') + 1)
+    FROM genre_token WHERE rest <> ''
+)
+SELECT count(*) FROM vod v
+WHERE v.source_id = :sourceId AND v.removed_ms IS NULL
+  AND (:categoryId IS NULL OR v.primary_category_id = :categoryId)
+  AND (v.tmdb_id IS NULL OR v.tmdb_id = '' OR NOT EXISTS (
+    SELECT 1 FROM vod d WHERE d.source_id = v.source_id AND d.tmdb_id = v.tmdb_id AND d.removed_ms IS NULL
+      AND (:categoryId IS NULL OR d.primary_category_id = :categoryId)
+      AND (d.sort_index < v.sort_index OR (d.sort_index = v.sort_index AND d.remote_id < v.remote_id))))
+  AND (:yearFrom IS NULL OR v.year >= :yearFrom)
+  AND (:yearTo IS NULL OR v.year <= :yearTo)
+  AND (:minRating IS NULL OR v.rating >= :minRating)
+  AND (:started IS NULL OR (:started = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = v.remote_id OR p.parent_id = v.remote_id) AND p.position_ms > 5000))
+    OR (:started = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = v.remote_id OR p.parent_id = v.remote_id) AND p.position_ms > 5000)))
+  AND (:completed IS NULL OR (:completed = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = v.remote_id OR p.parent_id = v.remote_id) AND p.completed = 1))
+    OR (:completed = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = v.remote_id OR p.parent_id = v.remote_id) AND p.completed = 1)))
+  AND (:genresCsv IS NULL OR EXISTS (SELECT 1 FROM genre_token t WHERE t.token <> '' AND instr(lower(v.genre), lower(t.token)) > 0))
+  AND (:runtimeAtLeast IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = v.tmdb_id AND tm.kind = 'MOVIE'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min >= :runtimeAtLeast))
+  AND (:runtimeAtMost IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = v.tmdb_id AND tm.kind = 'MOVIE'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min <= :runtimeAtMost))
+  AND (:plexOnly IS NULL OR (:plexOnly = 1 AND EXISTS (
+      SELECT 1 FROM source sp WHERE sp.id = v.source_id AND sp.kind = 'PLEX')))
+  AND (:uhdOnly IS NULL OR (:uhdOnly = 1 AND (instr(lower(v.name), '4k') > 0 OR instr(lower(v.name), 'uhd') > 0 OR instr(lower(v.name), '2160') > 0)));
+
+vodPageFiltered:
+WITH RECURSIVE genre_token(token, rest) AS (
+    SELECT '', replace(COALESCE(:genresCsv, ''), '|', ',') || ','
+    UNION ALL
+    SELECT trim(substr(rest, 1, instr(rest, ',') - 1)), substr(rest, instr(rest, ',') + 1)
+    FROM genre_token WHERE rest <> ''
+)
+SELECT v.source_id, v.remote_id, v.name, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id
+FROM vod v
+WHERE v.source_id = :sourceId AND v.removed_ms IS NULL
+  AND (:categoryId IS NULL OR v.primary_category_id = :categoryId)
+  AND (v.tmdb_id IS NULL OR v.tmdb_id = '' OR NOT EXISTS (
+    SELECT 1 FROM vod d WHERE d.source_id = v.source_id AND d.tmdb_id = v.tmdb_id AND d.removed_ms IS NULL
+      AND (:categoryId IS NULL OR d.primary_category_id = :categoryId)
+      AND (d.sort_index < v.sort_index OR (d.sort_index = v.sort_index AND d.remote_id < v.remote_id))))
+  AND (:yearFrom IS NULL OR v.year >= :yearFrom)
+  AND (:yearTo IS NULL OR v.year <= :yearTo)
+  AND (:minRating IS NULL OR v.rating >= :minRating)
+  AND (:started IS NULL OR (:started = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = v.remote_id OR p.parent_id = v.remote_id) AND p.position_ms > 5000))
+    OR (:started = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = v.remote_id OR p.parent_id = v.remote_id) AND p.position_ms > 5000)))
+  AND (:completed IS NULL OR (:completed = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = v.remote_id OR p.parent_id = v.remote_id) AND p.completed = 1))
+    OR (:completed = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = v.remote_id OR p.parent_id = v.remote_id) AND p.completed = 1)))
+  AND (:genresCsv IS NULL OR EXISTS (SELECT 1 FROM genre_token t WHERE t.token <> '' AND instr(lower(v.genre), lower(t.token)) > 0))
+  AND (:runtimeAtLeast IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = v.tmdb_id AND tm.kind = 'MOVIE'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min >= :runtimeAtLeast))
+  AND (:runtimeAtMost IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = v.tmdb_id AND tm.kind = 'MOVIE'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min <= :runtimeAtMost))
+  AND (:plexOnly IS NULL OR (:plexOnly = 1 AND EXISTS (
+      SELECT 1 FROM source sp WHERE sp.id = v.source_id AND sp.kind = 'PLEX')))
+  AND (:uhdOnly IS NULL OR (:uhdOnly = 1 AND (instr(lower(v.name), '4k') > 0 OR instr(lower(v.name), 'uhd') > 0 OR instr(lower(v.name), '2160') > 0)))
+ORDER BY v.sort_index
+LIMIT :limit OFFSET :offset;
+
+countVodAllFiltered:
+WITH RECURSIVE genre_token(token, rest) AS (
+    SELECT '', replace(COALESCE(:genresCsv, ''), '|', ',') || ','
+    UNION ALL
+    SELECT trim(substr(rest, 1, instr(rest, ',') - 1)), substr(rest, instr(rest, ',') + 1)
+    FROM genre_token WHERE rest <> ''
+)
+SELECT count(*) FROM vod v JOIN source s ON s.id = v.source_id
+WHERE v.removed_ms IS NULL
+  AND (v.primary_category_id IS NULL OR ('VOD|' || v.source_id || '|' || v.primary_category_id) NOT IN :excludedKeys)
+  AND (v.tmdb_id IS NULL OR v.tmdb_id = '' OR NOT EXISTS (
+    SELECT 1 FROM vod w JOIN source sw ON sw.id = w.source_id
+    WHERE w.tmdb_id = v.tmdb_id AND w.removed_ms IS NULL
+      AND (w.primary_category_id IS NULL OR ('VOD|' || w.source_id || '|' || w.primary_category_id) NOT IN :excludedKeys)
+      AND ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) < (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+        OR ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) = (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+          AND (sw.sort_index < s.sort_index
+            OR (sw.sort_index = s.sort_index AND (w.sort_index < v.sort_index
+              OR (w.sort_index = v.sort_index AND (w.source_id < v.source_id
+                OR (w.source_id = v.source_id AND w.remote_id < v.remote_id))))))))))
+  AND (:yearFrom IS NULL OR v.year >= :yearFrom)
+  AND (:yearTo IS NULL OR v.year <= :yearTo)
+  AND (:minRating IS NULL OR v.rating >= :minRating)
+  AND (:started IS NULL OR (:started = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = v.remote_id OR p.parent_id = v.remote_id) AND p.position_ms > 5000))
+    OR (:started = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = v.remote_id OR p.parent_id = v.remote_id) AND p.position_ms > 5000)))
+  AND (:completed IS NULL OR (:completed = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = v.remote_id OR p.parent_id = v.remote_id) AND p.completed = 1))
+    OR (:completed = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = v.remote_id OR p.parent_id = v.remote_id) AND p.completed = 1)))
+  AND (:genresCsv IS NULL OR EXISTS (SELECT 1 FROM genre_token t WHERE t.token <> '' AND instr(lower(v.genre), lower(t.token)) > 0))
+  AND (:runtimeAtLeast IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = v.tmdb_id AND tm.kind = 'MOVIE'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min >= :runtimeAtLeast))
+  AND (:runtimeAtMost IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = v.tmdb_id AND tm.kind = 'MOVIE'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min <= :runtimeAtMost))
+  AND (:plexOnly IS NULL OR (:plexOnly = 1 AND s.kind = 'PLEX'))
+  AND (:uhdOnly IS NULL OR (:uhdOnly = 1 AND (instr(lower(v.name), '4k') > 0 OR instr(lower(v.name), 'uhd') > 0 OR instr(lower(v.name), '2160') > 0)));
+
+vodPageAllFiltered:
+WITH RECURSIVE genre_token(token, rest) AS (
+    SELECT '', replace(COALESCE(:genresCsv, ''), '|', ',') || ','
+    UNION ALL
+    SELECT trim(substr(rest, 1, instr(rest, ',') - 1)), substr(rest, instr(rest, ',') + 1)
+    FROM genre_token WHERE rest <> ''
+)
+SELECT v.source_id, v.remote_id, v.name, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id
+FROM vod v JOIN source s ON s.id = v.source_id
+JOIN (SELECT source_id AS cid, count(*) AS n FROM vod WHERE removed_ms IS NULL GROUP BY source_id) c ON c.cid = v.source_id
+LEFT JOIN item_override o ON o.profile_id = :profileId AND o.source_id = v.source_id AND o.kind = 'VOD' AND o.remote_id = v.remote_id
+LEFT JOIN title_override t ON t.profile_id = :profileId AND t.content_kind = 'VOD' AND t.id_namespace = 'tmdb' AND t.external_id = v.tmdb_id
+WHERE v.removed_ms IS NULL
+  AND (v.primary_category_id IS NULL OR ('VOD|' || v.source_id || '|' || v.primary_category_id) NOT IN :excludedKeys)
+  AND (v.tmdb_id IS NULL OR v.tmdb_id = '' OR NOT EXISTS (
+    SELECT 1 FROM vod w JOIN source sw ON sw.id = w.source_id
+    WHERE w.tmdb_id = v.tmdb_id AND w.removed_ms IS NULL
+      AND (w.primary_category_id IS NULL OR ('VOD|' || w.source_id || '|' || w.primary_category_id) NOT IN :excludedKeys)
+      AND ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) < (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+        OR ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) = (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+          AND (sw.sort_index < s.sort_index
+            OR (sw.sort_index = s.sort_index AND (w.sort_index < v.sort_index
+              OR (w.sort_index = v.sort_index AND (w.source_id < v.source_id
+                OR (w.source_id = v.source_id AND w.remote_id < v.remote_id))))))))))
+  AND (:yearFrom IS NULL OR v.year >= :yearFrom)
+  AND (:yearTo IS NULL OR v.year <= :yearTo)
+  AND (:minRating IS NULL OR v.rating >= :minRating)
+  AND (:started IS NULL OR (:started = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = v.remote_id OR p.parent_id = v.remote_id) AND p.position_ms > 5000))
+    OR (:started = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = v.remote_id OR p.parent_id = v.remote_id) AND p.position_ms > 5000)))
+  AND (:completed IS NULL OR (:completed = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = v.remote_id OR p.parent_id = v.remote_id) AND p.completed = 1))
+    OR (:completed = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = v.remote_id OR p.parent_id = v.remote_id) AND p.completed = 1)))
+  AND (:genresCsv IS NULL OR EXISTS (SELECT 1 FROM genre_token t WHERE t.token <> '' AND instr(lower(v.genre), lower(t.token)) > 0))
+  AND (:runtimeAtLeast IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = v.tmdb_id AND tm.kind = 'MOVIE'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min >= :runtimeAtLeast))
+  AND (:runtimeAtMost IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = v.tmdb_id AND tm.kind = 'MOVIE'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min <= :runtimeAtMost))
+  AND (:plexOnly IS NULL OR (:plexOnly = 1 AND s.kind = 'PLEX'))
+  AND (:uhdOnly IS NULL OR (:uhdOnly = 1 AND (instr(lower(v.name), '4k') > 0 OR instr(lower(v.name), 'uhd') > 0 OR instr(lower(v.name), '2160') > 0)))
+-- Task 115: :sort 0 = provider interleave (the old ELSE arms), 1 = A–Z (the old :alphabetic arms),
+-- 2 = release year newest first, 3 = rating highest first; null year/rating last, then
+-- sort_name/source_id/remote_id ties. Inactive modes are NULL for every row, so they cannot reorder.
+ORDER BY
+  CASE WHEN :sort = 1 THEN COALESCE(t.sort_title, o.sort_title, v.name) ELSE NULL END COLLATE NOCASE,
+  CASE WHEN :sort = 0 THEN (v.sort_index + 0.5) * 1.0 / c.n ELSE NULL END,
+  CASE WHEN :sort = 0 THEN CASE s.kind WHEN 'PLEX' THEN 0 ELSE 1 END ELSE NULL END,
+  CASE WHEN :sort = 0 THEN s.sort_index ELSE NULL END,
+  CASE WHEN :sort = 1 THEN v.year ELSE NULL END,
+  CASE WHEN :sort = 2 THEN CASE WHEN v.year IS NULL THEN 1 ELSE 0 END ELSE NULL END,
+  CASE WHEN :sort = 2 THEN v.year ELSE NULL END DESC,
+  CASE WHEN :sort = 3 THEN CASE WHEN v.rating IS NULL THEN 1 ELSE 0 END ELSE NULL END,
+  CASE WHEN :sort = 3 THEN v.rating ELSE NULL END DESC,
+  CASE WHEN :sort = 0 THEN NULL ELSE COALESCE(t.sort_title, o.sort_title, v.name) END COLLATE NOCASE,
+  CASE WHEN :sort = 0 THEN NULL ELSE v.source_id END,
+  v.remote_id
+LIMIT :limit OFFSET :offset;
+
+countSeriesFiltered:
+WITH RECURSIVE genre_token(token, rest) AS (
+    SELECT '', replace(COALESCE(:genresCsv, ''), '|', ',') || ','
+    UNION ALL
+    SELECT trim(substr(rest, 1, instr(rest, ',') - 1)), substr(rest, instr(rest, ',') + 1)
+    FROM genre_token WHERE rest <> ''
+)
+SELECT count(*) FROM series v
+WHERE v.source_id = :sourceId AND v.removed_ms IS NULL
+  AND (:categoryId IS NULL OR v.primary_category_id = :categoryId)
+  AND (v.tmdb_id IS NULL OR v.tmdb_id = '' OR NOT EXISTS (
+    SELECT 1 FROM series d WHERE d.source_id = v.source_id AND d.tmdb_id = v.tmdb_id AND d.removed_ms IS NULL
+      AND (:categoryId IS NULL OR d.primary_category_id = :categoryId)
+      AND (d.sort_index < v.sort_index OR (d.sort_index = v.sort_index AND d.remote_id < v.remote_id))))
+  AND (:yearFrom IS NULL OR v.year >= :yearFrom)
+  AND (:yearTo IS NULL OR v.year <= :yearTo)
+  AND (:minRating IS NULL OR v.rating >= :minRating)
+  AND (:started IS NULL OR (:started = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = v.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = v.remote_id)) AND p.position_ms > 5000))
+    OR (:started = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = v.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = v.remote_id)) AND p.position_ms > 5000)))
+  AND (:completed IS NULL OR (:completed = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = v.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = v.remote_id)) AND p.completed = 1))
+    OR (:completed = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = v.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = v.remote_id)) AND p.completed = 1)))
+  AND (:genresCsv IS NULL OR EXISTS (SELECT 1 FROM genre_token t WHERE t.token <> '' AND instr(lower(v.genre), lower(t.token)) > 0))
+  AND (:runtimeAtLeast IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = v.tmdb_id AND tm.kind = 'SERIES'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min >= :runtimeAtLeast))
+  AND (:runtimeAtMost IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = v.tmdb_id AND tm.kind = 'SERIES'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min <= :runtimeAtMost))
+  AND (:plexOnly IS NULL OR (:plexOnly = 1 AND EXISTS (
+      SELECT 1 FROM source sp WHERE sp.id = v.source_id AND sp.kind = 'PLEX')))
+  AND (:uhdOnly IS NULL OR (:uhdOnly = 1 AND (instr(lower(v.name), '4k') > 0 OR instr(lower(v.name), 'uhd') > 0 OR instr(lower(v.name), '2160') > 0)));
+
+seriesPageFiltered:
+WITH RECURSIVE genre_token(token, rest) AS (
+    SELECT '', replace(COALESCE(:genresCsv, ''), '|', ',') || ','
+    UNION ALL
+    SELECT trim(substr(rest, 1, instr(rest, ',') - 1)), substr(rest, instr(rest, ',') + 1)
+    FROM genre_token WHERE rest <> ''
+)
+SELECT v.source_id, v.remote_id, v.name, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id, v.backdrop_url, v.plot
+FROM series v
+WHERE v.source_id = :sourceId AND v.removed_ms IS NULL
+  AND (:categoryId IS NULL OR v.primary_category_id = :categoryId)
+  AND (v.tmdb_id IS NULL OR v.tmdb_id = '' OR NOT EXISTS (
+    SELECT 1 FROM series d WHERE d.source_id = v.source_id AND d.tmdb_id = v.tmdb_id AND d.removed_ms IS NULL
+      AND (:categoryId IS NULL OR d.primary_category_id = :categoryId)
+      AND (d.sort_index < v.sort_index OR (d.sort_index = v.sort_index AND d.remote_id < v.remote_id))))
+  AND (:yearFrom IS NULL OR v.year >= :yearFrom)
+  AND (:yearTo IS NULL OR v.year <= :yearTo)
+  AND (:minRating IS NULL OR v.rating >= :minRating)
+  AND (:started IS NULL OR (:started = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = v.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = v.remote_id)) AND p.position_ms > 5000))
+    OR (:started = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = v.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = v.remote_id)) AND p.position_ms > 5000)))
+  AND (:completed IS NULL OR (:completed = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = v.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = v.remote_id)) AND p.completed = 1))
+    OR (:completed = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = v.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = v.remote_id)) AND p.completed = 1)))
+  AND (:genresCsv IS NULL OR EXISTS (SELECT 1 FROM genre_token t WHERE t.token <> '' AND instr(lower(v.genre), lower(t.token)) > 0))
+  AND (:runtimeAtLeast IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = v.tmdb_id AND tm.kind = 'SERIES'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min >= :runtimeAtLeast))
+  AND (:runtimeAtMost IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = v.tmdb_id AND tm.kind = 'SERIES'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min <= :runtimeAtMost))
+  AND (:plexOnly IS NULL OR (:plexOnly = 1 AND EXISTS (
+      SELECT 1 FROM source sp WHERE sp.id = v.source_id AND sp.kind = 'PLEX')))
+  AND (:uhdOnly IS NULL OR (:uhdOnly = 1 AND (instr(lower(v.name), '4k') > 0 OR instr(lower(v.name), 'uhd') > 0 OR instr(lower(v.name), '2160') > 0)))
+ORDER BY v.sort_index
+LIMIT :limit OFFSET :offset;
+
+countSeriesAllFiltered:
+WITH RECURSIVE genre_token(token, rest) AS (
+    SELECT '', replace(COALESCE(:genresCsv, ''), '|', ',') || ','
+    UNION ALL
+    SELECT trim(substr(rest, 1, instr(rest, ',') - 1)), substr(rest, instr(rest, ',') + 1)
+    FROM genre_token WHERE rest <> ''
+)
+SELECT count(*) FROM series v JOIN source s ON s.id = v.source_id
+WHERE v.removed_ms IS NULL
+  AND (v.primary_category_id IS NULL OR ('SERIES|' || v.source_id || '|' || v.primary_category_id) NOT IN :excludedKeys)
+  AND (v.tmdb_id IS NULL OR v.tmdb_id = '' OR NOT EXISTS (
+    SELECT 1 FROM series w JOIN source sw ON sw.id = w.source_id
+    WHERE w.tmdb_id = v.tmdb_id AND w.removed_ms IS NULL
+      AND (w.primary_category_id IS NULL OR ('SERIES|' || w.source_id || '|' || w.primary_category_id) NOT IN :excludedKeys)
+      AND ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) < (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+        OR ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) = (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+          AND (sw.sort_index < s.sort_index
+            OR (sw.sort_index = s.sort_index AND (w.sort_index < v.sort_index
+              OR (w.sort_index = v.sort_index AND (w.source_id < v.source_id
+                OR (w.source_id = v.source_id AND w.remote_id < v.remote_id))))))))))
+  AND (:yearFrom IS NULL OR v.year >= :yearFrom)
+  AND (:yearTo IS NULL OR v.year <= :yearTo)
+  AND (:minRating IS NULL OR v.rating >= :minRating)
+  AND (:started IS NULL OR (:started = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = v.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = v.remote_id)) AND p.position_ms > 5000))
+    OR (:started = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = v.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = v.remote_id)) AND p.position_ms > 5000)))
+  AND (:completed IS NULL OR (:completed = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = v.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = v.remote_id)) AND p.completed = 1))
+    OR (:completed = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = v.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = v.remote_id)) AND p.completed = 1)))
+  AND (:genresCsv IS NULL OR EXISTS (SELECT 1 FROM genre_token t WHERE t.token <> '' AND instr(lower(v.genre), lower(t.token)) > 0))
+  AND (:runtimeAtLeast IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = v.tmdb_id AND tm.kind = 'SERIES'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min >= :runtimeAtLeast))
+  AND (:runtimeAtMost IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = v.tmdb_id AND tm.kind = 'SERIES'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min <= :runtimeAtMost))
+  AND (:plexOnly IS NULL OR (:plexOnly = 1 AND s.kind = 'PLEX'))
+  AND (:uhdOnly IS NULL OR (:uhdOnly = 1 AND (instr(lower(v.name), '4k') > 0 OR instr(lower(v.name), 'uhd') > 0 OR instr(lower(v.name), '2160') > 0)));
+
+seriesPageAllFiltered:
+WITH RECURSIVE genre_token(token, rest) AS (
+    SELECT '', replace(COALESCE(:genresCsv, ''), '|', ',') || ','
+    UNION ALL
+    SELECT trim(substr(rest, 1, instr(rest, ',') - 1)), substr(rest, instr(rest, ',') + 1)
+    FROM genre_token WHERE rest <> ''
+)
+SELECT v.source_id, v.remote_id, v.name, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id, v.backdrop_url, v.plot
+FROM series v JOIN source s ON s.id = v.source_id
+JOIN (SELECT source_id AS cid, count(*) AS n FROM series WHERE removed_ms IS NULL GROUP BY source_id) c ON c.cid = v.source_id
+LEFT JOIN item_override o ON o.profile_id = :profileId AND o.source_id = v.source_id AND o.kind = 'SERIES' AND o.remote_id = v.remote_id
+LEFT JOIN title_override t ON t.profile_id = :profileId AND t.content_kind = 'SERIES' AND t.id_namespace = 'tmdb' AND t.external_id = v.tmdb_id
+WHERE v.removed_ms IS NULL
+  AND (v.primary_category_id IS NULL OR ('SERIES|' || v.source_id || '|' || v.primary_category_id) NOT IN :excludedKeys)
+  AND (v.tmdb_id IS NULL OR v.tmdb_id = '' OR NOT EXISTS (
+    SELECT 1 FROM series w JOIN source sw ON sw.id = w.source_id
+    WHERE w.tmdb_id = v.tmdb_id AND w.removed_ms IS NULL
+      AND (w.primary_category_id IS NULL OR ('SERIES|' || w.source_id || '|' || w.primary_category_id) NOT IN :excludedKeys)
+      AND ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) < (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+        OR ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) = (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+          AND (sw.sort_index < s.sort_index
+            OR (sw.sort_index = s.sort_index AND (w.sort_index < v.sort_index
+              OR (w.sort_index = v.sort_index AND (w.source_id < v.source_id
+                OR (w.source_id = v.source_id AND w.remote_id < v.remote_id))))))))))
+  AND (:yearFrom IS NULL OR v.year >= :yearFrom)
+  AND (:yearTo IS NULL OR v.year <= :yearTo)
+  AND (:minRating IS NULL OR v.rating >= :minRating)
+  AND (:started IS NULL OR (:started = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = v.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = v.remote_id)) AND p.position_ms > 5000))
+    OR (:started = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = v.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = v.remote_id)) AND p.position_ms > 5000)))
+  AND (:completed IS NULL OR (:completed = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = v.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = v.remote_id)) AND p.completed = 1))
+    OR (:completed = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = v.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = v.remote_id)) AND p.completed = 1)))
+  AND (:genresCsv IS NULL OR EXISTS (SELECT 1 FROM genre_token t WHERE t.token <> '' AND instr(lower(v.genre), lower(t.token)) > 0))
+  AND (:runtimeAtLeast IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = v.tmdb_id AND tm.kind = 'SERIES'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min >= :runtimeAtLeast))
+  AND (:runtimeAtMost IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = v.tmdb_id AND tm.kind = 'SERIES'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min <= :runtimeAtMost))
+  AND (:plexOnly IS NULL OR (:plexOnly = 1 AND s.kind = 'PLEX'))
+  AND (:uhdOnly IS NULL OR (:uhdOnly = 1 AND (instr(lower(v.name), '4k') > 0 OR instr(lower(v.name), 'uhd') > 0 OR instr(lower(v.name), '2160') > 0)))
+-- Task 115: :sort 0 provider / 1 A–Z / 2 release year newest / 3 rating highest; nulls last, name/source/id ties.
+ORDER BY
+  CASE WHEN :sort = 1 THEN COALESCE(t.sort_title, o.sort_title, v.name) ELSE NULL END COLLATE NOCASE,
+  CASE WHEN :sort = 0 THEN (v.sort_index + 0.5) * 1.0 / c.n ELSE NULL END,
+  CASE WHEN :sort = 0 THEN CASE s.kind WHEN 'PLEX' THEN 0 ELSE 1 END ELSE NULL END,
+  CASE WHEN :sort = 0 THEN s.sort_index ELSE NULL END,
+  CASE WHEN :sort = 1 THEN v.year ELSE NULL END,
+  CASE WHEN :sort = 2 THEN CASE WHEN v.year IS NULL THEN 1 ELSE 0 END ELSE NULL END,
+  CASE WHEN :sort = 2 THEN v.year ELSE NULL END DESC,
+  CASE WHEN :sort = 3 THEN CASE WHEN v.rating IS NULL THEN 1 ELSE 0 END ELSE NULL END,
+  CASE WHEN :sort = 3 THEN v.rating ELSE NULL END DESC,
+  CASE WHEN :sort = 0 THEN NULL ELSE COALESCE(t.sort_title, o.sort_title, v.name) END COLLATE NOCASE,
+  CASE WHEN :sort = 0 THEN NULL ELSE v.source_id END,
+  v.remote_id
+LIMIT :limit OFFSET :offset;
+
+-- Genre names present in the browsed scope (task 84i filter panel). Rows come back as providers
+-- wrote them ("Action|Thriller", "Action, Thriller"); the caller splits, trims and sorts.
+browseGenreOptions:
+SELECT v.genre FROM vod v
+WHERE :kind = 'VOD' AND v.removed_ms IS NULL AND v.genre IS NOT NULL AND trim(v.genre) <> ''
+  AND (:sourceId IS NULL OR v.source_id = :sourceId)
+  AND (:categoryId IS NULL OR v.primary_category_id = :categoryId)
+  AND (v.primary_category_id IS NULL OR ('VOD|' || v.source_id || '|' || v.primary_category_id) NOT IN :excludedKeys)
+UNION ALL
+SELECT s.genre FROM series s
+WHERE :kind = 'SERIES' AND s.removed_ms IS NULL AND s.genre IS NOT NULL AND trim(s.genre) <> ''
+  AND (:sourceId IS NULL OR s.source_id = :sourceId)
+  AND (:categoryId IS NULL OR s.primary_category_id = :categoryId)
+  AND (s.primary_category_id IS NULL OR ('SERIES|' || s.source_id || '|' || s.primary_category_id) NOT IN :excludedKeys);
+
+-- ---------- Task 92: Crunchyroll "Anime library" ----------
+
+-- Display name of one category (the anime classifier needs the provider's own label).
+categoryName:
+SELECT name FROM category WHERE source_id = :sourceId AND kind = :kind AND remote_id = :remoteId;
+
+-- Every anime title of one kind across every source: same visibility (caller-passed excluded
+-- keys), exact-TMDB dedup (Plex wins) and interleave as the "All" queries. A row is anime when
+-- its primary category NAME or its provider GENRE carries an anime token as a whole word: the
+-- text is lowercased and every separator (| ( ) [ ] - : / ,) becomes a space, then each token is
+-- compared padded, so "Animation", "Kids" and "Cartoons" never match. Plex's Animation +
+-- Japan/Japanese rule needs country/language data this schema does not carry; it lives in
+-- AnimeRules (Kotlin) and only fires when the caller actually has that data.
+-- Task 117: the anime library also takes the browse filter (all params NULL = no filter), so
+-- Sort/Filter in the library grid run in SQL over the whole paged set, not the visible page.
+countVodAnime:
+WITH RECURSIVE genre_token(token, rest) AS (
+    SELECT '', replace(COALESCE(:genresCsv, ''), '|', ',') || ','
+    UNION ALL
+    SELECT trim(substr(rest, 1, instr(rest, ',') - 1)), substr(rest, instr(rest, ',') + 1)
+    FROM genre_token WHERE rest <> ''
+),
+anime_pool AS (
+    SELECT v.source_id, v.remote_id, v.name, v.genre, v.year, v.rating, v.tmdb_id,
+           lower(replace(replace(replace(replace(replace(replace(replace(replace(replace(COALESCE(c.name, '') || ' ' || COALESCE(v.genre, ''), '|', ' '), '(', ' '), ')', ' '), '[', ' '), ']', ' '), '-', ' '), ':', ' '), '/', ' '), ',', ' ')) AS norm
+    FROM vod v JOIN source s ON s.id = v.source_id
+    LEFT JOIN category c ON c.source_id = v.source_id AND c.kind = 'VOD' AND c.remote_id = v.primary_category_id
+    WHERE v.removed_ms IS NULL
+      AND (v.primary_category_id IS NULL OR ('VOD|' || v.source_id || '|' || v.primary_category_id) NOT IN :excludedKeys)
+      AND (v.tmdb_id IS NULL OR v.tmdb_id = '' OR NOT EXISTS (
+        SELECT 1 FROM vod w JOIN source sw ON sw.id = w.source_id
+        WHERE w.tmdb_id = v.tmdb_id AND w.removed_ms IS NULL
+          AND (w.primary_category_id IS NULL OR ('VOD|' || w.source_id || '|' || w.primary_category_id) NOT IN :excludedKeys)
+          AND ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) < (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+            OR ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) = (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+              AND (sw.sort_index < s.sort_index
+                OR (sw.sort_index = s.sort_index AND (w.sort_index < v.sort_index
+                  OR (w.sort_index = v.sort_index AND (w.source_id < v.source_id
+                    OR (w.source_id = v.source_id AND w.remote_id < v.remote_id))))))))))
+)
+SELECT count(*) FROM anime_pool
+WHERE (instr(' ' || norm || ' ', ' anime ') > 0
+   OR instr(' ' || norm || ' ', ' animes ') > 0
+   OR instr(' ' || norm || ' ', ' crunchyroll ') > 0
+   OR instr(' ' || norm || ' ', ' funimation ') > 0
+   OR instr(' ' || norm || ' ', ' hidive ') > 0
+   OR instr(' ' || norm || ' ', ' manga ') > 0)
+  AND (:yearFrom IS NULL OR year >= :yearFrom)
+  AND (:yearTo IS NULL OR year <= :yearTo)
+  AND (:minRating IS NULL OR rating >= :minRating)
+  AND (:started IS NULL OR (:started = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = anime_pool.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = anime_pool.remote_id OR p.parent_id = anime_pool.remote_id) AND p.position_ms > 5000))
+    OR (:started = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = anime_pool.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = anime_pool.remote_id OR p.parent_id = anime_pool.remote_id) AND p.position_ms > 5000)))
+  AND (:completed IS NULL OR (:completed = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = anime_pool.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = anime_pool.remote_id OR p.parent_id = anime_pool.remote_id) AND p.completed = 1))
+    OR (:completed = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = anime_pool.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = anime_pool.remote_id OR p.parent_id = anime_pool.remote_id) AND p.completed = 1)))
+  AND (:genresCsv IS NULL OR EXISTS (SELECT 1 FROM genre_token t WHERE t.token <> '' AND instr(lower(anime_pool.genre), lower(t.token)) > 0))
+  AND (:runtimeAtLeast IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = anime_pool.tmdb_id AND tm.kind = 'MOVIE'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min >= :runtimeAtLeast))
+  AND (:runtimeAtMost IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = anime_pool.tmdb_id AND tm.kind = 'MOVIE'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min <= :runtimeAtMost))
+  AND (:plexOnly IS NULL OR (:plexOnly = 1 AND EXISTS (
+      SELECT 1 FROM source sp WHERE sp.id = anime_pool.source_id AND sp.kind = 'PLEX')))
+  AND (:uhdOnly IS NULL OR (:uhdOnly = 1 AND (instr(lower(anime_pool.name), '4k') > 0 OR instr(lower(anime_pool.name), 'uhd') > 0 OR instr(lower(anime_pool.name), '2160') > 0)));
+
+-- Task 117: the anime library also takes the browse filter (all params NULL = no filter), so
+-- Sort/Filter in the library grid run in SQL over the whole paged set, not the visible page.
+vodPageAnime:
+WITH RECURSIVE genre_token(token, rest) AS (
+    SELECT '', replace(COALESCE(:genresCsv, ''), '|', ',') || ','
+    UNION ALL
+    SELECT trim(substr(rest, 1, instr(rest, ',') - 1)), substr(rest, instr(rest, ',') + 1)
+    FROM genre_token WHERE rest <> ''
+),
+anime_pool AS (
+    SELECT v.source_id, v.remote_id, v.name, v.genre, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id,
+           lower(replace(replace(replace(replace(replace(replace(replace(replace(replace(COALESCE(c.name, '') || ' ' || COALESCE(v.genre, ''), '|', ' '), '(', ' '), ')', ' '), '[', ' '), ']', ' '), '-', ' '), ':', ' '), '/', ' '), ',', ' ')) AS norm,
+           (v.sort_index + 0.5) * 1.0 / c_cnt.n AS spread,
+           CASE s.kind WHEN 'PLEX' THEN 0 ELSE 1 END AS plex_rank,
+           s.sort_index AS src_sort,
+           COALESCE(t.sort_title, o.sort_title, v.name) AS sort_name
+    FROM vod v JOIN source s ON s.id = v.source_id
+    JOIN (SELECT source_id AS cid, count(*) AS n FROM vod WHERE removed_ms IS NULL GROUP BY source_id) c_cnt ON c_cnt.cid = v.source_id
+    LEFT JOIN category c ON c.source_id = v.source_id AND c.kind = 'VOD' AND c.remote_id = v.primary_category_id
+    LEFT JOIN item_override o ON o.profile_id = :profileId AND o.source_id = v.source_id AND o.kind = 'VOD' AND o.remote_id = v.remote_id
+    LEFT JOIN title_override t ON t.profile_id = :profileId AND t.content_kind = 'VOD' AND t.id_namespace = 'tmdb' AND t.external_id = v.tmdb_id
+    WHERE v.removed_ms IS NULL
+      AND (v.primary_category_id IS NULL OR ('VOD|' || v.source_id || '|' || v.primary_category_id) NOT IN :excludedKeys)
+      AND (v.tmdb_id IS NULL OR v.tmdb_id = '' OR NOT EXISTS (
+        SELECT 1 FROM vod w JOIN source sw ON sw.id = w.source_id
+        WHERE w.tmdb_id = v.tmdb_id AND w.removed_ms IS NULL
+          AND (w.primary_category_id IS NULL OR ('VOD|' || w.source_id || '|' || w.primary_category_id) NOT IN :excludedKeys)
+          AND ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) < (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+            OR ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) = (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+              AND (sw.sort_index < s.sort_index
+                OR (sw.sort_index = s.sort_index AND (w.sort_index < v.sort_index
+                  OR (w.sort_index = v.sort_index AND (w.source_id < v.source_id
+                    OR (w.source_id = v.source_id AND w.remote_id < v.remote_id))))))))))
+)
+SELECT source_id, remote_id, name, poster_url, primary_category_id, rating, year, tmdb_id FROM anime_pool
+WHERE (instr(' ' || norm || ' ', ' anime ') > 0
+   OR instr(' ' || norm || ' ', ' animes ') > 0
+   OR instr(' ' || norm || ' ', ' crunchyroll ') > 0
+   OR instr(' ' || norm || ' ', ' funimation ') > 0
+   OR instr(' ' || norm || ' ', ' hidive ') > 0
+   OR instr(' ' || norm || ' ', ' manga ') > 0)
+  AND (:yearFrom IS NULL OR year >= :yearFrom)
+  AND (:yearTo IS NULL OR year <= :yearTo)
+  AND (:minRating IS NULL OR rating >= :minRating)
+  AND (:started IS NULL OR (:started = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = anime_pool.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = anime_pool.remote_id OR p.parent_id = anime_pool.remote_id) AND p.position_ms > 5000))
+    OR (:started = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = anime_pool.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = anime_pool.remote_id OR p.parent_id = anime_pool.remote_id) AND p.position_ms > 5000)))
+  AND (:completed IS NULL OR (:completed = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = anime_pool.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = anime_pool.remote_id OR p.parent_id = anime_pool.remote_id) AND p.completed = 1))
+    OR (:completed = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = anime_pool.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = anime_pool.remote_id OR p.parent_id = anime_pool.remote_id) AND p.completed = 1)))
+  AND (:genresCsv IS NULL OR EXISTS (SELECT 1 FROM genre_token t WHERE t.token <> '' AND instr(lower(anime_pool.genre), lower(t.token)) > 0))
+  AND (:runtimeAtLeast IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = anime_pool.tmdb_id AND tm.kind = 'MOVIE'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min >= :runtimeAtLeast))
+  AND (:runtimeAtMost IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = anime_pool.tmdb_id AND tm.kind = 'MOVIE'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min <= :runtimeAtMost))
+  AND (:plexOnly IS NULL OR (:plexOnly = 1 AND EXISTS (
+      SELECT 1 FROM source sp WHERE sp.id = anime_pool.source_id AND sp.kind = 'PLEX')))
+  AND (:uhdOnly IS NULL OR (:uhdOnly = 1 AND (instr(lower(anime_pool.name), '4k') > 0 OR instr(lower(anime_pool.name), 'uhd') > 0 OR instr(lower(anime_pool.name), '2160') > 0)))
+-- Task 115: :sort 0 provider interleave / 1 A–Z / 2 release year newest / 3 rating highest
+-- null year/rating last, then sort_name/source_id/remote_id ties (inactive modes are all-NULL).
+ORDER BY
+  CASE WHEN :sort = 1 THEN sort_name ELSE NULL END COLLATE NOCASE,
+  CASE WHEN :sort = 0 THEN spread ELSE NULL END,
+  CASE WHEN :sort = 0 THEN plex_rank ELSE NULL END,
+  CASE WHEN :sort = 0 THEN src_sort ELSE NULL END,
+  CASE WHEN :sort = 1 THEN year ELSE NULL END,
+  CASE WHEN :sort = 2 THEN CASE WHEN year IS NULL THEN 1 ELSE 0 END ELSE NULL END,
+  CASE WHEN :sort = 2 THEN year ELSE NULL END DESC,
+  CASE WHEN :sort = 3 THEN CASE WHEN rating IS NULL THEN 1 ELSE 0 END ELSE NULL END,
+  CASE WHEN :sort = 3 THEN rating ELSE NULL END DESC,
+  CASE WHEN :sort = 0 THEN NULL ELSE sort_name END COLLATE NOCASE,
+  CASE WHEN :sort = 0 THEN NULL ELSE source_id END,
+  remote_id
+LIMIT :limit OFFSET :offset;
+
+-- Task 117: same filter parameters as countVodAnime (all NULL = no filter).
+countSeriesAnime:
+WITH RECURSIVE genre_token(token, rest) AS (
+    SELECT '', replace(COALESCE(:genresCsv, ''), '|', ',') || ','
+    UNION ALL
+    SELECT trim(substr(rest, 1, instr(rest, ',') - 1)), substr(rest, instr(rest, ',') + 1)
+    FROM genre_token WHERE rest <> ''
+),
+anime_pool AS (
+    SELECT v.source_id, v.remote_id, v.name, v.genre, v.year, v.rating, v.tmdb_id,
+           lower(replace(replace(replace(replace(replace(replace(replace(replace(replace(COALESCE(c.name, '') || ' ' || COALESCE(v.genre, ''), '|', ' '), '(', ' '), ')', ' '), '[', ' '), ']', ' '), '-', ' '), ':', ' '), '/', ' '), ',', ' ')) AS norm
+    FROM series v JOIN source s ON s.id = v.source_id
+    LEFT JOIN category c ON c.source_id = v.source_id AND c.kind = 'SERIES' AND c.remote_id = v.primary_category_id
+    WHERE v.removed_ms IS NULL
+      AND (v.primary_category_id IS NULL OR ('SERIES|' || v.source_id || '|' || v.primary_category_id) NOT IN :excludedKeys)
+      AND (v.tmdb_id IS NULL OR v.tmdb_id = '' OR NOT EXISTS (
+        SELECT 1 FROM series w JOIN source sw ON sw.id = w.source_id
+        WHERE w.tmdb_id = v.tmdb_id AND w.removed_ms IS NULL
+          AND (w.primary_category_id IS NULL OR ('SERIES|' || w.source_id || '|' || w.primary_category_id) NOT IN :excludedKeys)
+          AND ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) < (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+            OR ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) = (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+              AND (sw.sort_index < s.sort_index
+                OR (sw.sort_index = s.sort_index AND (w.sort_index < v.sort_index
+                  OR (w.sort_index = v.sort_index AND (w.source_id < v.source_id
+                    OR (w.source_id = v.source_id AND w.remote_id < v.remote_id))))))))))
+)
+SELECT count(*) FROM anime_pool
+WHERE (instr(' ' || norm || ' ', ' anime ') > 0
+   OR instr(' ' || norm || ' ', ' animes ') > 0
+   OR instr(' ' || norm || ' ', ' crunchyroll ') > 0
+   OR instr(' ' || norm || ' ', ' funimation ') > 0
+   OR instr(' ' || norm || ' ', ' hidive ') > 0
+   OR instr(' ' || norm || ' ', ' manga ') > 0)
+  AND (:yearFrom IS NULL OR year >= :yearFrom)
+  AND (:yearTo IS NULL OR year <= :yearTo)
+  AND (:minRating IS NULL OR rating >= :minRating)
+  AND (:started IS NULL OR (:started = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = anime_pool.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = anime_pool.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = anime_pool.remote_id)) AND p.position_ms > 5000))
+    OR (:started = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = anime_pool.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = anime_pool.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = anime_pool.remote_id)) AND p.position_ms > 5000)))
+  AND (:completed IS NULL OR (:completed = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = anime_pool.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = anime_pool.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = anime_pool.remote_id)) AND p.completed = 1))
+    OR (:completed = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = anime_pool.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = anime_pool.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = anime_pool.remote_id)) AND p.completed = 1)))
+  AND (:genresCsv IS NULL OR EXISTS (SELECT 1 FROM genre_token t WHERE t.token <> '' AND instr(lower(anime_pool.genre), lower(t.token)) > 0))
+  AND (:runtimeAtLeast IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = anime_pool.tmdb_id AND tm.kind = 'SERIES'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min >= :runtimeAtLeast))
+  AND (:runtimeAtMost IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = anime_pool.tmdb_id AND tm.kind = 'SERIES'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min <= :runtimeAtMost))
+  AND (:plexOnly IS NULL OR (:plexOnly = 1 AND EXISTS (
+      SELECT 1 FROM source sp WHERE sp.id = anime_pool.source_id AND sp.kind = 'PLEX')))
+  AND (:uhdOnly IS NULL OR (:uhdOnly = 1 AND (instr(lower(anime_pool.name), '4k') > 0 OR instr(lower(anime_pool.name), 'uhd') > 0 OR instr(lower(anime_pool.name), '2160') > 0)));
+
+-- Task 117: same filter parameters as vodPageAnime (all NULL = no filter).
+seriesPageAnime:
+WITH RECURSIVE genre_token(token, rest) AS (
+    SELECT '', replace(COALESCE(:genresCsv, ''), '|', ',') || ','
+    UNION ALL
+    SELECT trim(substr(rest, 1, instr(rest, ',') - 1)), substr(rest, instr(rest, ',') + 1)
+    FROM genre_token WHERE rest <> ''
+),
+anime_pool AS (
+    SELECT v.source_id, v.remote_id, v.name, v.genre, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id, v.backdrop_url, v.plot,
+           lower(replace(replace(replace(replace(replace(replace(replace(replace(replace(COALESCE(c.name, '') || ' ' || COALESCE(v.genre, ''), '|', ' '), '(', ' '), ')', ' '), '[', ' '), ']', ' '), '-', ' '), ':', ' '), '/', ' '), ',', ' ')) AS norm,
+           (v.sort_index + 0.5) * 1.0 / c_cnt.n AS spread,
+           CASE s.kind WHEN 'PLEX' THEN 0 ELSE 1 END AS plex_rank,
+           s.sort_index AS src_sort,
+           COALESCE(t.sort_title, o.sort_title, v.name) AS sort_name
+    FROM series v JOIN source s ON s.id = v.source_id
+    JOIN (SELECT source_id AS cid, count(*) AS n FROM series WHERE removed_ms IS NULL GROUP BY source_id) c_cnt ON c_cnt.cid = v.source_id
+    LEFT JOIN category c ON c.source_id = v.source_id AND c.kind = 'SERIES' AND c.remote_id = v.primary_category_id
+    LEFT JOIN item_override o ON o.profile_id = :profileId AND o.source_id = v.source_id AND o.kind = 'SERIES' AND o.remote_id = v.remote_id
+    LEFT JOIN title_override t ON t.profile_id = :profileId AND t.content_kind = 'SERIES' AND t.id_namespace = 'tmdb' AND t.external_id = v.tmdb_id
+    WHERE v.removed_ms IS NULL
+      AND (v.primary_category_id IS NULL OR ('SERIES|' || v.source_id || '|' || v.primary_category_id) NOT IN :excludedKeys)
+      AND (v.tmdb_id IS NULL OR v.tmdb_id = '' OR NOT EXISTS (
+        SELECT 1 FROM series w JOIN source sw ON sw.id = w.source_id
+        WHERE w.tmdb_id = v.tmdb_id AND w.removed_ms IS NULL
+          AND (w.primary_category_id IS NULL OR ('SERIES|' || w.source_id || '|' || w.primary_category_id) NOT IN :excludedKeys)
+          AND ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) < (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+            OR ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) = (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+              AND (sw.sort_index < s.sort_index
+                OR (sw.sort_index = s.sort_index AND (w.sort_index < v.sort_index
+                  OR (w.sort_index = v.sort_index AND (w.source_id < v.source_id
+                    OR (w.source_id = v.source_id AND w.remote_id < v.remote_id))))))))))
+)
+SELECT source_id, remote_id, name, poster_url, primary_category_id, rating, year, tmdb_id, backdrop_url, plot FROM anime_pool
+WHERE (instr(' ' || norm || ' ', ' anime ') > 0
+   OR instr(' ' || norm || ' ', ' animes ') > 0
+   OR instr(' ' || norm || ' ', ' crunchyroll ') > 0
+   OR instr(' ' || norm || ' ', ' funimation ') > 0
+   OR instr(' ' || norm || ' ', ' hidive ') > 0
+   OR instr(' ' || norm || ' ', ' manga ') > 0)
+  AND (:yearFrom IS NULL OR year >= :yearFrom)
+  AND (:yearTo IS NULL OR year <= :yearTo)
+  AND (:minRating IS NULL OR rating >= :minRating)
+  AND (:started IS NULL OR (:started = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = anime_pool.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = anime_pool.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = anime_pool.remote_id)) AND p.position_ms > 5000))
+    OR (:started = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = anime_pool.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = anime_pool.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = anime_pool.remote_id)) AND p.position_ms > 5000)))
+  AND (:completed IS NULL OR (:completed = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = anime_pool.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = anime_pool.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = anime_pool.remote_id)) AND p.completed = 1))
+    OR (:completed = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = anime_pool.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = anime_pool.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = anime_pool.remote_id)) AND p.completed = 1)))
+  AND (:genresCsv IS NULL OR EXISTS (SELECT 1 FROM genre_token t WHERE t.token <> '' AND instr(lower(anime_pool.genre), lower(t.token)) > 0))
+  AND (:runtimeAtLeast IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = anime_pool.tmdb_id AND tm.kind = 'SERIES'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min >= :runtimeAtLeast))
+  AND (:runtimeAtMost IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = anime_pool.tmdb_id AND tm.kind = 'SERIES'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min <= :runtimeAtMost))
+  AND (:plexOnly IS NULL OR (:plexOnly = 1 AND EXISTS (
+      SELECT 1 FROM source sp WHERE sp.id = anime_pool.source_id AND sp.kind = 'PLEX')))
+  AND (:uhdOnly IS NULL OR (:uhdOnly = 1 AND (instr(lower(anime_pool.name), '4k') > 0 OR instr(lower(anime_pool.name), 'uhd') > 0 OR instr(lower(anime_pool.name), '2160') > 0)))
+-- Task 115: :sort 0 provider interleave / 1 A–Z / 2 release year newest / 3 rating highest
+-- null year/rating last, then sort_name/source_id/remote_id ties (inactive modes are all-NULL).
+ORDER BY
+  CASE WHEN :sort = 1 THEN sort_name ELSE NULL END COLLATE NOCASE,
+  CASE WHEN :sort = 0 THEN spread ELSE NULL END,
+  CASE WHEN :sort = 0 THEN plex_rank ELSE NULL END,
+  CASE WHEN :sort = 0 THEN src_sort ELSE NULL END,
+  CASE WHEN :sort = 1 THEN year ELSE NULL END,
+  CASE WHEN :sort = 2 THEN CASE WHEN year IS NULL THEN 1 ELSE 0 END ELSE NULL END,
+  CASE WHEN :sort = 2 THEN year ELSE NULL END DESC,
+  CASE WHEN :sort = 3 THEN CASE WHEN rating IS NULL THEN 1 ELSE 0 END ELSE NULL END,
+  CASE WHEN :sort = 3 THEN rating ELSE NULL END DESC,
+  CASE WHEN :sort = 0 THEN NULL ELSE sort_name END COLLATE NOCASE,
+  CASE WHEN :sort = 0 THEN NULL ELSE source_id END,
+  remote_id
+LIMIT :limit OFFSET :offset;
+
+-- ---------- Task 115: Movies/Shows browse sort (release year / rating) ----------
+-- Same visibility + exact-TMDB dedup predicates as the queries each one sorts; :sort is
+-- 0 provider, 1 A–Z, 2 release year newest first, 3 rating highest first. Null year/rating
+-- sort last; every mode ends in deterministic sort_name/source_id/remote_id ties so paging
+-- is a total order. Counts stay the existing queries (sort never changes the row set).
+
+vodPageSorted:
+SELECT v.source_id, v.remote_id, v.name, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id, v.genre
+FROM vod v
+LEFT JOIN item_override o ON o.profile_id = :profileId AND o.source_id = v.source_id AND o.kind = 'VOD' AND o.remote_id = v.remote_id
+LEFT JOIN title_override t ON t.profile_id = :profileId AND t.content_kind = 'VOD' AND t.id_namespace = 'tmdb' AND t.external_id = v.tmdb_id
+WHERE v.source_id = :sourceId AND v.removed_ms IS NULL AND (:categoryId IS NULL OR v.primary_category_id = :categoryId)
+  -- One card per exact TMDB id within this page's scope; the detail page lists the other copies.
+  AND (v.tmdb_id IS NULL OR v.tmdb_id = '' OR NOT EXISTS (
+    SELECT 1 FROM vod d WHERE d.source_id = v.source_id AND d.tmdb_id = v.tmdb_id AND d.removed_ms IS NULL
+      AND (:categoryId IS NULL OR d.primary_category_id = :categoryId)
+      AND (d.sort_index < v.sort_index OR (d.sort_index = v.sort_index AND d.remote_id < v.remote_id))))
+ORDER BY
+  CASE WHEN :sort = 0 THEN v.sort_index ELSE NULL END,
+  CASE WHEN :sort = 1 THEN COALESCE(t.sort_title, o.sort_title, v.name) ELSE NULL END COLLATE NOCASE,
+  CASE WHEN :sort = 1 THEN v.year ELSE NULL END,
+  CASE WHEN :sort = 2 THEN CASE WHEN v.year IS NULL THEN 1 ELSE 0 END ELSE NULL END,
+  CASE WHEN :sort = 2 THEN v.year ELSE NULL END DESC,
+  CASE WHEN :sort = 3 THEN CASE WHEN v.rating IS NULL THEN 1 ELSE 0 END ELSE NULL END,
+  CASE WHEN :sort = 3 THEN v.rating ELSE NULL END DESC,
+  CASE WHEN :sort = 0 THEN NULL ELSE COALESCE(t.sort_title, o.sort_title, v.name) END COLLATE NOCASE,
+  v.remote_id
+LIMIT :limit OFFSET :offset;
+
+seriesPageSorted:
+SELECT v.source_id, v.remote_id, v.name, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id, v.genre, v.backdrop_url, v.plot
+FROM series v
+LEFT JOIN item_override o ON o.profile_id = :profileId AND o.source_id = v.source_id AND o.kind = 'SERIES' AND o.remote_id = v.remote_id
+LEFT JOIN title_override t ON t.profile_id = :profileId AND t.content_kind = 'SERIES' AND t.id_namespace = 'tmdb' AND t.external_id = v.tmdb_id
+WHERE v.source_id = :sourceId AND v.removed_ms IS NULL AND (:categoryId IS NULL OR v.primary_category_id = :categoryId)
+  -- One card per exact TMDB id within this page's scope; the detail page lists the other copies.
+  AND (v.tmdb_id IS NULL OR v.tmdb_id = '' OR NOT EXISTS (
+    SELECT 1 FROM series d WHERE d.source_id = v.source_id AND d.tmdb_id = v.tmdb_id AND d.removed_ms IS NULL
+      AND (:categoryId IS NULL OR d.primary_category_id = :categoryId)
+      AND (d.sort_index < v.sort_index OR (d.sort_index = v.sort_index AND d.remote_id < v.remote_id))))
+ORDER BY
+  CASE WHEN :sort = 0 THEN v.sort_index ELSE NULL END,
+  CASE WHEN :sort = 1 THEN COALESCE(t.sort_title, o.sort_title, v.name) ELSE NULL END COLLATE NOCASE,
+  CASE WHEN :sort = 1 THEN v.year ELSE NULL END,
+  CASE WHEN :sort = 2 THEN CASE WHEN v.year IS NULL THEN 1 ELSE 0 END ELSE NULL END,
+  CASE WHEN :sort = 2 THEN v.year ELSE NULL END DESC,
+  CASE WHEN :sort = 3 THEN CASE WHEN v.rating IS NULL THEN 1 ELSE 0 END ELSE NULL END,
+  CASE WHEN :sort = 3 THEN v.rating ELSE NULL END DESC,
+  CASE WHEN :sort = 0 THEN NULL ELSE COALESCE(t.sort_title, o.sort_title, v.name) END COLLATE NOCASE,
+  v.remote_id
+LIMIT :limit OFFSET :offset;
+
+vodPageAllSorted:
+SELECT v.source_id, v.remote_id, v.name, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id
+FROM vod v JOIN source s ON s.id = v.source_id
+JOIN (SELECT source_id AS cid, count(*) AS n FROM vod WHERE removed_ms IS NULL GROUP BY source_id) c ON c.cid = v.source_id
+LEFT JOIN item_override o ON o.profile_id = :profileId AND o.source_id = v.source_id AND o.kind = 'VOD' AND o.remote_id = v.remote_id
+LEFT JOIN title_override t ON t.profile_id = :profileId AND t.content_kind = 'VOD' AND t.id_namespace = 'tmdb' AND t.external_id = v.tmdb_id
+WHERE v.removed_ms IS NULL
+  AND (v.primary_category_id IS NULL OR ('VOD|' || v.source_id || '|' || v.primary_category_id) NOT IN :excludedKeys)
+  AND (v.tmdb_id IS NULL OR v.tmdb_id = '' OR NOT EXISTS (
+    SELECT 1 FROM vod w JOIN source sw ON sw.id = w.source_id
+    WHERE w.tmdb_id = v.tmdb_id AND w.removed_ms IS NULL
+      AND (w.primary_category_id IS NULL OR ('VOD|' || w.source_id || '|' || w.primary_category_id) NOT IN :excludedKeys)
+      AND ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) < (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+        OR ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) = (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+          AND (sw.sort_index < s.sort_index
+            OR (sw.sort_index = s.sort_index AND (w.sort_index < v.sort_index
+              OR (w.sort_index = v.sort_index AND (w.source_id < v.source_id
+                OR (w.source_id = v.source_id AND w.remote_id < v.remote_id))))))))))
+ORDER BY
+  CASE WHEN :sort = 0 THEN (v.sort_index + 0.5) * 1.0 / c.n ELSE NULL END,
+  CASE WHEN :sort = 0 THEN CASE s.kind WHEN 'PLEX' THEN 0 ELSE 1 END ELSE NULL END,
+  CASE WHEN :sort = 0 THEN s.sort_index ELSE NULL END,
+  CASE WHEN :sort = 1 THEN COALESCE(t.sort_title, o.sort_title, v.name) ELSE NULL END COLLATE NOCASE,
+  CASE WHEN :sort = 1 THEN v.year ELSE NULL END,
+  CASE WHEN :sort = 2 THEN CASE WHEN v.year IS NULL THEN 1 ELSE 0 END ELSE NULL END,
+  CASE WHEN :sort = 2 THEN v.year ELSE NULL END DESC,
+  CASE WHEN :sort = 3 THEN CASE WHEN v.rating IS NULL THEN 1 ELSE 0 END ELSE NULL END,
+  CASE WHEN :sort = 3 THEN v.rating ELSE NULL END DESC,
+  CASE WHEN :sort = 0 THEN NULL ELSE COALESCE(t.sort_title, o.sort_title, v.name) END COLLATE NOCASE,
+  CASE WHEN :sort = 0 THEN NULL ELSE v.source_id END,
+  v.remote_id
+LIMIT :limit OFFSET :offset;
+
+seriesPageAllSorted:
+SELECT v.source_id, v.remote_id, v.name, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id, v.backdrop_url, v.plot
+FROM series v JOIN source s ON s.id = v.source_id
+JOIN (SELECT source_id AS cid, count(*) AS n FROM series WHERE removed_ms IS NULL GROUP BY source_id) c ON c.cid = v.source_id
+LEFT JOIN item_override o ON o.profile_id = :profileId AND o.source_id = v.source_id AND o.kind = 'SERIES' AND o.remote_id = v.remote_id
+LEFT JOIN title_override t ON t.profile_id = :profileId AND t.content_kind = 'SERIES' AND t.id_namespace = 'tmdb' AND t.external_id = v.tmdb_id
+WHERE v.removed_ms IS NULL
+  AND (v.primary_category_id IS NULL OR ('SERIES|' || v.source_id || '|' || v.primary_category_id) NOT IN :excludedKeys)
+  AND (v.tmdb_id IS NULL OR v.tmdb_id = '' OR NOT EXISTS (
+    SELECT 1 FROM series w JOIN source sw ON sw.id = w.source_id
+    WHERE w.tmdb_id = v.tmdb_id AND w.removed_ms IS NULL
+      AND (w.primary_category_id IS NULL OR ('SERIES|' || w.source_id || '|' || w.primary_category_id) NOT IN :excludedKeys)
+      AND ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) < (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+        OR ((CASE WHEN sw.kind = 'PLEX' THEN 0 ELSE 1 END) = (CASE WHEN s.kind = 'PLEX' THEN 0 ELSE 1 END)
+          AND (sw.sort_index < s.sort_index
+            OR (sw.sort_index = s.sort_index AND (w.sort_index < v.sort_index
+              OR (w.sort_index = v.sort_index AND (w.source_id < v.source_id
+                OR (w.source_id = v.source_id AND w.remote_id < v.remote_id))))))))))
+ORDER BY
+  CASE WHEN :sort = 0 THEN (v.sort_index + 0.5) * 1.0 / c.n ELSE NULL END,
+  CASE WHEN :sort = 0 THEN CASE s.kind WHEN 'PLEX' THEN 0 ELSE 1 END ELSE NULL END,
+  CASE WHEN :sort = 0 THEN s.sort_index ELSE NULL END,
+  CASE WHEN :sort = 1 THEN COALESCE(t.sort_title, o.sort_title, v.name) ELSE NULL END COLLATE NOCASE,
+  CASE WHEN :sort = 1 THEN v.year ELSE NULL END,
+  CASE WHEN :sort = 2 THEN CASE WHEN v.year IS NULL THEN 1 ELSE 0 END ELSE NULL END,
+  CASE WHEN :sort = 2 THEN v.year ELSE NULL END DESC,
+  CASE WHEN :sort = 3 THEN CASE WHEN v.rating IS NULL THEN 1 ELSE 0 END ELSE NULL END,
+  CASE WHEN :sort = 3 THEN v.rating ELSE NULL END DESC,
+  CASE WHEN :sort = 0 THEN NULL ELSE COALESCE(t.sort_title, o.sort_title, v.name) END COLLATE NOCASE,
+  CASE WHEN :sort = 0 THEN NULL ELSE v.source_id END,
+  v.remote_id
+LIMIT :limit OFFSET :offset;
+
+vodPageFilteredSorted:
+WITH RECURSIVE genre_token(token, rest) AS (
+    SELECT '', replace(COALESCE(:genresCsv, ''), '|', ',') || ','
+    UNION ALL
+    SELECT trim(substr(rest, 1, instr(rest, ',') - 1)), substr(rest, instr(rest, ',') + 1)
+    FROM genre_token WHERE rest <> ''
+)
+SELECT v.source_id, v.remote_id, v.name, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id
+FROM vod v
+LEFT JOIN item_override o ON o.profile_id = :profileId AND o.source_id = v.source_id AND o.kind = 'VOD' AND o.remote_id = v.remote_id
+LEFT JOIN title_override t ON t.profile_id = :profileId AND t.content_kind = 'VOD' AND t.id_namespace = 'tmdb' AND t.external_id = v.tmdb_id
+WHERE v.source_id = :sourceId AND v.removed_ms IS NULL
+  AND (:categoryId IS NULL OR v.primary_category_id = :categoryId)
+  AND (v.tmdb_id IS NULL OR v.tmdb_id = '' OR NOT EXISTS (
+    SELECT 1 FROM vod d WHERE d.source_id = v.source_id AND d.tmdb_id = v.tmdb_id AND d.removed_ms IS NULL
+      AND (:categoryId IS NULL OR d.primary_category_id = :categoryId)
+      AND (d.sort_index < v.sort_index OR (d.sort_index = v.sort_index AND d.remote_id < v.remote_id))))
+  AND (:yearFrom IS NULL OR v.year >= :yearFrom)
+  AND (:yearTo IS NULL OR v.year <= :yearTo)
+  AND (:minRating IS NULL OR v.rating >= :minRating)
+  AND (:started IS NULL OR (:started = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = v.remote_id OR p.parent_id = v.remote_id) AND p.position_ms > 5000))
+    OR (:started = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = v.remote_id OR p.parent_id = v.remote_id) AND p.position_ms > 5000)))
+  AND (:completed IS NULL OR (:completed = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = v.remote_id OR p.parent_id = v.remote_id) AND p.completed = 1))
+    OR (:completed = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND p.kind = 'VOD' AND (p.remote_id = v.remote_id OR p.parent_id = v.remote_id) AND p.completed = 1)))
+  AND (:genresCsv IS NULL OR EXISTS (SELECT 1 FROM genre_token t WHERE t.token <> '' AND instr(lower(v.genre), lower(t.token)) > 0))
+  AND (:runtimeAtLeast IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = v.tmdb_id AND tm.kind = 'MOVIE'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min >= :runtimeAtLeast))
+  AND (:runtimeAtMost IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = v.tmdb_id AND tm.kind = 'MOVIE'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min <= :runtimeAtMost))
+  AND (:plexOnly IS NULL OR (:plexOnly = 1 AND EXISTS (
+      SELECT 1 FROM source sp WHERE sp.id = v.source_id AND sp.kind = 'PLEX')))
+  AND (:uhdOnly IS NULL OR (:uhdOnly = 1 AND (instr(lower(v.name), '4k') > 0 OR instr(lower(v.name), 'uhd') > 0 OR instr(lower(v.name), '2160') > 0)))
+ORDER BY
+  CASE WHEN :sort = 0 THEN v.sort_index ELSE NULL END,
+  CASE WHEN :sort = 1 THEN COALESCE(t.sort_title, o.sort_title, v.name) ELSE NULL END COLLATE NOCASE,
+  CASE WHEN :sort = 1 THEN v.year ELSE NULL END,
+  CASE WHEN :sort = 2 THEN CASE WHEN v.year IS NULL THEN 1 ELSE 0 END ELSE NULL END,
+  CASE WHEN :sort = 2 THEN v.year ELSE NULL END DESC,
+  CASE WHEN :sort = 3 THEN CASE WHEN v.rating IS NULL THEN 1 ELSE 0 END ELSE NULL END,
+  CASE WHEN :sort = 3 THEN v.rating ELSE NULL END DESC,
+  CASE WHEN :sort = 0 THEN NULL ELSE COALESCE(t.sort_title, o.sort_title, v.name) END COLLATE NOCASE,
+  v.remote_id
+LIMIT :limit OFFSET :offset;
+
+seriesPageFilteredSorted:
+WITH RECURSIVE genre_token(token, rest) AS (
+    SELECT '', replace(COALESCE(:genresCsv, ''), '|', ',') || ','
+    UNION ALL
+    SELECT trim(substr(rest, 1, instr(rest, ',') - 1)), substr(rest, instr(rest, ',') + 1)
+    FROM genre_token WHERE rest <> ''
+)
+SELECT v.source_id, v.remote_id, v.name, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id, v.backdrop_url, v.plot
+FROM series v
+LEFT JOIN item_override o ON o.profile_id = :profileId AND o.source_id = v.source_id AND o.kind = 'SERIES' AND o.remote_id = v.remote_id
+LEFT JOIN title_override t ON t.profile_id = :profileId AND t.content_kind = 'SERIES' AND t.id_namespace = 'tmdb' AND t.external_id = v.tmdb_id
+WHERE v.source_id = :sourceId AND v.removed_ms IS NULL
+  AND (:categoryId IS NULL OR v.primary_category_id = :categoryId)
+  AND (v.tmdb_id IS NULL OR v.tmdb_id = '' OR NOT EXISTS (
+    SELECT 1 FROM series d WHERE d.source_id = v.source_id AND d.tmdb_id = v.tmdb_id AND d.removed_ms IS NULL
+      AND (:categoryId IS NULL OR d.primary_category_id = :categoryId)
+      AND (d.sort_index < v.sort_index OR (d.sort_index = v.sort_index AND d.remote_id < v.remote_id))))
+  AND (:yearFrom IS NULL OR v.year >= :yearFrom)
+  AND (:yearTo IS NULL OR v.year <= :yearTo)
+  AND (:minRating IS NULL OR v.rating >= :minRating)
+  AND (:started IS NULL OR (:started = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = v.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = v.remote_id)) AND p.position_ms > 5000))
+    OR (:started = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = v.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = v.remote_id)) AND p.position_ms > 5000)))
+  AND (:completed IS NULL OR (:completed = 1 AND EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = v.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = v.remote_id)) AND p.completed = 1))
+    OR (:completed = 0 AND NOT EXISTS (
+      SELECT 1 FROM progress p WHERE p.profile_id = :profileId AND p.source_id = v.source_id
+      AND ((p.kind = 'EPISODE' AND p.parent_id = v.remote_id) OR (p.kind = 'SERIES' AND p.remote_id = v.remote_id)) AND p.completed = 1)))
+  AND (:genresCsv IS NULL OR EXISTS (SELECT 1 FROM genre_token t WHERE t.token <> '' AND instr(lower(v.genre), lower(t.token)) > 0))
+  AND (:runtimeAtLeast IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = v.tmdb_id AND tm.kind = 'SERIES'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min >= :runtimeAtLeast))
+  AND (:runtimeAtMost IS NULL OR EXISTS (
+      SELECT 1 FROM tmdb_meta tm WHERE tm.tmdb_id = v.tmdb_id AND tm.kind = 'SERIES'
+      AND tm.runtime_min IS NOT NULL AND tm.runtime_min <= :runtimeAtMost))
+  AND (:plexOnly IS NULL OR (:plexOnly = 1 AND EXISTS (
+      SELECT 1 FROM source sp WHERE sp.id = v.source_id AND sp.kind = 'PLEX')))
+  AND (:uhdOnly IS NULL OR (:uhdOnly = 1 AND (instr(lower(v.name), '4k') > 0 OR instr(lower(v.name), 'uhd') > 0 OR instr(lower(v.name), '2160') > 0)))
+ORDER BY
+  CASE WHEN :sort = 0 THEN v.sort_index ELSE NULL END,
+  CASE WHEN :sort = 1 THEN COALESCE(t.sort_title, o.sort_title, v.name) ELSE NULL END COLLATE NOCASE,
+  CASE WHEN :sort = 1 THEN v.year ELSE NULL END,
+  CASE WHEN :sort = 2 THEN CASE WHEN v.year IS NULL THEN 1 ELSE 0 END ELSE NULL END,
+  CASE WHEN :sort = 2 THEN v.year ELSE NULL END DESC,
+  CASE WHEN :sort = 3 THEN CASE WHEN v.rating IS NULL THEN 1 ELSE 0 END ELSE NULL END,
+  CASE WHEN :sort = 3 THEN v.rating ELSE NULL END DESC,
+  CASE WHEN :sort = 0 THEN NULL ELSE COALESCE(t.sort_title, o.sort_title, v.name) END COLLATE NOCASE,
+  v.remote_id
+LIMIT :limit OFFSET :offset;

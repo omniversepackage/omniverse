@@ -1,0 +1,38 @@
+-- v2 -> v3: app-local library customization (task 33). Purely additive;
+-- existing tables/rows untouched. Sync must NEVER delete from these tables.
+
+CREATE TABLE item_override (
+    profile_id TEXT NOT NULL DEFAULT 'default',
+    source_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    remote_id TEXT NOT NULL,
+    display_title TEXT,
+    sort_title TEXT,
+    edition_label TEXT,
+    custom_poster_url TEXT,
+    PRIMARY KEY (profile_id, source_id, kind, remote_id)
+);
+
+CREATE TABLE collection (
+    id TEXT NOT NULL,
+    profile_id TEXT NOT NULL DEFAULT 'default',
+    name TEXT NOT NULL,
+    content_kind TEXT NOT NULL,
+    pinned_home INTEGER NOT NULL DEFAULT 0,
+    mode TEXT NOT NULL DEFAULT 'manual',
+    smart_filter_json TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (id)
+);
+CREATE INDEX collection_profile ON collection(profile_id, sort_order);
+
+CREATE TABLE collection_membership (
+    profile_id TEXT NOT NULL DEFAULT 'default',
+    collection_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    remote_id TEXT NOT NULL,
+    sort_index INTEGER NOT NULL,
+    PRIMARY KEY (profile_id, collection_id, source_id, kind, remote_id)
+);
+CREATE INDEX membership_collection ON collection_membership(collection_id, sort_index);

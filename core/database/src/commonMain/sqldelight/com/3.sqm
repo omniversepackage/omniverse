@@ -1,0 +1,3 @@
+-- v3 -> v4: preserve source-supplied series identity for safe cross-source alternatives.
+ALTER TABLE series ADD COLUMN tmdb_id TEXT;
+CREATE INDEX series_by_tmdb ON series(tmdb_id);

@@ -1,0 +1,18 @@
+{
+  "MediaContainer": {
+    "size": 1,
+    "Metadata": [
+      {
+        "ratingKey": "50",
+        "title": "My Show",
+        "type": "show",
+        "year": 2023,
+        "summary": "A show about shows.",
+        "thumb": "/library/sections/2/items/50/thumb.jpg",
+        "art": "/library/sections/2/items/50/art.jpg",
+        "addedAt": 1700000200,
+        "Genre": [ { "tag": "Comedy" } ]
+      }
+    ]
+  }
+}

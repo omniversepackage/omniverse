@@ -1,0 +1,4 @@
+-- v13 -> v14: banner art vs. card art (task 87b). Purely additive: tmdb_meta gains
+-- card_backdrop_path — the second-best backdrop used on landscape cards, never the same path as
+-- backdrop_path (the billboard/hero art). Existing rows simply have NULL until re-fetched.
+ALTER TABLE tmdb_meta ADD COLUMN card_backdrop_path TEXT;

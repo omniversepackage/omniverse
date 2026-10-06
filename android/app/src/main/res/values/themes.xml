@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark window from the first frame: no white flash before Compose draws. -->
+    <style name="Theme.Omniverse" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/omni_background</item>
+        <item name="android:statusBarColor">@color/omni_background</item>
+        <item name="android:navigationBarColor">@color/omni_background</item>
+    </style>
+    <color name="omni_background">#FF0A0A0E</color>
+</resources>

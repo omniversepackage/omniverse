@@ -1,0 +1,32 @@
+{
+  "MediaContainer": {
+    "size": 3,
+    "totalSize": 203,
+    "offset": 200,
+    "Metadata": [
+      {
+        "ratingKey": "201",
+        "title": "Beta Movie",
+        "year": 2019,
+        "thumb": "/library/sections/1/items/201/thumb.jpg",
+        "art": "/library/sections/1/items/201/art.jpg",
+        "summary": "The second one.",
+        "audienceRating": "8.1",
+        "duration": 600000,
+        "addedAt": 1700000000,
+        "Genre": [ { "tag": "Action" } ]
+      },
+      {
+        "ratingKey": "202",
+        "year": 2021
+      },
+      {
+        "ratingKey": "203",
+        "title": "Gamma",
+        "year": 2022,
+        "rating": 9,
+        "addedAt": 1700000100
+      }
+    ]
+  }
+}

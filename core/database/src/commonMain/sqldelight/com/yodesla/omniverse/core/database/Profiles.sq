@@ -1,0 +1,89 @@
+-- Local profiles (task 59). Every user-data table already keys its rows by profile_id; the
+-- "default" row here is the owner of all pre-profiles data (migration 9 seeds it). Settings
+-- stay global: the current profile id lives in the setting table under "current_profile".
+
+CREATE TABLE profile (
+    id TEXT NOT NULL PRIMARY KEY,
+    name TEXT NOT NULL,
+    avatar INTEGER NOT NULL DEFAULT 0,
+    is_kids INTEGER NOT NULL DEFAULT 0,
+    is_guest INTEGER NOT NULL DEFAULT 0,
+    sort INTEGER NOT NULL DEFAULT 0,
+    created_ms INTEGER NOT NULL DEFAULT 0
+);
+
+allProfiles:
+SELECT * FROM profile ORDER BY sort, created_ms, id;
+
+profileById:
+SELECT * FROM profile WHERE id = ?;
+
+countProfiles:
+SELECT count(*) FROM profile;
+
+maxProfileSort:
+SELECT max(sort) FROM profile;
+
+insertProfile:
+INSERT INTO profile(id, name, avatar, is_kids, sort, created_ms) VALUES (?, ?, ?, ?, ?, ?);
+
+renameProfile:
+UPDATE profile SET name = :name WHERE id = :id;
+
+setProfileAvatar:
+UPDATE profile SET avatar = :avatar WHERE id = :id;
+
+setProfileKids:
+UPDATE profile SET is_kids = :isKids WHERE id = :id;
+
+-- Task 84b: deleting the LAST profile converts it into the Guest in place (same id, so every
+-- profile-scoped row, setting and hidden library it owns stays exactly as it was).
+convertProfileToGuest:
+UPDATE profile SET name = :name, is_kids = 0, is_guest = 1 WHERE id = :id;
+
+-- Creating a profile while the only row is the Guest converts that row into the new profile
+-- (again the same id: the new profile inherits everything the Guest carried).
+convertGuestToProfile:
+UPDATE profile SET name = :name, avatar = :avatar, is_kids = :isKids, is_guest = 0 WHERE id = :id;
+
+deleteProfile:
+DELETE FROM profile WHERE id = :id;
+
+-- Deleting a profile removes its rows in every profile-scoped user table (app-owned data
+-- only; catalog/source tables are shared and stay). Must stay in sync with UserData.sq.
+deleteProfileFavorite:
+DELETE FROM favorite WHERE profile_id = :profileId;
+
+deleteProfileHidden:
+DELETE FROM hidden WHERE profile_id = :profileId;
+
+deleteProfileProgress:
+DELETE FROM progress WHERE profile_id = :profileId;
+
+deleteProfileRecent:
+DELETE FROM recent_channel WHERE profile_id = :profileId;
+
+deleteProfileSkipPoint:
+DELETE FROM local_skip_point WHERE profile_id = :profileId;
+
+deleteProfileItemOverride:
+DELETE FROM item_override WHERE profile_id = :profileId;
+
+deleteProfileTitleOverride:
+DELETE FROM title_override WHERE profile_id = :profileId;
+
+deleteProfileCollection:
+DELETE FROM collection WHERE profile_id = :profileId;
+
+deleteProfileMembership:
+DELETE FROM collection_membership WHERE profile_id = :profileId;
+
+deleteProfileTitleMembership:
+DELETE FROM collection_title_membership WHERE profile_id = :profileId;
+
+-- The profile's Continue Watching dismissal log (cw_dismissed_<profileId>) is a setting row.
+deleteProfileDismissals:
+DELETE FROM setting WHERE key = :key;
+
+deleteProfileSettings:
+DELETE FROM setting WHERE key LIKE '%::' || :profileId;

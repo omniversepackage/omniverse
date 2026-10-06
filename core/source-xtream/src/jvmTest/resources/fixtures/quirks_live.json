@@ -1,0 +1,67 @@
+[
+  {
+    "stream_id": 101,
+    "name": "Alpha One",
+    "num": 10,
+    "stream_icon": "http://mock.local/logo/101.png",
+    "epg_channel_id": "ch101.mock",
+    "added": "1700000000",
+    "category_id": 7,
+    "tv_archive": "1",
+    "tv_archive_duration": 7
+  },
+  {
+    "stream_id": "102",
+    "name": "Beta Two",
+    "num": "",
+    "stream_icon": null,
+    "category_id": 2,
+    "category_ids": ["2", "3"],
+    "tv_archive": 0,
+    "tv_archive_duration": 7
+  },
+  {
+    "stream_id": "103",
+    "name": "Gamma Three",
+    "num": 33,
+    "stream_icon": "http://mock.local/logo/103.png",
+    "epg_channel_id": null,
+    "category_id": "4",
+    "tv_archive": true,
+    "tv_archive_duration": 5
+  },
+  {
+    "stream_id": "104",
+    "name": "&amp; News",
+    "num": 44,
+    "stream_icon": "not-a-url",
+    "category_id": 6,
+    "category_ids": [],
+    "tv_archive": "false"
+  },
+  {
+    "stream_id": 105,
+    "name": "Epsilon Five",
+    "num": 55,
+    "stream_icon": "http://mock.local/logo/105.png",
+    "category_ids": [8],
+    "tv_archive": 1,
+    "tv_archive_duration": 3
+  },
+  {
+    "stream_id": "106",
+    "name": "  Zeta Six  ",
+    "num": 66,
+    "category_id": 9,
+    "tv_archive": "1",
+    "tv_archive_duration": 1
+  },
+  {
+    "num": 77,
+    "name": "No Stream Id",
+    "category_id": 1
+  },
+  {
+    "garbage": true
+  }
+]

@@ -22,4 +22,6 @@ dependencies {
     debugImplementation(libs.compose.ui.tooling)
     testImplementation(kotlin("test-junit"))
     testImplementation(libs.kotlinx.coroutines.test)
+    // Task 121: the browse RT-lookup test drives the real RottenTomatoes client with a fake HttpClient.
+    testImplementation(project(":core:net"))
 }

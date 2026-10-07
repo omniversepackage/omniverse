@@ -1,6 +1,8 @@
 package com.yodesla.omniverse.feature.vod
 
 import com.yodesla.omniverse.core.data.PosterRow
+import com.yodesla.omniverse.core.data.metadata.RtScores
+import com.yodesla.omniverse.core.model.ContentKey
 import com.yodesla.omniverse.core.model.SourceId
 
 /**
@@ -25,6 +27,15 @@ internal fun crunchyrollHeroStep(current: Int, count: Int, delta: Int): Int =
 /** Poster focus drives the backdrop; hero focus shows the manually selected featured title. */
 internal fun crunchyrollBackdropRow(hero: PosterRow?, focusedPoster: PosterRow?, heroFocused: Boolean): PosterRow? =
     if (heroFocused) hero else focusedPoster ?: hero
+
+/**
+ * Task 121: the hero's Rotten Tomatoes badge gate. A score is tagged with the exact title it was
+ * looked up for and paints only while that title is still the hero — paging the billboard to the
+ * next title must never show the previous title's badges, and a title with no exact TMDB id or no
+ * RT entry gets none (null in → null out; the app never guesses a score).
+ */
+internal fun crunchyrollHeroScores(shownKey: ContentKey?, lookedUpKey: ContentKey?, scores: RtScores?): RtScores? =
+    scores?.takeIf { lookedUpKey != null && lookedUpKey == shownKey }
 
 /**
  * The Continue Watching cards that belong on a brand category page (task 84l, Kory: "CW shows

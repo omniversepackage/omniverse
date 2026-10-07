@@ -153,7 +153,8 @@ internal fun BrandLayout(
 ): Unit {
     // Task 86b: Crunchyroll has its own layout (the Crunchyroll TV app's look). Other brands unchanged.
     if (brand == CategoryBrand.CRUNCHYROLL) {
-        CrunchyrollLayout(brand, items, kindLabel, firstFocus, onOpen, onMenu, continueWatching, onPlay, inMyList, onToggleMyList, titleNames, visible, remapArt, artVersion, selection = selection, onAnimeLibrary = onAnimeLibrary)
+        // Task 121: the Crunchyroll hero shows the same RT badges the spotlight and Netflix billboard do.
+        CrunchyrollLayout(brand, items, kindLabel, firstFocus, onOpen, onMenu, continueWatching, onPlay, inMyList, onToggleMyList, titleNames, visible, remapArt, artVersion, selection = selection, onAnimeLibrary = onAnimeLibrary, scores = scores)
         return
     }
     androidx.compose.runtime.CompositionLocalProvider(LocalPosterMenu provides onMenu) {

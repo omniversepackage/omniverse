@@ -1,6 +1,7 @@
 package com.yodesla.omniverse.feature.vod
 
 import com.yodesla.omniverse.core.data.PosterRow
+import com.yodesla.omniverse.core.data.metadata.RtScores
 import com.yodesla.omniverse.core.model.ContentKey
 import com.yodesla.omniverse.core.model.ContentKind
 import com.yodesla.omniverse.core.model.RemoteId
@@ -256,5 +257,31 @@ class CrunchyrollRulesTest {
         assertEquals(hero, crunchyrollBackdropRow(hero, null, heroFocused = false))
         assertEquals(poster, crunchyrollBackdropRow(hero, poster, heroFocused = false))
         assertEquals(hero, crunchyrollBackdropRow(hero, poster, heroFocused = true))
+    }
+
+    // ---- 121. Hero RT badges: the exact title, never a stale one --------------
+
+    @Test fun heroBadgesShowOnlyForTheTitleTheyWereLookedUpFor() {
+        val a = row("a", tmdb = "1429").key
+        assertEquals(RtScores(98, 95), crunchyrollHeroScores(a, a, RtScores(98, 95)))
+    }
+
+    @Test fun pagingTheBillboardNeverShowsThePreviousTitlesBadges() {
+        val a = row("a", tmdb = "1429").key
+        val b = row("b", tmdb = "8186").key
+        // A result computed for A must not paint on B — not while paging forward, ...
+        assertNull(crunchyrollHeroScores(b, a, RtScores(98, 95)))
+        // ...nor when paging back onto A with B's result still held.
+        assertNull(crunchyrollHeroScores(a, b, RtScores(98, 95)))
+    }
+
+    @Test fun noExactIdOrNoRtEntryMeansNoBadges() {
+        val a = row("a").key
+        // The lookup ran but the title has no RT page / no scores: nothing to draw.
+        assertNull(crunchyrollHeroScores(a, a, null))
+        // No exact TMDB id means no lookup at all: nothing to draw.
+        assertNull(crunchyrollHeroScores(a, null, null))
+        // An empty billboard has no hero to badge, even with a result in flight.
+        assertNull(crunchyrollHeroScores(null, null, RtScores(98, 95)))
     }
 }

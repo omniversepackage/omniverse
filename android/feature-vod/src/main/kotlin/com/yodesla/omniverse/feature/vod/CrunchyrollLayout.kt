@@ -120,6 +120,8 @@ internal fun CrunchyrollLayout(
     selection: Pair<com.yodesla.omniverse.core.model.SourceId?, String?>? = null,
     /** Task 92: open the full anime grid — every anime title of this kind across all sources. */
     onAnimeLibrary: () -> Unit = {},
+    /** Task 121: Rotten Tomatoes scores for the hero title (null when unknown). */
+    scores: suspend (PosterRow) -> com.yodesla.omniverse.core.data.metadata.RtScores? = { null },
 ) {
     LaunchedEffect(items.itemCount) { if (items.itemCount in 1 until 160) items[items.itemCount - 1] }
     val basePool = items.itemSnapshotList.items.distinctBy { it.uid() }
@@ -202,7 +204,7 @@ internal fun CrunchyrollLayout(
                             index = heroIndex, titleNames = namesFor, categoryName = kindLabel,
                             onPlay = onPlay, inMyList = inMyList, onToggleMyList = onToggleMyList,
                             onHeroFocus = { heroFocused = it }, onHeroPage = onHeroPage, firstFocus = firstFocus,
-                            onAnimeLibrary = onAnimeLibrary,
+                            onAnimeLibrary = onAnimeLibrary, scores = scores,
                             modifier = Modifier.fillMaxWidth().height(heroHeight),
                         )
                     }
@@ -310,10 +312,22 @@ private fun CrunchyrollHero(
     firstFocus: FocusRequester,
     /** Task 92: the "Anime library" button beside the wordmark. */
     onAnimeLibrary: () -> Unit,
+    /** Task 121: Rotten Tomatoes scores for the hero title (null when unknown). */
+    scores: suspend (PosterRow) -> com.yodesla.omniverse.core.data.metadata.RtScores?,
     modifier: Modifier,
 ) {
     val c = OmniTheme.colors
     val t = OmniTheme.type
+    // Task 121: the hero's RT scores, looked up once the billboard settles on a title (paging away
+    // cancels the pending lookup, exactly like the spotlight's and Netflix's). The result is tagged
+    // with the title it was computed for so [crunchyrollHeroScores] can never paint a previous
+    // title's badges on the next one — the badges reset the moment the hero changes.
+    val rt by produceState<Pair<ContentKey, com.yodesla.omniverse.core.data.metadata.RtScores>?>(null, row?.key) {
+        value = null
+        val r = row ?: return@produceState
+        delay(350)
+        value = scores(r)?.let { r.key to it }
+    }
     // Keep one set of focus targets alive as the featured title changes. Crossfade composes both
     // old and new button rows briefly, which can steal D-pad focus and break Left/Right paging.
     Box(modifier.onFocusChanged { onHeroFocus(it.hasFocus) }, contentAlignment = Alignment.Center) {
@@ -374,6 +388,9 @@ private fun CrunchyrollHero(
                     subDub?.let { Text(it.uppercase(), style = CrunchKicker(t), color = c.textSecondary, maxLines = 1) }
                     if (genres.isNotEmpty()) Text(genres.joinToString(", "), style = t.body, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     r.year?.let { Text(it.toString(), style = t.body, color = c.textSecondary) }
+                    // Task 121: the same tomato/popcorn badges the spotlight and Netflix billboard
+                    // show, gated to the title they were looked up for (genres ellipsize to make room).
+                    crunchyrollHeroScores(r.key, rt?.first, rt?.second)?.let { RtBadges(it) }
                 }
                 r.plot?.let {
                     Text(it, style = t.body.copy(fontSize = 15.sp, lineHeight = 22.sp), color = c.textSecondary, maxLines = 3, overflow = TextOverflow.Ellipsis)

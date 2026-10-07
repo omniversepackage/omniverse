@@ -16,6 +16,10 @@ import com.yodesla.omniverse.core.data.SmartCollectionFilter
 import com.yodesla.omniverse.core.data.SourceSummary
 import com.yodesla.omniverse.core.data.UserDataRepository
 import com.yodesla.omniverse.core.data.Visibility
+import com.yodesla.omniverse.core.data.metadata.RottenTomatoes
+import com.yodesla.omniverse.core.data.metadata.RtScores
+import com.yodesla.omniverse.core.net.HttpClient
+import com.yodesla.omniverse.core.net.HttpResponse
 import com.yodesla.omniverse.core.model.AccountInfo
 import com.yodesla.omniverse.core.model.Capability
 import com.yodesla.omniverse.core.model.Category
@@ -44,6 +48,7 @@ import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -60,6 +65,8 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import okio.Buffer
+import okio.BufferedSource
 
 private val src = SourceId("s")
 private val keyA = ContentKey(src, ContentKind.VOD, RemoteId("a1"))
@@ -614,6 +621,56 @@ class VodBrowseViewModelTest {
         vm.openLibrary()
         vm.select(null)
         assertFalse(vm.state.value.libraryOpen)
+    }
+
+    // Task 121: the browse page's RT lookup — the one the Crunchyroll hero now shares. It must
+    // carry the row's exact TMDB id and kind to the score client, and stay silent without one.
+    @Test
+    fun rtScoresUseTheRowsExactTmdbIdAndKind() = runTest(dispatcher) {
+        val http = FakeRtHttp()
+        val vm = VodBrowseViewModel(
+            ContentKind.SERIES, FakeSources(), FakeCatalog(), FakeUserData(), ShowEverything,
+            rottenTomatoes = RottenTomatoes(http),
+        )
+        val series = PosterRow(keySeries, "Show S", null, null, null, RemoteId("open"), tmdbId = "1429")
+        assertEquals(RtScores(79, 96), vm.rtScores(series))
+        // The score lookup asked for the SERIES property with the exact id — never a title guess.
+        assertTrue(http.urls.any { it.contains("P4983") && it.contains("1429") })
+        // A VOD row maps to the MOVIE property.
+        val movie = PosterRow(keyMovie, "Movie V", null, null, null, RemoteId("locked"), tmdbId = "550")
+        assertEquals(RtScores(79, 96), vm.rtScores(movie))
+        assertTrue(http.urls.any { it.contains("P4947") && it.contains("550") })
+    }
+
+    @Test
+    fun rtScoresAreSilentWithoutAnExactTmdbId() = runTest(dispatcher) {
+        val http = FakeRtHttp()
+        val vm = VodBrowseViewModel(
+            ContentKind.SERIES, FakeSources(), FakeCatalog(), FakeUserData(), ShowEverything,
+            rottenTomatoes = RottenTomatoes(http),
+        )
+        assertNull(vm.rtScores(posterSeries))
+        val blank = PosterRow(keySeries, "Show S", null, null, null, RemoteId("open"), tmdbId = "   ")
+        assertNull(vm.rtScores(blank))
+        assertEquals(0, http.urls.size) // no exact id: no request, no score, no badge
+    }
+}
+
+/** Canned Wikidata→RT answers (scores 79/96) recording every URL the score client asked for. */
+private class FakeRtHttp : HttpClient {
+    val urls = mutableListOf<String>()
+    override suspend fun get(url: String, headers: Map<String, String>): HttpResponse {
+        urls += url
+        val body = if (url.contains("sparql"))
+            """{"results":{"bindings":[{"rt":{"value":"tv/attack_on_titan"}}]}}"""
+        else
+            """"criticsScore":{"score":"79"} "audienceScore":{"score":"96"}"""
+        return object : HttpResponse {
+            override val status = 200
+            override val headers = emptyMap<String, String>()
+            override val body: BufferedSource = Buffer().writeUtf8(body)
+            override fun close() = Unit
+        }
     }
 }
 

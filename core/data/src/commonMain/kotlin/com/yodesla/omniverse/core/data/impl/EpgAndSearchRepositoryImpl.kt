@@ -8,6 +8,8 @@ import com.yodesla.omniverse.core.data.sports.SportsKind
 import com.yodesla.omniverse.core.data.NowNext
 import com.yodesla.omniverse.core.data.PosterRow
 import com.yodesla.omniverse.core.data.SearchHit
+import com.yodesla.omniverse.core.data.SearchFilteredPage
+import com.yodesla.omniverse.core.data.SearchFilters
 import com.yodesla.omniverse.core.data.ProgrammeHit
 import com.yodesla.omniverse.core.data.SearchRepository
 import com.yodesla.omniverse.core.database.OmniverseDb
@@ -145,6 +147,70 @@ class SearchRepositoryImpl(
             if (hits.isNotEmpty()) out[kind] = hits
         }
         out
+    }
+
+    override suspend fun searchFiltered(
+        query: String,
+        filters: SearchFilters,
+        excludedCategoryKeys: Collection<String>,
+        limitPerKind: Int,
+    ): Map<ContentKind, SearchFilteredPage> = withContext(io) {
+        if (!filters.active) return@withContext emptyMap()
+        val text = query.trim().takeIf { it.isNotEmpty() }
+        val match = text?.let { toMatchExpression(it) }
+        val needle = text?.let { normalize(it) }
+        val genresCsv = filters.genres.map { it.trim() }.filter { it.isNotEmpty() }.joinToString("|").takeIf { it.isNotEmpty() }
+        // Blank query: fetch exactly limit+1 so `more` is exact. Text: over-fetch for Kotlin ranking
+        // (FTS4 has no relevance), same as plain search; `more` then means "more in the window".
+        val fetch = if (text == null) limitPerKind + 1L else (limitPerKind * 8L).coerceAtMost(400L)
+        val out = LinkedHashMap<ContentKind, SearchFilteredPage>()
+        for (kind in filters.kinds) {
+            val rows: List<PosterRow> = when (kind) {
+                ContentKind.VOD -> db.readQueries.searchVodFiltered(
+                    genresCsv = genresCsv, matchQuery = match, excludedKeys = excludedCategoryKeys,
+                    animeOnly = if (filters.anime) 1L else null,
+                    yearFrom = filters.yearFrom?.toLong(), yearTo = filters.yearTo?.toLong(),
+                    minRating = filters.ratingAtLeast?.toDouble(), limit = fetch,
+                ).executeAsList().map { r ->
+                    PosterRow(
+                        key = ContentKey(SourceId(r.source_id), kind, RemoteId(r.remote_id)),
+                        name = r.name,
+                        posterUrl = r.poster_url,
+                        year = r.year?.toInt(),
+                        rating = r.rating?.toFloat(),
+                        categoryId = RemoteId(r.primary_category_id),
+                        tmdbId = r.tmdb_id,
+                    )
+                }
+                else -> db.readQueries.searchSeriesFiltered(
+                    genresCsv = genresCsv, matchQuery = match, excludedKeys = excludedCategoryKeys,
+                    animeOnly = if (filters.anime) 1L else null,
+                    yearFrom = filters.yearFrom?.toLong(), yearTo = filters.yearTo?.toLong(),
+                    minRating = filters.ratingAtLeast?.toDouble(), limit = fetch,
+                ).executeAsList().map { r ->
+                    PosterRow(
+                        key = ContentKey(SourceId(r.source_id), kind, RemoteId(r.remote_id)),
+                        name = r.name,
+                        posterUrl = r.poster_url,
+                        year = r.year?.toInt(),
+                        rating = r.rating?.toFloat(),
+                        categoryId = RemoteId(r.primary_category_id),
+                        tmdbId = r.tmdb_id,
+                    )
+                }
+            }
+            val ranked = if (needle != null) {
+                rows.sortedWith(compareBy({ rank(normalize(it.name), needle) }, { it.name.length }, { it.name }))
+            } else rows
+            if (ranked.isNotEmpty()) out[kind] = SearchFilteredPage(ranked.take(limitPerKind), ranked.size > limitPerKind)
+        }
+        out
+    }
+
+    override suspend fun decadeOptions(kinds: Collection<ContentKind>, excludedCategoryKeys: Collection<String>): List<Int> = withContext(io) {
+        kinds.flatMap { kind ->
+            db.readQueries.searchDecades(kind = kind.name, excludedKeys = excludedCategoryKeys).executeAsList()
+        }.mapNotNull { it.decade?.toInt() }.distinct().sortedDescending()
     }
 
     override suspend fun searchProgrammes(query: String, nowMs: Long, windowMs: Long, limit: Int): List<ProgrammeHit> = withContext(io) {

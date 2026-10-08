@@ -888,6 +888,7 @@ private fun SectionContent(
         }
         is Screen.Search -> {
             val vm = viewModel(key = "search") { SearchViewModel(graph.search, graph.catalog, visibility = graph.browseVisibility,
+                excludedCategoryKeys = graph.searchExcludedCategoryKeys,
                 historySource = graph.userData.setting(com.yodesla.omniverse.feature.home.SEARCH_HISTORY_KEY),
                 saveHistory = { graph.userData.putSetting(com.yodesla.omniverse.feature.home.SEARCH_HISTORY_KEY, it) },
                 reminders = com.yodesla.omniverse.core.data.reminders.ReminderStore(graph.userData, graph.clock), clock = graph.clock,
@@ -895,6 +896,10 @@ private fun SectionContent(
             // The VM outlives the section (key "search"), so a voice query arriving on a re-entry
             // must be pushed in explicitly; initialQuery only covers the VM's first creation.
             LaunchedEffect(s.query) { s.query?.let(vm::onQuery) }
+            // Task 122: Back while on Search clears active filter chips first — the next Back exits
+            // the section as before. Filters never trap the viewer on a filtered grid.
+            val searchState by vm.state.collectAsStateWithLifecycle()
+            BackHandler(enabled = searchState.filters.active) { vm.clearFilters() }
             SearchRoute(vm, onOpen = { card -> openCard(card.open, card.categoryId) })
         }
         Screen.Settings -> {

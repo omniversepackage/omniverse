@@ -268,9 +268,65 @@ data class ProgrammeHit(
     val endMs: Long,
 )
 
+/**
+ * Task 122: the MAIN search filter set. Filters combine (AND) and narrow the ordinary text search;
+ * with a blank query they discover titles on their own. The kind chips restrict kind (neither chip
+ * = both kinds); [anime] follows the library's category-name / provider-genre classification, never
+ * a title substring. Decades arrive as [yearFrom]/[yearTo] bounds (1980s = 1980..1989).
+ */
+data class SearchFilters(
+    val movies: Boolean = false,
+    val shows: Boolean = false,
+    val anime: Boolean = false,
+    val yearFrom: Int? = null,
+    val yearTo: Int? = null,
+    val ratingAtLeast: Float? = null,
+    val genres: List<String> = emptyList(),
+) {
+    /** A title filter is on: blank-query discovery runs and live/programme search is suppressed. */
+    val active: Boolean
+        get() = movies || shows || anime || yearFrom != null || yearTo != null || ratingAtLeast != null || genres.isNotEmpty()
+
+    /** Kinds to search: neither chip selected = both kinds. */
+    val kinds: List<ContentKind>
+        get() = buildList {
+            if (movies || !shows) add(ContentKind.VOD)
+            if (shows || !movies) add(ContentKind.SERIES)
+        }
+
+    companion object {
+        val None = SearchFilters()
+    }
+}
+
+/**
+ * Task 122: one kind's filtered-search page. [rows] is capped at the requested limit; [more] says
+ * matches exist beyond the cap, so the UI can say "showing the first N" instead of pretending the
+ * cap is the whole result set. With a blank query [more] is exact (SQL fetched limit+1); with text
+ * it means "more within the over-fetched FTS window" (FTS4 has no relevance ranking).
+ */
+data class SearchFilteredPage(val rows: List<PosterRow>, val more: Boolean = false)
+
 interface SearchRepository {
     /** FTS prefix search; user text is sanitized (never raw FTS syntax). Grouped by kind in order. */
     suspend fun search(query: String, limitPerKind: Int = 20): Map<ContentKind, List<SearchHit>>
+
+    /**
+     * Task 122: cross-source movie/show search narrowed by [filters] (AND), every filter applied in
+     * SQL before the limit. Blank [query] = pure filter discovery. [excludedCategoryKeys] are
+     * `KIND|source|category` keys this profile must not see (parental, Kids, language, hidden
+     * libraries); exact-TMDB duplicates collapse Plex-first. At most [limitPerKind] rows per kind;
+     * [SearchFilteredPage.more] reports matches beyond the cap.
+     */
+    suspend fun searchFiltered(
+        query: String,
+        filters: SearchFilters,
+        excludedCategoryKeys: Collection<String> = emptyList(),
+        limitPerKind: Int = 24,
+    ): Map<ContentKind, SearchFilteredPage> = emptyMap()
+
+    /** Decade starts (1980, 2010 …) that actually have titles in [kinds] under [excludedCategoryKeys], newest first. */
+    suspend fun decadeOptions(kinds: Collection<ContentKind>, excludedCategoryKeys: Collection<String> = emptyList()): List<Int> = emptyList()
 
     /** Programmes airing now or within [windowMs] whose title contains [query]; soonest first. */
     suspend fun searchProgrammes(query: String, nowMs: Long, windowMs: Long = 86_400_000L, limit: Int = 30): List<ProgrammeHit> = emptyList()

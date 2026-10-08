@@ -313,6 +313,16 @@ class AppGraph(context: Context, val brand: BrandConfig) {
             (if (isKids) off + locked else off) + langOff.filterNot { it.startsWith("LIVE|") }
         }
     }
+    /**
+     * Task 122: SQL-side exclusions for MAIN search filters. Unlike Movies/Shows this ALSO subtracts
+     * the categories the viewer switched off in Settings›Libraries — [vodExcludedCategoryKeys] does
+     * not carry those, and Search's per-card [browseVisibility] does, so reusing the browse flow here
+     * would leak switched-off libraries into filtered results. The Kids/parental/language policy stays
+     * identical; the VM still double-checks every row with [browseVisibility].
+     */
+    val searchExcludedCategoryKeys: kotlinx.coroutines.flow.Flow<Set<String>> by lazy {
+        kotlinx.coroutines.flow.combine(vodExcludedCategoryKeys, userData.hiddenCategoryKeys()) { off, hidden -> off + hidden }
+    }
     val plexLinker: AppPlexLinker by lazy { AppPlexLinker(http, userData, secrets = secretBox) }
     /** Task 91: app-level Now Playing holder. The active player publishes a snapshot here (at most
      *  every 1 s; null when nothing plays) and registers its control hooks while it plays. */

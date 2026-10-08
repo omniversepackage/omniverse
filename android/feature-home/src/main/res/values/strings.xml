@@ -99,6 +99,10 @@
     <string name="search_clear_header">Clear</string>
     <string name="search_nothing_found">Nothing found</string>
     <string name="search_nothing_found_hint">No channels, movies or shows match \u201c%1$s\u201d. Try fewer words.</string>
+    <!-- Task 122: MAIN search filters -->
+    <string name="search_nothing_found_filters">No titles match these filters. Try removing one.</string>
+    <string name="search_filters_truncated">Showing the first %1$d per row for these filters — more matches exist.</string>
+    <string name="search_show_more">Show more</string>
     <string name="search_did_you_mean">Did you mean \u201c%1$s\u201d?</string>
 
     <string name="tmdb_attribution">This product uses the TMDB API but is not endorsed or certified by TMDB.</string>

@@ -64,7 +64,7 @@ class BrowseSortQueryTest {
         assertEquals(catalog.seriesAll().all().slots(), catalog.seriesAllSorted(sort = BrowseSort.PROVIDER).all().slots())
         assertEquals(catalog.vodFiltered(SourceId("plex"), RemoteId("movies"), SmartCollectionFilter(yearFrom = 2000)).all().slots(),
             catalog.vodFilteredSorted(SourceId("plex"), RemoteId("movies"), SmartCollectionFilter(yearFrom = 2000), sort = BrowseSort.PROVIDER).all().slots())
-        assertEquals(catalog.animeLibrary(ContentKind.VOD).all().slots(),
+        assertEquals(animeCatalog.animeLibrary(ContentKind.VOD).all().slots(),
             animeCatalog.animeLibrarySorted(ContentKind.VOD).all().slots())
     }
 

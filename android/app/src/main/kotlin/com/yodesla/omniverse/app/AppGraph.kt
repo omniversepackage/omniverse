@@ -470,7 +470,10 @@ class AppGraph(context: Context, val brand: BrandConfig) {
         // A parser change needs fresh catalog rows even when their last sync is still recent.
         // Rev 3 retries the rev 2 Xtream series TMDB repair, which did not actually pass force
         // to the sync engine and incorrectly marked the refresh complete.
-        val refreshCatalog = userData.setting(CATALOG_REV_KEY).first() != CATALOG_REV
+        // Rev 4 re-pulls VOD + series once so Plex's corrected 1980s anime tags/genres (Anime +
+        // Animation, and every series genre now preserved) replace the cached rows on devices that
+        // already synced under rev 3.
+        val refreshCatalog = catalogRevisionNeedsRefresh(userData.setting(CATALOG_REV_KEY).first())
         val catalogRefreshed = syncSourcesForCatalogRevision(
             sources.sources().first().map { it.id }, refreshCatalog, sync::isStale, ::runSync,
         )
@@ -540,7 +543,7 @@ class AppGraph(context: Context, val brand: BrandConfig) {
     companion object {
         const val TAG = "Omniverse"
         const val CATALOG_REV_KEY = "catalog_rev"
-        const val CATALOG_REV = "3"
+        const val CATALOG_REV = "4"
 
         /** Startup profile picker already answered in this process (survives the switch-restart; a
          *  fresh process asks again per the setting). */
@@ -580,6 +583,14 @@ internal fun kidsHardFilter(isKids: Boolean, lockedKeys: Set<String>): com.yodes
 
 /** Task 84h: one row of [AppGraph.allCategoryNames] — a category name to classify, with its key parts. */
 internal data class LangCat(val kind: String, val sourceId: String, val categoryId: String, val name: String)
+
+/**
+ * Whether this build must force a catalog refresh: the revision stored on the device differs from
+ * the revision this build ships. A fresh install (null) and any device left behind by an earlier
+ * revision (e.g. rev 3 before the rev 4 anime-tag refresh) both return true; a device already on
+ * [AppGraph.CATALOG_REV] returns false, so the forced VOD+series sync runs once per revision bump.
+ */
+internal fun catalogRevisionNeedsRefresh(stored: String?): Boolean = stored != AppGraph.CATALOG_REV
 
 /** Keep the parser-repair revision pending if a source failed or another sync held its lock. */
 internal suspend fun syncSourcesForCatalogRevision(

@@ -359,6 +359,42 @@ class PlexSourceTest {
     }
 
     @Test
+    fun unmatchedLocalMovieKeepsYearButHasNoGenreOrTmdb() = runBlocking {
+        // Live Plex shape (optiplex section 2, added 2026-10-07): a local agent item Plex never
+        // matched. guid is local://, there is no Genre tag and no tmdb Guid, but the year is real.
+        enqueue("sections.json")
+        server.enqueue(MockResponse.Builder().code(200).body(
+            """{"MediaContainer":{"size":1,"totalSize":1,"Metadata":[{"ratingKey":"27002",
+                "guid":"local://27002","type":"movie","title":"09 Akira 30th Anniversary Edition",
+                "librarySectionTitle":"Korys Movies","year":1988,"summary":"",
+                "addedAt":1791401856,"updatedAt":1791401857,
+                "Media":[{"id":85194,"container":"mkv","Part":[{"id":86985,
+                "key":"/library/parts/86985/1791336893/file.mkv",
+                "Stream":[{"streamType":2,"language":"English","languageTag":"en"},
+                {"streamType":2,"languageTag":"ja"}]}]}]}]}}"""
+        ).build())
+        val v = source().vodItems().toList().single()
+        assertEquals(1988, v.year)
+        assertEquals(listOf(RemoteId("1")), v.categoryIds)
+        assertEquals(null, v.genre)
+        assertEquals(null, v.tmdbId)
+    }
+
+    @Test
+    fun seriesKeepsEveryGenreTag() = runBlocking {
+        // mapVod keeps every Genre tag; mapSeries used to keep only the first, so a Plex show
+        // tagged ["Action","Anime"] lost "Anime" and dropped out of the Anime/genre filters.
+        enqueue("sections.json")
+        server.enqueue(MockResponse.Builder().code(200).body(
+            """{"MediaContainer":{"size":1,"totalSize":1,"Metadata":[{"ratingKey":"50",
+                "title":"My Show","year":1988,"updatedAt":1700000200,
+                "Genre":[{"tag":"Action"},{"tag":"Anime"},{"tag":"Animation"}]}]}}"""
+        ).build())
+        val list = source().series().toList()
+        assertEquals("Action, Anime, Animation", list[0].genre)
+    }
+
+    @Test
     fun liveEpgAreEmpty() = runBlocking {
         val s = source()
         assertEquals(0, s.liveCategories().toList().size)

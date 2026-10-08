@@ -462,7 +462,7 @@ class PlexSource(
             backdropUrls = m.str("art")?.let(::artUrl)?.let(::listOf) ?: emptyList(),
             categoryIds = listOf(RemoteId(sectionKey)),
             plot = m.str("summary"),
-            genre = genres.firstOrNull(),
+            genre = genres.joinToString(", ").takeIf { it.isNotBlank() },
             rating = (m.float("audienceRating") ?: m.float("rating"))?.takeIf { it in 0f..10f },
             year = m.int("year"),
             lastModifiedMs = (m.long("updatedAt") ?: m.long("addedAt"))?.times(1000),

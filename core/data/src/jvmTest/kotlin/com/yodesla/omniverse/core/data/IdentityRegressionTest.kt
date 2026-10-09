@@ -54,6 +54,13 @@ class IdentityRegressionTest {
     private fun newDriver(): JdbcSqliteDriver =
         JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY).also { OmniverseDb.Schema.create(it) }
 
+    // Task 141: browse surfaces group by group_key, so raw inserts must go through the same
+    // recompute pass SyncEngineImpl runs after a sync.
+    private fun OmniverseDb.recomputeGroups() {
+        storeQueries.recomputeVodGroups()
+        storeQueries.recomputeSeriesGroups()
+    }
+
     private fun threeSources(): JdbcSqliteDriver = newDriver().apply {
         execute(null, "INSERT INTO source(id,kind,name,config_json,sort_index) VALUES " +
             "('iptvA','XTREAM','IPTV A','{}',0),('iptvB','XTREAM','IPTV B','{}',1),('plex','PLEX','Plex','{}',2)", 0)
@@ -101,6 +108,7 @@ class IdentityRegressionTest {
         driver.series("iptvA", "ss42b", "Dune Tales", "https://iptva/tales-alt.jpg", "shows", "42", 2021, now - 21, 1)
         driver.series("iptvB", "sb42", "Dune Tales", "https://iptvb/tales.jpg", "shows", "42", 2021, now - 30, 0)
         val db = OmniverseDb(driver)
+        db.recomputeGroups()
         val io = UnconfinedTestDispatcher(testScheduler)
         val catalog = CatalogRepositoryImpl(db, io)
 
@@ -145,6 +153,7 @@ class IdentityRegressionTest {
         driver.vod("plex", "x3", "Star Voyage", null, "movies", null, 2020, now, 0)
         driver.vod("iptvB", "x4", "Star Voyage", null, "movies", "", 2020, now, 1)
         val db = OmniverseDb(driver)
+        db.recomputeGroups()
         val io = UnconfinedTestDispatcher(testScheduler)
         val catalog = CatalogRepositoryImpl(db, io)
 
@@ -163,6 +172,7 @@ class IdentityRegressionTest {
         driver.vod("iptvA", "a42", "Dune", "https://iptva/dune.jpg", "movies", "42", 2021, now - 20, 0)
         driver.vod("iptvB", "b42", "Dune", "https://iptvb/dune.jpg", "movies", "42", 2021, now - 30, 0)
         val db = OmniverseDb(driver)
+        db.recomputeGroups()
         val io = UnconfinedTestDispatcher(testScheduler)
         val catalog = CatalogRepositoryImpl(db, io)
         val user = UserDataRepositoryImpl(db, io, clock)
@@ -190,6 +200,7 @@ class IdentityRegressionTest {
         driver.vod("iptvB", "b42", "Dune", "https://iptvb/dune.jpg", "movies", "42", 2021, now - 30, 0)
         driver.vod("iptvB", "b77", "Reykjavik", "https://iptvb/reykjavik.jpg", "movies", "77", 2019, now - 40, 1)
         val db = OmniverseDb(driver)
+        db.recomputeGroups()
         val io = UnconfinedTestDispatcher(testScheduler)
         val catalog = CatalogRepositoryImpl(db, io)
         val user = UserDataRepositoryImpl(db, io, clock)
@@ -242,6 +253,7 @@ class IdentityRegressionTest {
         driver.vod("iptvA", "a77", "Reykjavik", "https://iptva/reykjavik.jpg", "adult", "77", 2019, now - 20, 1)
         driver.vod("plex", "p77", "Reykjavik", "https://plex/reykjavik.jpg", "kids", "77", 2019, now - 20, 0)
         val db = OmniverseDb(driver)
+        db.recomputeGroups()
         val io = UnconfinedTestDispatcher(testScheduler)
         var profile = "kids"
         val user = UserDataRepositoryImpl(db, io, clock) { profile }
@@ -275,6 +287,7 @@ class IdentityRegressionTest {
         driver.vod("iptvB", "b42", "Dune", "https://iptvb/dune.jpg", "movies", "42", 2021, now - 30, 0)
         driver.vod("plex", "p42", "Dune", "https://plex/dune.jpg", "movies", "42", 2021, now - 10, 0)
         val db = OmniverseDb(driver)
+        db.recomputeGroups()
         val io = UnconfinedTestDispatcher(testScheduler)
         val fake = ScriptedSource(SourceId("iptvA"))
         val sources = SourceRepositoryImpl(db, listOf(SourceFactory { fake }), io, newId = { "iptvA" })
@@ -285,6 +298,7 @@ class IdentityRegressionTest {
         val resynced = sources.add(SourceConfig.Xtream(SourceId("iptvA"), "IPTV A", "http://host", "u", "p"))
         driver.vod("iptvA", "a42", "Dune", "https://iptva/dune.jpg", "movies", "42", 2021, now - 20, 0)
         db.storeQueries.rebuildSearchVod("iptvA")
+        db.recomputeGroups() // what SyncEngineImpl does after writing a source
         val variantA = vodKey("iptvA", "a42")
 
         user.saveProgress(variantA, null, 1_200_000L, 3_000_000L)
@@ -330,6 +344,7 @@ class IdentityRegressionTest {
         driver.vod("iptvA", "y1", "Zebra", null, "movies", "900", 2001, now - 100, 20)
         driver.vod("plex", "y2", "Zebra", null, "movies", "901", 2005, now - 101, 21)
         val db = OmniverseDb(driver)
+        db.recomputeGroups()
         val io = UnconfinedTestDispatcher(testScheduler)
         val paging = CatalogRepositoryImpl(db, io).vodAll(emptyList())
         val total = db.readQueries.countVodAll(emptyList()).executeAsOne()
@@ -391,6 +406,7 @@ class IdentityRegressionTest {
         driver.vod("iptvB", "b42", "Dune", "https://iptvb/dune.jpg", "movies", "42", 2021, now - 30, 0)
         driver.vod("iptvB", "b77", "Reykjavik", "https://iptvb/reykjavik.jpg", "movies", "77", 2019, now - 40, 1)
         val db = OmniverseDb(driver)
+        db.recomputeGroups()
         val io = UnconfinedTestDispatcher(testScheduler)
         val catalog = CatalogRepositoryImpl(db, io)
         val user = UserDataRepositoryImpl(db, io, clock)

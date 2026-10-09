@@ -57,6 +57,11 @@ class PlexSourceTest {
         server.enqueue(MockResponse.Builder().code(200).setHeader("Content-Type", "application/json").body(fixture(name)).build())
     }
 
+    /** vodItems/series read the section's genre directory before paging (task 130); empty = list tags only. */
+    private fun enqueueEmptyGenreDirectory() {
+        server.enqueue(MockResponse.Builder().code(200).setHeader("Content-Type", "application/json").body("""{"MediaContainer":{"size":0}}""").build())
+    }
+
     private class Diagnostics : SyncDiagnostics {
         val skips = mutableListOf<Pair<String, String>>()
         override fun skipped(what: String, reason: String) {
@@ -118,19 +123,24 @@ class PlexSourceTest {
         assertEquals(listOf("Shows", "Documentaries"), source().seriesCategories().toList().map { it.name })
 
         enqueueLibraries()
+        enqueueEmptyGenreDirectory() // section 1
         server.enqueue(MockResponse.Builder().code(200).body("""{"MediaContainer":{"size":1,"totalSize":1,"Metadata":[{"ratingKey":"11","title":"Movie One"}]}}""").build())
+        enqueueEmptyGenreDirectory() // section 2
         server.enqueue(MockResponse.Builder().code(200).body("""{"MediaContainer":{"size":1,"totalSize":1,"Metadata":[{"ratingKey":"22","title":"Movie Two"}]}}""").build())
         assertEquals(listOf("Movie One", "Movie Two"), source().vodItems().toList().map { it.name })
         assertEquals("/library/sections", server.takeRequest().url.encodedPath)
         assertEquals("/library/sections", server.takeRequest().url.encodedPath)
         assertEquals("/library/sections", server.takeRequest().url.encodedPath)
+        assertEquals("/library/sections/1/genre", server.takeRequest().url.encodedPath)
         assertEquals("/library/sections/1/all", server.takeRequest().url.encodedPath)
+        assertEquals("/library/sections/2/genre", server.takeRequest().url.encodedPath)
         assertEquals("/library/sections/2/all", server.takeRequest().url.encodedPath)
     }
 
     @Test
     fun vodPagingStopsOnPartialPage() = runBlocking {
         enqueue("sections.json")
+        enqueueEmptyGenreDirectory()
         val page1 = buildString {
             append("""{"MediaContainer":{"size":200,"Metadata":[""")
             append((0 until 200).joinToString(",") { i ->
@@ -152,6 +162,7 @@ class PlexSourceTest {
         assertTrue(items[200].posterUrl!!.startsWith("$base/library/sections/1/items/201/thumb.jpg?"))
 
         assertEquals("/library/sections", server.takeRequest().url.encodedPath)
+        assertEquals("/library/sections/1/genre", server.takeRequest().url.encodedPath)
         val r1 = server.takeRequest()
         assertEquals("/library/sections/1/all", r1.url.encodedPath)
         assertEquals("type=1&X-Plex-Container-Start=0&X-Plex-Container-Size=200", r1.url.encodedQuery)
@@ -163,6 +174,7 @@ class PlexSourceTest {
     @Test
     fun malformedItemIsSkippedAndCounted() = runBlocking {
         enqueue("sections.json")
+        enqueueEmptyGenreDirectory()
         server.enqueue(MockResponse.Builder().code(200).body(
             fixture("movies_page2.json").replace("\"totalSize\": 203", "\"totalSize\": 3").replace("\"offset\": 200", "\"offset\": 0")
         ).build()) // 3 items, one without a title; < 200 so paging stops
@@ -177,6 +189,7 @@ class PlexSourceTest {
     @Test
     fun malformedPageFailsInsteadOfRemovingExistingMovies() = runBlocking {
         enqueue("sections.json")
+        enqueueEmptyGenreDirectory()
         server.enqueue(MockResponse.Builder().code(200).body("""{"MediaContainer":{"size":2,"error":"temporary"}}""").build())
         assertFailsWith<SourceException.BadResponse> { source().vodItems().toList() }
     }
@@ -184,10 +197,12 @@ class PlexSourceTest {
     @Test
     fun shortPageWithMoreResultsContinuesAtActualOffset() = runBlocking {
         enqueue("sections.json")
+        enqueueEmptyGenreDirectory()
         server.enqueue(MockResponse.Builder().code(200).body("""{"MediaContainer":{"size":1,"totalSize":2,"Metadata":[{"ratingKey":"1","title":"First"}]}}""").build())
         server.enqueue(MockResponse.Builder().code(200).body("""{"MediaContainer":{"size":1,"totalSize":2,"Metadata":[{"ratingKey":"2","title":"Second"}]}}""").build())
         assertEquals(listOf("First", "Second"), source().vodItems().toList().map { it.name })
         server.takeRequest() // sections
+        server.takeRequest() // genre directory
         server.takeRequest() // first page
         assertEquals("type=1&X-Plex-Container-Start=1&X-Plex-Container-Size=200", server.takeRequest().url.encodedQuery)
     }
@@ -350,6 +365,7 @@ class PlexSourceTest {
     @Test
     fun seriesListUsesShowSectionsWithPaging() = runBlocking {
         enqueue("sections.json")
+        enqueueEmptyGenreDirectory()
         enqueue("show_metadata.json")
         val list = source().series().toList()
         assertEquals(1, list.size)
@@ -363,6 +379,7 @@ class PlexSourceTest {
         // Live Plex shape (optiplex section 2, added 2026-10-07): a local agent item Plex never
         // matched. guid is local://, there is no Genre tag and no tmdb Guid, but the year is real.
         enqueue("sections.json")
+        enqueueEmptyGenreDirectory()
         server.enqueue(MockResponse.Builder().code(200).body(
             """{"MediaContainer":{"size":1,"totalSize":1,"Metadata":[{"ratingKey":"27002",
                 "guid":"local://27002","type":"movie","title":"09 Akira 30th Anniversary Edition",
@@ -385,6 +402,7 @@ class PlexSourceTest {
         // mapVod keeps every Genre tag; mapSeries used to keep only the first, so a Plex show
         // tagged ["Action","Anime"] lost "Anime" and dropped out of the Anime/genre filters.
         enqueue("sections.json")
+        enqueueEmptyGenreDirectory()
         server.enqueue(MockResponse.Builder().code(200).body(
             """{"MediaContainer":{"size":1,"totalSize":1,"Metadata":[{"ratingKey":"50",
                 "title":"My Show","year":1988,"updatedAt":1700000200,
@@ -392,6 +410,74 @@ class PlexSourceTest {
         ).build())
         val list = source().series().toList()
         assertEquals("Action, Anime, Animation", list[0].genre)
+    }
+
+    @Test
+    fun genreListingsAddGenresTheAllListTruncated() = runBlocking {
+        // Live Plex shape (task 130): /all carries only the first ~2 Genre tags — Grave of the
+        // Fireflies lists ["War","Drama"] there, but the section's genre directory + the Anime
+        // listing both include it, so the stored record must gain "Anime" after the list tags.
+        enqueue("sections.json")
+        server.enqueue(MockResponse.Builder().code(200).setHeader("Content-Type", "application/json").body(
+            """{"MediaContainer":{"size":2,"Directory":[{"key":"3975","title":"Anime"},{"key":"3976","title":"War"}]}}"""
+        ).build())
+        server.enqueue(MockResponse.Builder().code(200).setHeader("Content-Type", "application/json").body(
+            """{"MediaContainer":{"size":1,"totalSize":1,"Metadata":[{"ratingKey":"27002","title":"Grave of the Fireflies"}]}}"""
+        ).build()) // Anime listing
+        server.enqueue(MockResponse.Builder().code(200).setHeader("Content-Type", "application/json").body(
+            """{"MediaContainer":{"size":1,"totalSize":1,"Metadata":[{"ratingKey":"27002","title":"Grave of the Fireflies"}]}}"""
+        ).build()) // War listing
+        server.enqueue(MockResponse.Builder().code(200).setHeader("Content-Type", "application/json").body(
+            """{"MediaContainer":{"size":1,"totalSize":1,"Metadata":[{"ratingKey":"27002","title":"Grave of the Fireflies",
+                "year":1988,"Genre":[{"tag":"War"},{"tag":"Drama"}]}]}}"""
+        ).build())
+        val v = source().vodItems().toList().single()
+        assertEquals("War, Drama, Anime", v.genre) // list tags keep their order; Anime appended, War not duplicated
+        server.takeRequest() // sections
+        assertEquals("/library/sections/1/genre", server.takeRequest().url.encodedPath)
+        val animePage = server.takeRequest()
+        assertEquals("/library/sections/1/all", animePage.url.encodedPath)
+        assertEquals("type=1&genre=3975&X-Plex-Container-Start=0&X-Plex-Container-Size=200", animePage.url.encodedQuery)
+        assertEquals("type=1&genre=3976&X-Plex-Container-Start=0&X-Plex-Container-Size=200", server.takeRequest().url.encodedQuery)
+        assertEquals("type=1&X-Plex-Container-Start=0&X-Plex-Container-Size=200", server.takeRequest().url.encodedQuery)
+    }
+
+    @Test
+    fun genreDirectoryFailureFallsBackToListTags() = runBlocking {
+        // Sync must never fail because of enrichment: a dead genre directory degrades to the
+        // list tags and is reported once via diagnostics.
+        enqueue("sections.json")
+        server.enqueue(MockResponse.Builder().code(404).body("""{"error":"no such library"}""").build())
+        server.enqueue(MockResponse.Builder().code(200).setHeader("Content-Type", "application/json").body(
+            """{"MediaContainer":{"size":1,"totalSize":1,"Metadata":[{"ratingKey":"27002","title":"Grave of the Fireflies",
+                "year":1988,"Genre":[{"tag":"War"},{"tag":"Drama"}]}]}}"""
+        ).build())
+        val diag = Diagnostics()
+        val v = source().vodItems(diag).toList().single()
+        assertEquals("War, Drama", v.genre)
+        assertEquals(1, diag.skips.size)
+        assertEquals("genres", diag.skips[0].first)
+    }
+
+    @Test
+    fun oneFailedGenreListingKeepsTheOtherGenres() = runBlocking {
+        enqueue("sections.json")
+        server.enqueue(MockResponse.Builder().code(200).setHeader("Content-Type", "application/json").body(
+            """{"MediaContainer":{"size":2,"Directory":[{"key":"3975","title":"Anime"},{"key":"3976","title":"War"}]}}"""
+        ).build())
+        server.enqueue(MockResponse.Builder().code(404).body("""{"error":"gone"}""").build()) // Anime listing fails
+        server.enqueue(MockResponse.Builder().code(200).setHeader("Content-Type", "application/json").body(
+            """{"MediaContainer":{"size":1,"totalSize":1,"Metadata":[{"ratingKey":"27002","title":"Grave of the Fireflies"}]}}"""
+        ).build()) // War listing still applied
+        server.enqueue(MockResponse.Builder().code(200).setHeader("Content-Type", "application/json").body(
+            """{"MediaContainer":{"size":1,"totalSize":1,"Metadata":[{"ratingKey":"27002","title":"Grave of the Fireflies",
+                "year":1988,"Genre":[{"tag":"War"},{"tag":"Drama"}]}]}}"""
+        ).build())
+        val diag = Diagnostics()
+        val v = source().vodItems(diag).toList().single()
+        assertEquals("War, Drama", v.genre)
+        assertEquals(1, diag.skips.size)
+        assertEquals("genres", diag.skips[0].first)
     }
 
     @Test

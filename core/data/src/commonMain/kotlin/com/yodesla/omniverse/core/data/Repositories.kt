@@ -302,10 +302,13 @@ data class SearchFilters(
 /**
  * Task 122: one kind's filtered-search page. [rows] is capped at the requested limit; [more] says
  * matches exist beyond the cap, so the UI can say "showing the first N" instead of pretending the
- * cap is the whole result set. With a blank query [more] is exact (SQL fetched limit+1); with text
- * it means "more within the over-fetched FTS window" (FTS4 has no relevance ranking).
+ * cap is the whole result set. With a blank query or explicit sort [more] is exact (SQL fetched
+ * limit+1); relevance-ranked text search uses an over-fetched FTS window (FTS4 has no ranking).
  */
 data class SearchFilteredPage(val rows: List<PosterRow>, val more: Boolean = false)
+
+/** Sorts movie and show search results before the result limit is applied. */
+enum class SearchSort { RELEVANCE, TITLE_ASC, TITLE_DESC, YEAR_NEWEST, YEAR_OLDEST, RATING }
 
 interface SearchRepository {
     /** FTS prefix search; user text is sanitized (never raw FTS syntax). Grouped by kind in order. */
@@ -313,7 +316,8 @@ interface SearchRepository {
 
     /**
      * Task 122: cross-source movie/show search narrowed by [filters] (AND), every filter applied in
-     * SQL before the limit. Blank [query] = pure filter discovery. [excludedCategoryKeys] are
+     * SQL before the limit. Blank [query] = pure filter discovery. A non-default [sort] can also
+     * order title search with no filters. [excludedCategoryKeys] are
      * `KIND|source|category` keys this profile must not see (parental, Kids, language, hidden
      * libraries); exact-TMDB duplicates collapse Plex-first. At most [limitPerKind] rows per kind;
      * [SearchFilteredPage.more] reports matches beyond the cap.
@@ -323,6 +327,7 @@ interface SearchRepository {
         filters: SearchFilters,
         excludedCategoryKeys: Collection<String> = emptyList(),
         limitPerKind: Int = 24,
+        sort: SearchSort = SearchSort.RELEVANCE,
     ): Map<ContentKind, SearchFilteredPage> = emptyMap()
 
     /** Decade starts (1980, 2010 …) that actually have titles in [kinds] under [excludedCategoryKeys], newest first. */

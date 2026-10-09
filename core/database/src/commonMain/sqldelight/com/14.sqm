@@ -1,0 +1,68 @@
+-- v14 -> v15: one group key per title (task 140). Purely additive: vod/series gain group_key, the
+-- identity a listing groups on so the same movie/show from Plex and IPTV is ONE entry (task 141
+-- switches the queries to it). DDL identical to Catalog.sq (verifyMigrations checks it). Existing
+-- rows are NULL until the next sync recomputes them (Store.sq recomputeVodGroups/recomputeSeriesGroups).
+ALTER TABLE vod ADD COLUMN group_key TEXT;
+ALTER TABLE series ADD COLUMN group_key TEXT;
+CREATE INDEX vod_by_group ON vod(group_key);
+CREATE INDEX series_by_group ON series(group_key);
+
+-- Fill group_key now (same SQL as Store.sq recompute*Groups) so upgraded installs are grouped
+-- before their next sync instead of listing every copy until then.
+UPDATE vod SET group_key = NULL;
+
+UPDATE vod
+    SET group_key = 't:' || (CASE
+            WHEN trim(vod.tmdb_id) IS NULL THEN NULL
+            WHEN trim(vod.tmdb_id) LIKE '%.0' THEN NULLIF(NULLIF(substr(trim(vod.tmdb_id), 1, length(trim(vod.tmdb_id)) - 2), ''), '0')
+            ELSE NULLIF(NULLIF(trim(vod.tmdb_id), ''), '0')
+        END)
+    WHERE (CASE
+            WHEN trim(vod.tmdb_id) IS NULL THEN NULL
+            WHEN trim(vod.tmdb_id) LIKE '%.0' THEN NULLIF(NULLIF(substr(trim(vod.tmdb_id), 1, length(trim(vod.tmdb_id)) - 2), ''), '0')
+            ELSE NULLIF(NULLIF(trim(vod.tmdb_id), ''), '0')
+        END) IS NOT NULL;
+
+UPDATE vod
+    SET group_key = (
+        SELECT MIN(o.group_key) FROM vod o
+        WHERE o.match_key = vod.match_key AND o.removed_ms IS NULL AND o.group_key LIKE 't:%'
+    )
+    WHERE group_key IS NULL AND match_key IS NOT NULL AND match_key <> ''
+      AND (
+        SELECT count(DISTINCT o2.group_key) FROM vod o2
+        WHERE o2.match_key = vod.match_key AND o2.removed_ms IS NULL AND o2.group_key LIKE 't:%'
+      ) = 1;
+
+UPDATE vod SET group_key = 'm:' || match_key WHERE group_key IS NULL AND match_key IS NOT NULL AND match_key <> '';
+
+UPDATE vod SET group_key = 'r:' || source_id || '|' || remote_id WHERE group_key IS NULL;
+
+UPDATE series SET group_key = NULL;
+
+UPDATE series
+    SET group_key = 't:' || (CASE
+            WHEN trim(series.tmdb_id) IS NULL THEN NULL
+            WHEN trim(series.tmdb_id) LIKE '%.0' THEN NULLIF(NULLIF(substr(trim(series.tmdb_id), 1, length(trim(series.tmdb_id)) - 2), ''), '0')
+            ELSE NULLIF(NULLIF(trim(series.tmdb_id), ''), '0')
+        END)
+    WHERE (CASE
+            WHEN trim(series.tmdb_id) IS NULL THEN NULL
+            WHEN trim(series.tmdb_id) LIKE '%.0' THEN NULLIF(NULLIF(substr(trim(series.tmdb_id), 1, length(trim(series.tmdb_id)) - 2), ''), '0')
+            ELSE NULLIF(NULLIF(trim(series.tmdb_id), ''), '0')
+        END) IS NOT NULL;
+
+UPDATE series
+    SET group_key = (
+        SELECT MIN(o.group_key) FROM series o
+        WHERE o.match_key = series.match_key AND o.removed_ms IS NULL AND o.group_key LIKE 't:%'
+    )
+    WHERE group_key IS NULL AND match_key IS NOT NULL AND match_key <> ''
+      AND (
+        SELECT count(DISTINCT o2.group_key) FROM series o2
+        WHERE o2.match_key = series.match_key AND o2.removed_ms IS NULL AND o2.group_key LIKE 't:%'
+      ) = 1;
+
+UPDATE series SET group_key = 'm:' || match_key WHERE group_key IS NULL AND match_key IS NOT NULL AND match_key <> '';
+
+UPDATE series SET group_key = 'r:' || source_id || '|' || remote_id WHERE group_key IS NULL;

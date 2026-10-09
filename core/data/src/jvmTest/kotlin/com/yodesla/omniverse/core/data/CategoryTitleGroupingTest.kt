@@ -18,7 +18,10 @@ class CategoryTitleGroupingTest {
             "('iptv','a3','Film','classics','550',4,1)", 0) // other category keeps its own card
         driver.execute(null, "INSERT INTO series(source_id,remote_id,name,primary_category_id,tmdb_id,sort_index,sync_gen) VALUES " +
             "('iptv','s1','Show','tv','1399',5,1),('iptv','s2','Show HD','tv','1399',2,1)", 0)
-        val q = OmniverseDb(driver).readQueries
+        val db = OmniverseDb(driver)
+        db.storeQueries.recomputeVodGroups()
+        db.storeQueries.recomputeSeriesGroups()
+        val q = db.readQueries
         assertEquals(listOf("a1", "b", "c"), q.vodPage("iptv", "new", 10, 0).executeAsList().map { it.remote_id })
         assertEquals(3L, q.countVod("iptv", "new").executeAsOne())
         assertEquals(listOf("a3"), q.vodPage("iptv", "classics", 10, 0).executeAsList().map { it.remote_id })

@@ -7,6 +7,7 @@ import com.yodesla.omniverse.core.data.SearchFilteredPage
 import com.yodesla.omniverse.core.data.SearchFilters
 import com.yodesla.omniverse.core.data.SearchHit
 import com.yodesla.omniverse.core.data.SearchRepository
+import com.yodesla.omniverse.core.data.SearchSort
 import com.yodesla.omniverse.core.data.ShowEverything
 import com.yodesla.omniverse.core.data.Visibility
 import com.yodesla.omniverse.core.model.Category
@@ -158,6 +159,22 @@ class SearchFiltersViewModelTest {
     }
 
     @Test
+    fun changingSortRequeriesTheMatchingCatalogFromItsFirstPage() = runTest(dispatcher) {
+        val search = FakeFilteredSearch().apply { total = 60 }
+        val vm = SearchViewModel(search, FilterFakeCatalog(), ShowEverything)
+        vm.toggleMovies()
+        vm.showMore()
+        advanceUntilIdle()
+        assertEquals(SEARCH_PAGE * 2, search.lastLimit)
+        vm.setSort(SearchSort.RATING)
+        advanceUntilIdle()
+        assertEquals(SearchSort.RATING, search.lastSort)
+        assertEquals(SEARCH_PAGE, search.lastLimit)
+        assertEquals(SearchSort.RATING, vm.state.value.sort)
+        assertEquals(SEARCH_PAGE, resultIds(vm).size)
+    }
+
+    @Test
     fun showMorePagesPastTheFirstCapAndResetsOnANewSearch() = runTest(dispatcher) {
         // Task 122 review: a blank-query decade can hold far more than 24 titles. The label alone
         // would leave the rest unreachable, so "Show more" must actually fetch them.
@@ -210,6 +227,17 @@ class SearchFiltersViewModelTest {
         advanceUntilIdle()
         assertEquals(listOf(1980), vm.state.value.decades)
     }
+
+    @Test
+    fun retiredAnimeAndAnimationGenresAreNotOfferedAsChips() = runTest(dispatcher) {
+        // Task 130: ONE control — the "Anime & Animation" chip covers these, so the genre row
+        // must not offer them again next to it.
+        val catalog = FilterFakeCatalog()
+        catalog.genreNames = listOf("Comedy", "Cartoons", "Anime", "Action", "Animation", "Animated", "Cartoon")
+        val vm = SearchViewModel(FakeFilteredSearch(), catalog, ShowEverything)
+        advanceUntilIdle()
+        assertEquals(listOf("Action", "Comedy"), vm.state.value.genres)
+    }
 }
 
 private class FakeFilteredSearch : SearchRepository {
@@ -220,6 +248,7 @@ private class FakeFilteredSearch : SearchRepository {
     var lastFilters: SearchFilters? = null
     var lastExcluded: Collection<String> = emptyList()
     var lastLimit: Int = 0
+    var lastSort: SearchSort = SearchSort.RELEVANCE
 
     override suspend fun search(query: String, limitPerKind: Int): Map<ContentKind, List<SearchHit>> = emptyMap()
 
@@ -228,8 +257,9 @@ private class FakeFilteredSearch : SearchRepository {
         filters: SearchFilters,
         excludedCategoryKeys: Collection<String>,
         limitPerKind: Int,
+        sort: SearchSort,
     ): Map<ContentKind, SearchFilteredPage> {
-        lastQuery = query; lastFilters = filters; lastExcluded = excludedCategoryKeys; lastLimit = limitPerKind
+        lastQuery = query; lastFilters = filters; lastExcluded = excludedCategoryKeys; lastLimit = limitPerKind; lastSort = sort
         if (total == 0) return filtered
         val rows = (1..total.coerceAtMost(limitPerKind)).map { i ->
             PosterRow(ContentKey(fsrc, ContentKind.VOD, RemoteId("m$i")), "Title $i", null, 1980, 8.0f, RemoteId("a"))
@@ -243,6 +273,8 @@ private class FakeFilteredSearch : SearchRepository {
 }
 
 private class FilterFakeCatalog : CatalogRepository {
+    /** Task 130: the genre names the chip row asks the data for; empty for every other test here. */
+    var genreNames: List<String> = emptyList()
     override fun categories(sourceId: SourceId, kind: ContentKind, includeHidden: Boolean): Flow<List<Category>> = TODO()
     override fun channels(sourceId: SourceId, categoryId: RemoteId): androidx.paging.PagingSource<Int, ChannelRow> = TODO()
     override fun channelsAll(sourceId: SourceId, excludedCategories: Collection<String>): androidx.paging.PagingSource<Int, ChannelRow> = TODO()
@@ -263,4 +295,10 @@ private class FilterFakeCatalog : CatalogRepository {
         else -> null
     }
     override fun counts(sourceId: SourceId): Flow<Map<ContentKind, Long>> = TODO()
+    override suspend fun genreOptions(
+        kind: ContentKind,
+        sourceId: SourceId?,
+        categoryId: RemoteId?,
+        excludedCategoryKeys: Collection<String>,
+    ): List<String> = genreNames
 }

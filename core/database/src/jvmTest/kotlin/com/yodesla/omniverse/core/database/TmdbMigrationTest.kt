@@ -88,7 +88,7 @@ class TmdbMigrationTest {
     @Test fun freshSchemaIsAtTheTmdbVersion() {
         val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
         OmniverseDb.Schema.create(driver)
-        assertEquals(14L, OmniverseDb.Schema.version) // 12: overview (84f), 13: card backdrop (87b)
+        assertEquals(15L, OmniverseDb.Schema.version) // 12: overview (84f), 13: card backdrop (87b), 14: group_key (140)
         val d = OmniverseDb(driver)
         d.tmdbQueries.upsertTmdbMeta("1", "SERIES", null, null, null, null, null, null, null, 1L, null, null)
         assertEquals(1L, d.tmdbQueries.tmdbMeta("1", "SERIES").executeAsOne().fetched_ms)

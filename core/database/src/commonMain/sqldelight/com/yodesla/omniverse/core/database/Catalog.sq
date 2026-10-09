@@ -74,12 +74,16 @@ CREATE TABLE vod (
     -- Normalized "title|year" for cross-source matching (Plex vs IPTV). Added in migration 1.
     match_key TEXT,
     genre TEXT,
+    -- One identity per title across sources (task 140): 't:<tmdb>' | 'm:<match_key>' |
+    -- 'r:<source>|<remote>'. Recomputed for every row after each catalog sync (Store.sq).
+    group_key TEXT,
     PRIMARY KEY (source_id, remote_id)
 );
 CREATE INDEX vod_by_category ON vod(source_id, primary_category_id, sort_index);
 CREATE INDEX vod_by_added ON vod(source_id, added_ms DESC);
 CREATE INDEX vod_by_match ON vod(match_key);
 CREATE INDEX vod_by_tmdb ON vod(tmdb_id);
+CREATE INDEX vod_by_group ON vod(group_key);
 
 CREATE TABLE series (
     source_id TEXT NOT NULL,
@@ -98,12 +102,14 @@ CREATE TABLE series (
     removed_ms INTEGER,
     match_key TEXT,
     tmdb_id TEXT,
+    group_key TEXT,
     PRIMARY KEY (source_id, remote_id)
 );
 CREATE INDEX series_by_category ON series(source_id, primary_category_id, sort_index);
 CREATE INDEX series_by_modified ON series(source_id, last_modified_ms DESC);
 CREATE INDEX series_by_match ON series(match_key);
 CREATE INDEX series_by_tmdb ON series(tmdb_id);
+CREATE INDEX series_by_group ON series(group_key);
 
 -- Guide. Pruned to the configured window by sync.
 CREATE TABLE programme (

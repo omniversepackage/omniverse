@@ -199,6 +199,10 @@ class SyncEngineImpl(
                 if (liveDone || liveWritten) { st.deleteSearchRows(id, ContentKind.LIVE.name); st.rebuildSearchLive(id) }
                 if (vodDone || vodWritten) { st.deleteSearchRows(id, ContentKind.VOD.name); st.rebuildSearchVod(id) }
                 if (seriesDone || seriesWritten) { st.deleteSearchRows(id, ContentKind.SERIES.name); st.rebuildSearchSeries(id) }
+                // Task 140: whole-table group_key pass, once per kind, in this same transaction. Whole table
+                // (not just this source) because a Plex tmdb row is what bridges another source's IPTV copy.
+                if (vodWritten) st.recomputeVodGroups()
+                if (seriesWritten) st.recomputeSeriesGroups()
                 st.purgeRemoved(id, now - policy.purgeRemovedAfterMs)
                 st.updateSourceSync(
                     gen = gen,

@@ -42,7 +42,10 @@ class BrowseFilterQueryTest {
         driver.execute(null, "INSERT INTO series(source_id,remote_id,name,poster_url,primary_category_id,plot,genre,rating,year,tmdb_id,sort_index,sync_gen) VALUES " +
             "('plex','s1','Show One',NULL,'shows',NULL,'Drama|Crime',7.0,2010,'ts1',1,1)," +
             "('plex','s2','Show Two',NULL,'shows',NULL,'Action',8.0,2022,'ts2',2,1)", 0)
-        OmniverseDb(driver)
+        val db = OmniverseDb(driver)
+        db.storeQueries.recomputeVodGroups()
+        db.storeQueries.recomputeSeriesGroups()
+        db
     }
     private val catalog: CatalogRepositoryImpl get() = CatalogRepositoryImpl(db, Dispatchers.Unconfined)
 

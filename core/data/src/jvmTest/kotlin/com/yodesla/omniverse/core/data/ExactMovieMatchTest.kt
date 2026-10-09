@@ -54,7 +54,10 @@ class ExactMovieMatchTest {
             "('iptvA','sia','IPTV A show','shows','42',0,1)," +
             "('iptvB','sib','IPTV B show','shows','42',0,1)," +
             "('iptvA','sblank','Unidentified show','shows',NULL,1,1)", 0)
-        val q = OmniverseDb(driver).readQueries
+        val db = OmniverseDb(driver)
+        db.storeQueries.recomputeVodGroups()
+        db.storeQueries.recomputeSeriesGroups()
+        val q = db.readQueries
         fun movies(excluded: List<String>) = q.vodPageAll(excluded, 20, 0).executeAsList().map { it.remote_id }
         fun shows(excluded: List<String>) = q.seriesPageAll(excluded, 20, 0).executeAsList().map { it.remote_id }
         assertEquals(3L, q.countVodAll(emptyList()).executeAsOne())
@@ -131,7 +134,7 @@ class ExactMovieMatchTest {
         driver.close()
     }
     @Test
-    fun matchingShowTitlesDoNotHideAnIptvSourceWithoutExternalIds() {
+    fun matchingShowTitlesMergeIntoOneCardWithTheOtherCopyAsAnAlternative() {
         val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
         OmniverseDb.Schema.create(driver)
         driver.execute(null, "INSERT INTO source(id,kind,name,config_json,sort_index) VALUES ('plex','PLEX','Plex','{}',0),('iptv','XTREAM','IPTV','{}',1)", 0)
@@ -139,8 +142,13 @@ class ExactMovieMatchTest {
             "('plex','p1','The Show','shows',2020,'the show|2020',0,1)," +
             "('iptv','i1','The Show','shows',2020,'the show|2020',0,1)", 0)
         val db = OmniverseDb(driver)
-        assertEquals(2L, db.readQueries.countSeriesAll(emptyList()).executeAsOne())
-        assertEquals(2, db.readQueries.seriesPageAll(emptyList(), 10, 0).executeAsList().size)
+        db.storeQueries.recomputeSeriesGroups()
+        // Task 141 changed this test (it used to assert 2 cards): a title/year group with no external
+        // ids is now ONE card, Plex as representative, and the IPTV copy is reached as an alternative.
+        assertEquals(1L, db.readQueries.countSeriesAll(emptyList()).executeAsOne())
+        assertEquals(listOf("p1"), db.readQueries.seriesPageAll(emptyList(), 10, 0).executeAsList().map { it.remote_id })
+        assertEquals(listOf("i1"), db.readQueries.otherSeriesWithSameTmdb("plex", "p1").executeAsList().map { it.remote_id })
+        assertEquals(listOf("p1"), db.readQueries.otherSeriesWithSameTmdb("iptv", "i1").executeAsList().map { it.remote_id })
         driver.close()
     }
 
@@ -153,6 +161,7 @@ class ExactMovieMatchTest {
             "('plex','p1','The Show','shows',2020,'42',0,1)," +
             "('iptv','i1','The Show','shows',2020,'42',0,1)," +
             "('iptv','i2','The Show','shows',2020,'99',1,1)", 0)
+        OmniverseDb(driver).storeQueries.recomputeSeriesGroups()
         val catalog = CatalogRepositoryImpl(OmniverseDb(driver), UnconfinedTestDispatcher(testScheduler))
         val plex = ContentKey(SourceId("plex"), ContentKind.SERIES, RemoteId("p1"))
         assertEquals(listOf("i1"), catalog.exactSeriesMatches(plex).map { it.key.remoteId.value })
@@ -174,6 +183,7 @@ class ExactMovieMatchTest {
             "('iptv','i2','Film','movies',2020,NULL,1,1)," +
             "('iptv','i3','Film','movies',2020,'99',2,1)", 0)
         val db = OmniverseDb(driver)
+        db.storeQueries.recomputeVodGroups()
         val catalog = CatalogRepositoryImpl(db, UnconfinedTestDispatcher(testScheduler))
         val plex = ContentKey(SourceId("plex"), ContentKind.VOD, RemoteId("p1"))
         assertEquals(listOf("i1"), catalog.exactMovieMatches(plex).map { it.key.remoteId.value })

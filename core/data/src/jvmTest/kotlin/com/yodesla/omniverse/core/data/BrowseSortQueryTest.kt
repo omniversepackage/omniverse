@@ -34,7 +34,10 @@ class BrowseSortQueryTest {
             "('plex','s1','Show One',NULL,'shows',NULL,'Drama',7.0,2010,'ts1',1,1)," +
             "('plex','s2','Show Two',NULL,'shows',NULL,'Action',8.0,2022,'ts2',2,1)," +
             "('iptv','s3','Show Three',NULL,'shows',NULL,'Comedy',NULL,NULL,NULL,1,1)", 0)
-        OmniverseDb(driver)
+        val db = OmniverseDb(driver)
+        db.storeQueries.recomputeVodGroups()
+        db.storeQueries.recomputeSeriesGroups()
+        db
     }
     private val animeDb: OmniverseDb by lazy {
         val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY).also { OmniverseDb.Schema.create(it) }
@@ -45,7 +48,10 @@ class BrowseSortQueryTest {
         driver.execute(null, "INSERT INTO vod(source_id,remote_id,name,poster_url,primary_category_id,rating,year,tmdb_id,genre,sort_index,sync_gen) VALUES " +
             "('plex','a1','Naruto Ship',NULL,'cr',8.0,2020,'ta1','Animation|Action',1,1)," +
             "('iptv','a3','Solo Level Manga',NULL,'movies',7.0,2021,NULL,'Action|anime',2,1)", 0)
-        OmniverseDb(driver)
+        val anime = OmniverseDb(driver)
+        anime.storeQueries.recomputeVodGroups()
+        anime.storeQueries.recomputeSeriesGroups()
+        anime
     }
     private val catalog: CatalogRepositoryImpl get() = CatalogRepositoryImpl(db, Dispatchers.Unconfined)
     private val animeCatalog: CatalogRepositoryImpl get() = CatalogRepositoryImpl(animeDb, Dispatchers.Unconfined)

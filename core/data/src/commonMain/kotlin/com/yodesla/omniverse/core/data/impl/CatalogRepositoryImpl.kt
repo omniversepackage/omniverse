@@ -133,7 +133,7 @@ class CatalogRepositoryImpl(
             context = io,
             queryProvider = { limit, offset ->
                 db.readQueries.vodPage(sourceId.value, categoryId?.value, limit, offset) {
-                        sid, rid, name, poster, cat, rating, year, _, _, tmdb, _, _, _, _, genre ->
+                        sid, rid, name, poster, cat, rating, year, _, _, tmdb, _, _, _, _, genre, _ ->
                     art(PosterRow(ContentKey(SourceId(sid), ContentKind.VOD, RemoteId(rid)), name, poster, year?.toInt(), rating?.toFloat(), RemoteId(cat), tmdb?.takeIf(String::isNotBlank), genre = genre?.takeIf(String::isNotBlank)))
                 }
             },
@@ -289,7 +289,7 @@ class CatalogRepositoryImpl(
             context = io,
             queryProvider = { limit, offset ->
                 db.readQueries.seriesPage(sourceId.value, categoryId?.value, limit, offset) {
-                        sid, rid, name, poster, backdrop, cat, plot, genre, rating, year, _, _, _, _, _, tmdb ->
+                        sid, rid, name, poster, backdrop, cat, plot, genre, rating, year, _, _, _, _, _, tmdb, _ ->
                     art(PosterRow(ContentKey(SourceId(sid), ContentKind.SERIES, RemoteId(rid)), name, poster, year?.toInt(), rating?.toFloat(), RemoteId(cat), tmdb?.takeIf(String::isNotBlank),
                         backdropUrl = backdrop?.takeIf(String::isNotBlank), plot = plot?.takeIf(String::isNotBlank), genre = genre?.takeIf(String::isNotBlank)))
                 }

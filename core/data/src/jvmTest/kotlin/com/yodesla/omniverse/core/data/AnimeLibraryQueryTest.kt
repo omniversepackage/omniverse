@@ -37,7 +37,10 @@ class AnimeLibraryQueryTest {
             "('plex','sa1','Attack Titan',NULL,'anime',NULL,'Animation',8.5,2013,'tsa',1,1)," +
             "('plex','sc1','Sponge Toons',NULL,'cartoons',NULL,'Animation|Kids',6.0,2010,'tsc',2,1)," +
             "('iptv','sf1','One Piece',NULL,'funi',NULL,'Anime',8.0,1999,'tsf',1,1)", 0)
-        OmniverseDb(driver)
+        val db = OmniverseDb(driver)
+        db.storeQueries.recomputeVodGroups()
+        db.storeQueries.recomputeSeriesGroups()
+        db
     }
     private val catalog: CatalogRepositoryImpl get() = CatalogRepositoryImpl(db, Dispatchers.Unconfined)
 

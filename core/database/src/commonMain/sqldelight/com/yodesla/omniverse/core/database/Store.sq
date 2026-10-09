@@ -64,6 +64,83 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?);
 markMissingSeriesRemoved:
 UPDATE series SET removed_ms = :now WHERE source_id = :sourceId AND sync_gen < :gen AND removed_ms IS NULL;
 
+-- ---------- group_key recompute (task 140) ----------
+-- One identity per title so the Plex copy and the IPTV copy of the same movie/show form ONE listing
+-- (task 141 groups the queries on it). Run for the whole table after a source's catalog write finishes;
+-- the upserts above don't carry group_key, so every row is recomputed, never left NULL.
+-- Plain SQL only (no window functions, no UPDATE...FROM): Android's SQLite has to run it.
+-- tmdb normalization, inline: trim, drop one trailing ".0", '' and '0' count as missing.
+-- Rule, in order: (a) own tmdb -> 't:<tmdb>'; (b) no tmdb, but the match_key is shared with exactly ONE
+-- distinct tmdb among the live (not soft-deleted) rows of the same kind -> 't:<that tmdb>', which bridges
+-- an IPTV copy into its Plex/TMDB group; (c) match_key -> 'm:<match_key>'; (d) otherwise
+-- 'r:<source>|<remote>' and the row is never merged. One match_key carrying 2+ different tmdb ids
+-- (remakes, same title+year) does NOT bridge: those rows keep their own 't:' and the tmdb-less row falls
+-- to (c). Cleared first, so the pass is idempotent and re-running a sync keeps the same keys.
+-- The bridge (b) reads the 't:' keys the (a) statement just wrote, so the tmdb normalization appears once.
+
+recomputeVodGroups {
+    UPDATE vod SET group_key = NULL;
+
+    UPDATE vod
+    SET group_key = 't:' || (CASE
+            WHEN trim(vod.tmdb_id) IS NULL THEN NULL
+            WHEN trim(vod.tmdb_id) LIKE '%.0' THEN NULLIF(NULLIF(substr(trim(vod.tmdb_id), 1, length(trim(vod.tmdb_id)) - 2), ''), '0')
+            ELSE NULLIF(NULLIF(trim(vod.tmdb_id), ''), '0')
+        END)
+    WHERE (CASE
+            WHEN trim(vod.tmdb_id) IS NULL THEN NULL
+            WHEN trim(vod.tmdb_id) LIKE '%.0' THEN NULLIF(NULLIF(substr(trim(vod.tmdb_id), 1, length(trim(vod.tmdb_id)) - 2), ''), '0')
+            ELSE NULLIF(NULLIF(trim(vod.tmdb_id), ''), '0')
+        END) IS NOT NULL;
+
+    UPDATE vod
+    SET group_key = (
+        SELECT MIN(o.group_key) FROM vod o
+        WHERE o.match_key = vod.match_key AND o.removed_ms IS NULL AND o.group_key LIKE 't:%'
+    )
+    WHERE group_key IS NULL AND match_key IS NOT NULL AND match_key <> ''
+      AND (
+        SELECT count(DISTINCT o2.group_key) FROM vod o2
+        WHERE o2.match_key = vod.match_key AND o2.removed_ms IS NULL AND o2.group_key LIKE 't:%'
+      ) = 1;
+
+    UPDATE vod SET group_key = 'm:' || match_key WHERE group_key IS NULL AND match_key IS NOT NULL AND match_key <> '';
+
+    UPDATE vod SET group_key = 'r:' || source_id || '|' || remote_id WHERE group_key IS NULL;
+}
+
+recomputeSeriesGroups {
+    UPDATE series SET group_key = NULL;
+
+    UPDATE series
+    SET group_key = 't:' || (CASE
+            WHEN trim(series.tmdb_id) IS NULL THEN NULL
+            WHEN trim(series.tmdb_id) LIKE '%.0' THEN NULLIF(NULLIF(substr(trim(series.tmdb_id), 1, length(trim(series.tmdb_id)) - 2), ''), '0')
+            ELSE NULLIF(NULLIF(trim(series.tmdb_id), ''), '0')
+        END)
+    WHERE (CASE
+            WHEN trim(series.tmdb_id) IS NULL THEN NULL
+            WHEN trim(series.tmdb_id) LIKE '%.0' THEN NULLIF(NULLIF(substr(trim(series.tmdb_id), 1, length(trim(series.tmdb_id)) - 2), ''), '0')
+            ELSE NULLIF(NULLIF(trim(series.tmdb_id), ''), '0')
+        END) IS NOT NULL;
+
+    UPDATE series
+    SET group_key = (
+        SELECT MIN(o.group_key) FROM series o
+        WHERE o.match_key = series.match_key AND o.removed_ms IS NULL AND o.group_key LIKE 't:%'
+    )
+    WHERE group_key IS NULL AND match_key IS NOT NULL AND match_key <> ''
+      AND (
+        SELECT count(DISTINCT o2.group_key) FROM series o2
+        WHERE o2.match_key = series.match_key AND o2.removed_ms IS NULL AND o2.group_key LIKE 't:%'
+      ) = 1;
+
+    UPDATE series SET group_key = 'm:' || match_key WHERE group_key IS NULL AND match_key IS NOT NULL AND match_key <> '';
+
+    UPDATE series SET group_key = 'r:' || source_id || '|' || remote_id WHERE group_key IS NULL;
+}
+
+
 upsertProgramme:
 INSERT OR REPLACE INTO programme(source_id, channel_key, start_ms, end_ms, title, subtitle, description, category, episode_num, icon_url, has_archive)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);

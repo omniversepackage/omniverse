@@ -154,15 +154,16 @@ class SearchRepositoryImpl(
         filters: SearchFilters,
         excludedCategoryKeys: Collection<String>,
         limitPerKind: Int,
+        sort: com.yodesla.omniverse.core.data.SearchSort,
     ): Map<ContentKind, SearchFilteredPage> = withContext(io) {
-        if (!filters.active) return@withContext emptyMap()
+        if (!filters.active && (sort == com.yodesla.omniverse.core.data.SearchSort.RELEVANCE || query.isBlank())) return@withContext emptyMap()
         val text = query.trim().takeIf { it.isNotEmpty() }
         val match = text?.let { toMatchExpression(it) }
         val needle = text?.let { normalize(it) }
         val genresCsv = filters.genres.map { it.trim() }.filter { it.isNotEmpty() }.joinToString("|").takeIf { it.isNotEmpty() }
         // Blank query: fetch exactly limit+1 so `more` is exact. Text: over-fetch for Kotlin ranking
         // (FTS4 has no relevance), same as plain search; `more` then means "more in the window".
-        val fetch = if (text == null) limitPerKind + 1L else (limitPerKind * 8L).coerceAtMost(400L)
+        val fetch = if (text == null || sort != com.yodesla.omniverse.core.data.SearchSort.RELEVANCE) limitPerKind + 1L else (limitPerKind * 8L).coerceAtMost(400L)
         val out = LinkedHashMap<ContentKind, SearchFilteredPage>()
         for (kind in filters.kinds) {
             val rows: List<PosterRow> = when (kind) {
@@ -170,7 +171,7 @@ class SearchRepositoryImpl(
                     genresCsv = genresCsv, matchQuery = match, excludedKeys = excludedCategoryKeys,
                     animeOnly = if (filters.anime) 1L else null,
                     yearFrom = filters.yearFrom?.toLong(), yearTo = filters.yearTo?.toLong(),
-                    minRating = filters.ratingAtLeast?.toDouble(), limit = fetch,
+                    minRating = filters.ratingAtLeast?.toDouble(), limit = fetch, sortMode = sort.name,
                 ).executeAsList().map { r ->
                     PosterRow(
                         key = ContentKey(SourceId(r.source_id), kind, RemoteId(r.remote_id)),
@@ -186,7 +187,7 @@ class SearchRepositoryImpl(
                     genresCsv = genresCsv, matchQuery = match, excludedKeys = excludedCategoryKeys,
                     animeOnly = if (filters.anime) 1L else null,
                     yearFrom = filters.yearFrom?.toLong(), yearTo = filters.yearTo?.toLong(),
-                    minRating = filters.ratingAtLeast?.toDouble(), limit = fetch,
+                    minRating = filters.ratingAtLeast?.toDouble(), limit = fetch, sortMode = sort.name,
                 ).executeAsList().map { r ->
                     PosterRow(
                         key = ContentKey(SourceId(r.source_id), kind, RemoteId(r.remote_id)),
@@ -199,7 +200,7 @@ class SearchRepositoryImpl(
                     )
                 }
             }
-            val ranked = if (needle != null) {
+            val ranked = if (needle != null && sort == com.yodesla.omniverse.core.data.SearchSort.RELEVANCE) {
                 rows.sortedWith(compareBy({ rank(normalize(it.name), needle) }, { it.name.length }, { it.name }))
             } else rows
             if (ranked.isNotEmpty()) out[kind] = SearchFilteredPage(ranked.take(limitPerKind), ranked.size > limitPerKind)

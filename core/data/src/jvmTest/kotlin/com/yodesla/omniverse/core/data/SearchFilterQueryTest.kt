@@ -13,7 +13,8 @@ import kotlin.test.assertTrue
 
 /**
  * Task 122: the MAIN search filter queries — decade inclusivity, null-year drop-out, whole-word
- * anime (never "Animation"), exact-TMDB dedup chosen AFTER every filter (a nonmatching Plex copy
+ * anime (task 130: the chip means "Anime & Animation", so animation/animated/cartoon/cartoons
+ * whole words pass too), exact-TMDB dedup chosen AFTER every filter (a nonmatching Plex copy
  * never hides a matching IPTV copy), excluded-key visibility, the FTS join for text+filters,
  * blank-query discovery and the "more matches exist" flag that drives "Show more".
  */
@@ -51,7 +52,10 @@ class SearchFilterQueryTest {
             "('80s Anime','VOD','plex','a80'),('Late 80 Anime','VOD','plex','a89')," +
             "('Action 85','VOD','iptv','act85'),('Show 80','SERIES','plex','s80')," +
             "('90s Duplex','VOD','plex','p90'),('80s Duplex','VOD','iptv','i80')", 0)
-        OmniverseDb(driver)
+        val db = OmniverseDb(driver)
+        db.storeQueries.recomputeVodGroups()
+        db.storeQueries.recomputeSeriesGroups()
+        db
     }
     private val search: SearchRepositoryImpl get() = SearchRepositoryImpl(db, Dispatchers.Unconfined)
 
@@ -61,9 +65,9 @@ class SearchFilterQueryTest {
     private val movies80sAnime = SearchFilters(movies = true, yearFrom = 1980, yearTo = 1989, anime = true)
 
     @Test fun blankQueryWithFiltersDiscoversTitles() = runTest {
-        // The headline UX: no text at all, Movies + 1980s + Anime → a real grid, not "nothing found".
+        // The headline UX: no text at all, Movies + 1980s + Anime & Animation → a real grid, not "nothing found".
         val found = search.searchFiltered("", movies80sAnime)
-        assertEquals(listOf("plex/a80", "plex/a89", "iptv/catonly", "iptv/i80"), found.slots(ContentKind.VOD))
+        assertEquals(listOf("plex/a80", "plex/a89", "iptv/catonly", "plex/anim", "iptv/i80"), found.slots(ContentKind.VOD))
         assertEquals(emptyList(), found.slots(ContentKind.SERIES))
     }
 
@@ -77,15 +81,15 @@ class SearchFilterQueryTest {
         assertFalse("plex/ny" in slots) // unknown year: silently excluded by a decade filter (documented)
     }
 
-    @Test fun animeIsWholeWordCategoryOrGenreNeverAnimation() = runTest {
+    @Test fun animeChipIsAnimePlusAnimationWholeWordsOnly() = runTest {
         val found = search.searchFiltered("", SearchFilters(movies = true, anime = true))
         val slots = found.slots(ContentKind.VOD)
-        assertTrue("plex/a80" in slots) // category name "ANIME | SUB", genre "Animation" — matches on the NAME
+        assertTrue("plex/a80" in slots) // category name "ANIME | SUB", genre "Animation" — matches on both
         assertTrue("plex/a89" in slots) // genre "Anime"
         assertTrue("iptv/catonly" in slots) // category name only, genre NULL
         assertTrue("plex/ny" in slots) // genre "Anime", no year needed when no decade is set
-        assertFalse("plex/anim" in slots) // genre "Animation" is NOT anime (the browse substring filter would match it)
-        assertFalse("iptv/act85" in slots)
+        assertTrue("plex/anim" in slots) // task 130: genre "Animation" / category "Kids & Cartoons" now pass
+        assertFalse("iptv/act85" in slots) // "Action" carries none of the tokens
     }
 
     @Test fun genreChipMatchesWholeWordSoAnimationStaysSeparate() = runTest {
@@ -120,7 +124,7 @@ class SearchFilterQueryTest {
     @Test fun excludedKeysHideLockedRowsAndFreeTheDuplicate() = runTest {
         // Same rule as browse: excluding the Plex copy (locked) frees its IPTV TMDB twin.
         val found = search.searchFiltered("", movies80sAnime, listOf("VOD|plex|cr"))
-        assertEquals(listOf("iptv/dup", "iptv/catonly", "iptv/i80"), found.slots(ContentKind.VOD))
+        assertEquals(listOf("iptv/dup", "iptv/catonly", "plex/anim", "iptv/i80"), found.slots(ContentKind.VOD))
     }
 
     @Test fun switchedOffLibraryRowsAreExcludedAtTheSqlLevel() = runTest {
@@ -152,9 +156,19 @@ class SearchFilterQueryTest {
     @Test fun capReportsMoreMatchesInsteadOfLying() = runTest {
         val page = search.searchFiltered("", movies80sAnime, limitPerKind = 1)[ContentKind.VOD]!!
         assertEquals(1, page.rows.size)
-        assertTrue(page.more) // 3 match, 1 shown — the UI must say so
+        assertTrue(page.more) // 5 match, 1 shown — the UI must say so
         val all = search.searchFiltered("", movies80sAnime, limitPerKind = 24)[ContentKind.VOD]!!
         assertFalse(all.more)
+    }
+
+    @Test fun sortIsAppliedBeforeTheResultLimitAndMissingMetadataComesLast() = runTest {
+        val allMovies = SearchFilters(movies = true)
+        assertEquals("plex/a90", search.searchFiltered("", allMovies, limitPerKind = 1, sort = SearchSort.YEAR_NEWEST).slots(ContentKind.VOD).single())
+        assertEquals("plex/a79", search.searchFiltered("", allMovies, limitPerKind = 1, sort = SearchSort.YEAR_OLDEST).slots(ContentKind.VOD).single())
+        assertEquals("plex/a79", search.searchFiltered("", allMovies, limitPerKind = 1, sort = SearchSort.TITLE_ASC).slots(ContentKind.VOD).single())
+        assertEquals("plex/a80", search.searchFiltered("", allMovies, limitPerKind = 1, sort = SearchSort.RATING).slots(ContentKind.VOD).single())
+        assertEquals("plex/a89", search.searchFiltered("anime", allMovies, limitPerKind = 1, sort = SearchSort.YEAR_NEWEST).slots(ContentKind.VOD).single())
+        assertEquals("plex/ny", search.searchFiltered("", allMovies, sort = SearchSort.YEAR_NEWEST).slots(ContentKind.VOD).last())
     }
 
     @Test fun blankQueryWithoutFiltersDiscoversNothing() = runTest {

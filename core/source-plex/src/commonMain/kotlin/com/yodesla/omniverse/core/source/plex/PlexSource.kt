@@ -56,6 +56,9 @@ import okio.IOException
  *   URLs (query param), and those are always offered via Redact in logs.
  * - VOD + SERIES only; live/EPG are empty by design.
  * - One bad metadata row is skipped (diagnostics.skipped), never fatal.
+ * - The `/all` list only carries the first ~2 Genre tags, so each section's full genre set is
+ *   rebuilt from the section's genre directory + per-genre listings (task 130); a failure there
+ *   falls back to the list tags, never fails the sync.
  */
 class PlexSource(
     private val config: SourceConfig.Plex,
@@ -128,11 +131,12 @@ class PlexSource(
         for (s in sections()) {
             if (s.str("type") != "movie") continue
             val sectionKey = s.str("key") ?: continue
+            val genres = genreTagsByRatingKey(1, sectionKey, diagnostics)
             var start = 0
             while (true) {
                 val page = pageItems(1, sectionKey, start)
                 for (m in page.items) {
-                    val v = mapVod(m, sectionKey, sort)
+                    val v = mapVod(m, sectionKey, sort, m.str("ratingKey")?.let { genres[it] })
                     if (v == null) diagnostics.skipped("vod", "unreadable item in section $sectionKey")
                     else {
                         emit(v)
@@ -151,11 +155,12 @@ class PlexSource(
         for (s in sections()) {
             if (s.str("type") != "show") continue
             val sectionKey = s.str("key") ?: continue
+            val genres = genreTagsByRatingKey(2, sectionKey, diagnostics)
             var start = 0
             while (true) {
                 val page = pageItems(2, sectionKey, start)
                 for (m in page.items) {
-                    val v = mapSeries(m, sectionKey, sort)
+                    val v = mapSeries(m, sectionKey, sort, m.str("ratingKey")?.let { genres[it] })
                     if (v == null) diagnostics.skipped("series", "unreadable item in section $sectionKey")
                     else {
                         emit(v)
@@ -431,7 +436,7 @@ class PlexSource(
         return "part-${hash.toString(16)}"
     }
 
-    private fun mapVod(m: JsonObject, sectionKey: String, sort: Int): VodRecord? {
+    private fun mapVod(m: JsonObject, sectionKey: String, sort: Int, extraGenres: List<String>? = null): VodRecord? {
         val ratingKey = m.str("ratingKey") ?: return null
         val title = m.str("title") ?: return null
         return VodRecord(
@@ -446,14 +451,14 @@ class PlexSource(
             containerExt = null,
             tmdbId = m.fieldList("Guid", "id").firstOrNull { it.startsWith("tmdb://") }?.removePrefix("tmdb://"),
             sortIndex = sort,
-            genre = m.fieldList("Genre", "tag").joinToString(", ").takeIf { it.isNotBlank() },
+            genre = mergedGenres(m.fieldList("Genre", "tag"), extraGenres).joinToString(", ").takeIf { it.isNotBlank() },
         )
     }
 
-    private fun mapSeries(m: JsonObject, sectionKey: String, sort: Int): SeriesRecord? {
+    private fun mapSeries(m: JsonObject, sectionKey: String, sort: Int, extraGenres: List<String>? = null): SeriesRecord? {
         val ratingKey = m.str("ratingKey") ?: return null
         val title = m.str("title") ?: return null
-        val genres = m.fieldList("Genre", "tag")
+        val genres = mergedGenres(m.fieldList("Genre", "tag"), extraGenres)
         return SeriesRecord(
             sourceId = id,
             remoteId = RemoteId(ratingKey),
@@ -480,10 +485,73 @@ class PlexSource(
         return dirs.map { it as? JsonObject ?: throw SourceException.BadResponse("Plex section was not an object") }
     }
 
+    /**
+     * Full genre titles per ratingKey for one section (task 130): the `/all` list only carries the
+     * first ~2 Genre tags, so the section's genre directory (`/library/sections/{key}/genre`) is
+     * fetched once and every genre is paged through `/all?type=..&genre={id}`. One directory call
+     * per section plus paging per genre keeps the request count bounded. Any failure is reported
+     * via [diagnostics] and only degrades that section back to its list tags — sync never fails
+     * because of enrichment.
+     */
+    private suspend fun genreTagsByRatingKey(type: Int, sectionKey: String, diagnostics: SyncDiagnostics): Map<String, List<String>> {
+        val map = mutableMapOf<String, MutableList<String>>()
+        val dirs = try {
+            genreDirectory(sectionKey)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            diagnostics.skipped("genres", "genre directory failed for section $sectionKey")
+            return emptyMap()
+        }
+        for (d in dirs) {
+            val genreKey = d.str("key") ?: continue
+            val title = d.str("title") ?: continue
+            try {
+                var start = 0
+                while (true) {
+                    val page = pageItems(type, sectionKey, start, genre = genreKey)
+                    for (m in page.items) {
+                        val ratingKey = m.str("ratingKey") ?: continue
+                        val tags = map.getOrPut(ratingKey) { mutableListOf() }
+                        if (tags.none { it.equals(title, ignoreCase = true) }) tags += title
+                    }
+                    if (page.items.isEmpty()) break
+                    start += page.items.size
+                    if (page.totalSize?.let { start >= it } ?: (page.items.size < PAGE_SIZE)) break
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                diagnostics.skipped("genres", "genre listing failed for genre '$title' in section $sectionKey")
+            }
+        }
+        return map
+    }
+
+    /** Plex's genre filter directory: MediaContainer.Directory[] with numeric `key` + `title`. */
+    private suspend fun genreDirectory(sectionKey: String): List<JsonObject> {
+        val container = getJson("/library/sections/${enc(sectionKey)}/genre")["MediaContainer"] as? JsonObject
+            ?: throw SourceException.BadResponse("Plex genre directory had no MediaContainer")
+        val dirs = container["Directory"] as? JsonArray
+            ?: if (container.long("size") == 0L) return emptyList()
+            else throw SourceException.BadResponse("Plex genre directory had no Directory")
+        return dirs.mapNotNull { it as? JsonObject }
+    }
+
+    /** The item's own list tags first, then genres found through the genre listings; no duplicates. */
+    private fun mergedGenres(tags: List<String>, extra: List<String>?): List<String> {
+        if (extra.isNullOrEmpty()) return tags
+        val out = tags.toMutableList()
+        val seen = tags.map { it.lowercase() }.toMutableSet()
+        for (g in extra) if (seen.add(g.lowercase())) out += g
+        return out
+    }
+
     private data class Page(val items: List<JsonObject>, val totalSize: Int?)
 
-    private suspend fun pageItems(type: Int, sectionKey: String, start: Int): Page {
-        val path = "/library/sections/${enc(sectionKey)}/all?type=$type&X-Plex-Container-Start=$start&X-Plex-Container-Size=$PAGE_SIZE"
+    private suspend fun pageItems(type: Int, sectionKey: String, start: Int, genre: String? = null): Page {
+        val genreParam = genre?.let { "&genre=${enc(it)}" }.orEmpty()
+        val path = "/library/sections/${enc(sectionKey)}/all?type=$type$genreParam&X-Plex-Container-Start=$start&X-Plex-Container-Size=$PAGE_SIZE"
         val container = getJson(path)["MediaContainer"] as? JsonObject
             ?: throw SourceException.BadResponse("Plex page had no MediaContainer")
         val total = container.long("totalSize")?.takeIf { it in 0..Int.MAX_VALUE }?.toInt()

@@ -1,5 +1,6 @@
 package com.yodesla.omniverse.feature.home.profiles
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,8 +12,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.runtime.Composable
@@ -59,7 +62,9 @@ fun ProfileEditorRoute(viewModel: ProfilesViewModel, onExit: () -> Unit) {
     val draft = Profile(editing.id, s.nameDraft, s.avatarDraft, s.kidsDraft)
     CosmicBackdrop(Modifier.fillMaxSize()) {
         Column(
-            Modifier.fillMaxSize().widthIn(max = 900.dp).padding(start = OmniSpacing.tvSide, end = OmniSpacing.tvSide, top = OmniSpacing.xxl),
+            Modifier.fillMaxSize().widthIn(max = 900.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(start = OmniSpacing.tvSide, end = OmniSpacing.tvSide, top = OmniSpacing.xxl, bottom = OmniSpacing.xxl),
             verticalArrangement = Arrangement.spacedBy(OmniSpacing.l),
         ) {
             Text(stringResource(if (s.isNew) R.string.profiles_new_title else R.string.profiles_edit_title), style = OmniTheme.type.browseHeading, color = OmniTheme.colors.textPrimary)
@@ -88,7 +93,11 @@ fun ProfileEditorRoute(viewModel: ProfilesViewModel, onExit: () -> Unit) {
                             focusedContainerColor = Color.Transparent,
                             pressedContainerColor = Color.Transparent,
                         ),
-                        border = CardDefaults.border(border = Border.None, focusedBorder = Border.None, pressedBorder = Border.None),
+                        border = CardDefaults.border(
+                            border = Border.None,
+                            focusedBorder = Border(BorderStroke(2.dp, c.focusBorder), 0.dp, CircleShape),
+                            pressedBorder = Border.None,
+                        ),
                         glow = CardDefaults.glow(
                             focusedGlow = Glow(elevationColor = c.accent.copy(alpha = 0.55f), elevation = 18.dp),
                         ),

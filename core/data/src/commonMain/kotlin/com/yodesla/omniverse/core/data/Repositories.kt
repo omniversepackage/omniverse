@@ -224,6 +224,9 @@ interface CatalogRepository {
      * backdrops and card art appear without leaving the page.
      */
     suspend fun refillArt(rows: List<PosterRow>): List<PosterRow> = rows
+
+    /** Task 142: every anime / animated title of [kind] for the Anime hub, best-rated first (see [AnimeHubPool]). */
+    suspend fun animatedTitles(kind: ContentKind, excludedCategoryKeys: Set<String>): List<AnimatedTitle> = emptyList()
     /** Other movie items sharing the same external TMDB id; caller must apply parental visibility. */
     suspend fun exactMovieMatches(key: ContentKey): List<PosterRow> = emptyList()
     suspend fun exactSeriesMatches(key: ContentKey): List<PosterRow> = emptyList()
@@ -253,6 +256,9 @@ interface EpgRepository {
 
     /** Channels whose name contains [term] (case-insensitive), for matching TV networks to channels. */
     suspend fun channelsNamed(term: String, limit: Int = 40): List<ChannelRow> = emptyList()
+
+    /** Task 142: Anime hub channel candidates with their category name (the hub classifies them). */
+    suspend fun animeChannelCandidates(limit: Int = 400): List<Pair<ChannelRow, String?>> = emptyList()
 }
 
 data class SearchHit(val key: ContentKey, val title: String)
@@ -272,7 +278,8 @@ data class ProgrammeHit(
  * Task 122: the MAIN search filter set. Filters combine (AND) and narrow the ordinary text search;
  * with a blank query they discover titles on their own. The kind chips restrict kind (neither chip
  * = both kinds); [anime] follows the library's category-name / provider-genre classification, never
- * a title substring. Decades arrive as [yearFrom]/[yearTo] bounds (1980s = 1980..1989).
+ * a title substring. Selected [decades] are OR-ed within that group; other filters still combine
+ * with AND. [yearFrom]/[yearTo] remain for callers that use an explicit year range.
  */
 data class SearchFilters(
     val movies: Boolean = false,
@@ -282,10 +289,11 @@ data class SearchFilters(
     val yearTo: Int? = null,
     val ratingAtLeast: Float? = null,
     val genres: List<String> = emptyList(),
+    val decades: List<Int> = emptyList(),
 ) {
     /** A title filter is on: blank-query discovery runs and live/programme search is suppressed. */
     val active: Boolean
-        get() = movies || shows || anime || yearFrom != null || yearTo != null || ratingAtLeast != null || genres.isNotEmpty()
+        get() = movies || shows || anime || yearFrom != null || yearTo != null || ratingAtLeast != null || genres.isNotEmpty() || decades.isNotEmpty()
 
     /** Kinds to search: neither chip selected = both kinds. */
     val kinds: List<ContentKind>
@@ -313,6 +321,8 @@ enum class SearchSort { RELEVANCE, TITLE_ASC, TITLE_DESC, YEAR_NEWEST, YEAR_OLDE
 interface SearchRepository {
     /** FTS prefix search; user text is sanitized (never raw FTS syntax). Grouped by kind in order. */
     suspend fun search(query: String, limitPerKind: Int = 20): Map<ContentKind, List<SearchHit>>
+    /** Only channels are needed for the live section of the TV search screen. */
+    suspend fun searchLive(query: String, limit: Int = 24): List<SearchHit> = search(query, limit)[ContentKind.LIVE].orEmpty()
 
     /**
      * Task 122: cross-source movie/show search narrowed by [filters] (AND), every filter applied in

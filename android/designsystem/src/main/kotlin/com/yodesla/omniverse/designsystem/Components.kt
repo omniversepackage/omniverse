@@ -72,8 +72,8 @@ internal fun paletteIndex(name: String): Int = Math.floorMod(name.hashCode(), Mo
 
 /** Cinematic hues (teal, ember, indigo, olive, burgundy, steel, amber, violet) for big artless frames. */
 private val ChannelTints = listOf(
-    Color(0xFF1F5563), Color(0xFF7A2E1A), Color(0xFF34307A), Color(0xFF4A5A28),
-    Color(0xFF6B2238), Color(0xFF3A4A60), Color(0xFF7A5418), Color(0xFF52307A),
+    Color(0xFF006782), Color(0xFF941F00), Color(0xFF0900AA), Color(0xFF588200),
+    Color(0xFF8D002A), Color(0xFF3A4A60), Color(0xFF925900), Color(0xFF4E00AA),
 )
 
 /** A stable colour per channel: tints the preview frame when there is no artwork. */
@@ -101,7 +101,7 @@ fun LogoImage(url: String?, name: String, modifier: Modifier = Modifier, plain: 
         SubcomposeAsyncImage(
             model = url,
             contentDescription = null,
-            contentScale = ContentScale.Fit,
+            contentScale = ContentScale.Fit, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt,
             loading = { Monogram(name, Modifier.fillMaxSize()) },
             error = { Monogram(name, Modifier.fillMaxSize()) },
             modifier = Modifier.fillMaxSize().padding(6.dp),

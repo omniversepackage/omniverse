@@ -1,5 +1,6 @@
 package com.yodesla.omniverse.designsystem
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -18,7 +19,8 @@ import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.Glow
 
 /**
- * The signature focus treatment (PLAN.md §8.2): scale 1.06, accent-tinted glow, no border.
+ * The signature focus treatment: scale 1.06, accent-tinted glow and a thin [OmniColors.focusBorder]
+ * stroke (white, or the service colour inside a service section; Kory 2026-10-11).
  * Every focusable tile in the app is built on this so the feel is identical everywhere.
  */
 @Composable
@@ -41,10 +43,13 @@ fun FocusCard(
             containerColor = if (glass) Color.Transparent else OmniTheme.colors.surface.copy(alpha = 0.78f),
             focusedContainerColor = if (glass) Color.Transparent else OmniTheme.colors.elevated.copy(alpha = 0.96f),
         ),
-        // Depth comes from light, never borders (PLAN.md §8.1).
-        border = CardDefaults.border(border = Border.None, focusedBorder = Border.None, pressedBorder = Border.None),
+        border = CardDefaults.border(
+            border = Border.None,
+            focusedBorder = Border(BorderStroke(2.dp, OmniTheme.colors.focusBorder), 0.dp, shape),
+            pressedBorder = Border(BorderStroke(2.dp, OmniTheme.colors.focusBorder), 0.dp, shape),
+        ),
         glow = CardDefaults.glow(
-            focusedGlow = Glow(elevationColor = OmniTheme.colors.accent.copy(alpha = 0.55f), elevation = 18.dp),
+            focusedGlow = Glow(elevationColor = OmniTheme.colors.accent.copy(alpha = 0.8f), elevation = 14.dp),
         ),
     ) {
         Box(modifier = if (glass) Modifier.glassSurface(focused = focused, shadow = false) else Modifier, content = content)

@@ -1,4 +1,8 @@
 package com.yodesla.omniverse.feature.live.player
+import com.yodesla.omniverse.feature.live.UnifiedLiveCatalog
+import com.yodesla.omniverse.feature.live.liveChannelIdentity
+import com.yodesla.omniverse.feature.live.liveScope
+import com.yodesla.omniverse.feature.live.LiveProviderFilter
 
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
@@ -57,12 +61,15 @@ data class ChannelSwitchUi(
 data class LivePlayerUiState(
     /** What the banner shows — updates instantly on every zap press. */
     val banner: BannerUi? = null,
+    val channelKey: ContentKey? = null,
     val bannerVisible: Boolean = true,
     /** The stream to play. Changes only after surfing settles (see [SURF_SETTLE_MS]). */
     val spec: PlaybackSpec? = null,
     val error: String? = null,
     /** Task 93: same channel name on another source, offered after this stream fails. */
     val switchTo: ChannelSwitchUi? = null,
+    val channelSources: List<ChannelSwitchUi> = emptyList(),
+    val sourceNotice: String? = null,
     /**
      * Task 94: the stream to pre-buffer on the hidden second engine — the next channel in the
      * direction last zapped. Non-null only while pre-loading is allowed (setting on, no
@@ -93,6 +100,14 @@ class LivePlayerViewModel(
 
     private val _state = MutableStateFlow(LivePlayerUiState())
     val state: StateFlow<LivePlayerUiState> = _state.asStateFlow()
+    private val unified = UnifiedLiveCatalog(sources, catalog)
+    private val providerFilter = LiveProviderFilter(sources, userData)
+    private val attemptedSources = mutableSetOf<ContentKey>()
+    private var sourceChoicesJob: Job? = null
+    private var tuneGeneration = 0
+    private val allowedVisibility = visibility.combine(userData.hiddenCategoryKeys()) { vis, hidden ->
+        { kind: String, source: String, category: String -> vis(kind, source, category) && "$kind|$source|$category" !in hidden }
+    }
 
     /** Task 84j: per-profile subtitle appearance for the live player (style only, no delay). */
     val subtitleStyle = combine(
@@ -143,18 +158,22 @@ class LivePlayerViewModel(
         this.categoryId = categoryId
         viewModelScope.launch {
             val row = catalog.channel(key) ?: return@launch showError("This channel is no longer available.")
+            if (!allowedVisibility.first()("LIVE", key.sourceId.value, row.categoryId.value)) return@launch showError("This channel is unavailable for this profile.")
             moveTo(row, settleMs = 0)
+            if (categoryId.value == com.yodesla.omniverse.feature.live.LiveViewModel.ALL || categoryId.value.startsWith("__live:")) {
+                val rows = unified.rows(categoryId.value, key.sourceId, allowedVisibility.first(), providerFilter.hiddenIds.first())
+                order = rows.map { it.key }
+                index = rows.indexOfFirst { liveChannelIdentity(it.name) == liveChannelIdentity(row.name) }
+                schedulePreload()
+                return@launch
+            }
             order = when (categoryId.value) {
                 com.yodesla.omniverse.feature.live.LiveViewModel.FAVORITES -> userData.favorites(com.yodesla.omniverse.core.model.ContentKind.LIVE).first()
                 com.yodesla.omniverse.feature.live.LiveViewModel.RECENT -> userData.recentChannels().first()
-                com.yodesla.omniverse.feature.live.LiveViewModel.ALL -> {
-                    val vis = visibility.first()
-                    val excluded = catalog.categories(key.sourceId, com.yodesla.omniverse.core.model.ContentKind.LIVE).first()
-                        .filterNot { vis("LIVE", key.sourceId.value, it.remoteId.value) }.map { it.remoteId.value }
-                    catalog.channelOrderAll(key.sourceId, excluded)
-                }
                 else -> catalog.channelOrder(key.sourceId, categoryId)
             }
+            val hidden = providerFilter.hiddenIds.first()
+            order = order.filter { it.sourceId.value !in hidden }
             index = order.indexOf(key)
             schedulePreload()
         }
@@ -180,6 +199,8 @@ class LivePlayerViewModel(
      */
     fun retry() {
         val row = current ?: return
+        attemptedSources.clear()
+        tuneGeneration++
         playing = null
         settleJob?.cancel()
         clearPreload()
@@ -187,13 +208,26 @@ class LivePlayerViewModel(
         settleJob = viewModelScope.launch { open(row) }
     }
 
-    /** Task 93: the engine gave up on this channel; offer the same channel name on another source. */
+    /** After engine retries are exhausted, try each visible provider once for this channel. */
     fun onStreamFailed(kind: FailureKind = FailureKind.OTHER) {
         val row = current ?: return
         // Task 94: a provider refusal (403/509 = too many connections) means a second connection
         // would be refused too — stop pre-loading for the rest of the session.
         if (PreloadGuard.shouldDisable(kind)) clearPreload(preloadDisabled = true)
-        viewModelScope.launch { offerChannelSwitch(row) }
+        if (!attemptedSources.add(row.key)) return
+        val generation = tuneGeneration
+        clearPreload()
+        viewModelScope.launch {
+            val alt = unified.alternatives(row, allowedVisibility.first()).firstOrNull { candidate -> attemptedSources.none { it.sourceId == candidate.key.sourceId } }
+            if (current?.key != row.key || generation != tuneGeneration) return@launch
+            if (alt == null) {
+                _state.update { it.copy(error = "No more available sources for this channel. Try again or choose a source.") }
+            } else {
+                val name = sources.sources().first().firstOrNull { it.id == alt.key.sourceId }?.name ?: "backup source"
+                moveTo(alt, settleMs = 0, resetFailures = false)
+                _state.update { it.copy(sourceNotice = "Switched to $name after the stream failed") }
+            }
+        }
     }
 
     /** Task 94: the hidden pre-buffer engine failed; a refusal disables pre-loading this session. */
@@ -202,8 +236,10 @@ class LivePlayerViewModel(
     }
 
     fun switchChannel(key: ContentKey) {
+        if (key == current?.key && _state.value.error != null) { retry(); return }
         viewModelScope.launch {
             val row = catalog.channel(key) ?: return@launch showError("This channel is no longer available.")
+            if (!allowedVisibility.first()("LIVE", key.sourceId.value, row.categoryId.value)) return@launch
             _state.update { it.copy(switchTo = null) }
             moveTo(row, settleMs = 0)
         }
@@ -239,9 +275,19 @@ class LivePlayerViewModel(
         }
     }
 
-    private suspend fun moveTo(row: ChannelRow, settleMs: Long) {
+    private suspend fun moveTo(row: ChannelRow, settleMs: Long, resetFailures: Boolean = true) {
+        tuneGeneration++
+        if (resetFailures) attemptedSources.clear()
         current = row
-        _state.update { it.copy(banner = bannerFor(row, null), error = null, switchTo = null) }
+        _state.update { it.copy(channelKey = row.key, banner = bannerFor(row, null), error = null, switchTo = null, channelSources = emptyList(), sourceNotice = null) }
+        sourceChoicesJob?.cancel()
+        sourceChoicesJob = viewModelScope.launch {
+            val names = sources.sources().first().associate { it.id to it.name }
+            val choices = (listOf(row) + unified.alternatives(row, allowedVisibility.first())).map {
+                ChannelSwitchUi(it.key, it.name, names[it.key.sourceId] ?: it.key.sourceId.value)
+            }
+            if (current?.key == row.key) _state.update { it.copy(channelSources = choices) }
+        }
         flashBanner()
         // Guide text arrives a beat later; the banner never waits for it.
         viewModelScope.launch {
@@ -276,7 +322,8 @@ class LivePlayerViewModel(
         val spec = try {
             source.playback(PlaybackRequest.Live(row.key.sourceId, row.key.remoteId))
         } catch (e: SourceException) {
-            return showError("This channel can't be played right now.")
+            if (current?.key == row.key) { showError("This channel can't be played right now."); onStreamFailed() }
+            return
         }
         if (playing != null) previous = playing
         playing = row.key
@@ -339,29 +386,8 @@ class LivePlayerViewModel(
         }
     }
 
-    private suspend fun offerChannelSwitch(row: ChannelRow) {
-        val alt = findChannelSwitch(row) ?: return
-        _state.update { it.copy(switchTo = alt) }
-    }
-
-    private suspend fun findChannelSwitch(row: ChannelRow): ChannelSwitchUi? {
-        val allowed = visibility.first()
-        val sourceNames = runCatching { sources.sources().first().associate { it.id to it.name } }.getOrDefault(emptyMap())
-        val alt = runCatching { epg.channelsNamed(row.name) }.getOrDefault(emptyList())
-            .filter {
-                it.key != row.key && it.key.sourceId != row.key.sourceId &&
-                    allowed("LIVE", it.key.sourceId.value, it.categoryId.value) &&
-                    sameChannelName(it.name, row.name)
-            }
-            .sortedWith(compareByDescending<ChannelRow> { it.number == row.number }
-                .thenBy { it.number ?: Int.MAX_VALUE }
-                .thenBy { sourceNames[it.key.sourceId] ?: it.key.sourceId.value })
-            .firstOrNull() ?: return null
-        return ChannelSwitchUi(alt.key, alt.name, sourceNames[alt.key.sourceId] ?: alt.key.sourceId.value)
-    }
-
     internal fun sameChannelName(a: String, b: String): Boolean =
-        a.filter { it.isLetterOrDigit() }.lowercase() == b.filter { it.isLetterOrDigit() }.lowercase()
+        liveChannelIdentity(a) == liveChannelIdentity(b)
 
     private fun showError(message: String) = _state.update { it.copy(error = message) }
 

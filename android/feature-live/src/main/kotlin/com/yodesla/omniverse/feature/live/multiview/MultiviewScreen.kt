@@ -1,4 +1,8 @@
 package com.yodesla.omniverse.feature.live.multiview
+import com.yodesla.omniverse.designsystem.channelFavoriteMenu
+import com.yodesla.omniverse.designsystem.ChannelFavoriteButton
+import com.yodesla.omniverse.designsystem.FavoriteChannel
+
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
@@ -7,6 +11,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -219,6 +224,7 @@ fun MultiviewRoute(
             val key = tiles[menu].key
             TileMenu(
                 name = tiles[menu].name,
+                channel = FavoriteChannel(key.sourceId.value, key.remoteId.value, tiles[menu].name),
                 onSwap = { swapFor = menu; menuFor = null },
                 onRetry = { viewModel.retry(menu); menuFor = null },
                 onRemove = { viewModel.removeTile(key); onRemove(key); menuFor = null },
@@ -321,6 +327,7 @@ private fun MultiviewTile(
 @Composable
 private fun TileMenu(
     name: String,
+    channel: FavoriteChannel,
     onSwap: () -> Unit,
     onRetry: () -> Unit,
     onRemove: () -> Unit,
@@ -343,6 +350,7 @@ private fun TileMenu(
                 onClick = onSwap,
                 modifier = Modifier.fillMaxWidth().focusRequester(first),
             )
+            ChannelFavoriteButton(channel, Modifier.fillMaxWidth())
             OmniButton(context.getString(R.string.multiview_retry), onClick = onRetry, modifier = Modifier.fillMaxWidth())
             OmniButton(context.getString(R.string.multiview_remove_tile), onClick = onRemove, modifier = Modifier.fillMaxWidth())
             OmniButton(context.getString(R.string.multiview_save_group_tile), onClick = onSaveGroup, modifier = Modifier.fillMaxWidth())
@@ -375,6 +383,7 @@ private fun SwapPicker(
             } else {
                 LazyVerticalGrid(
                     columns = GridCells.Adaptive(minSize = 200.dp),
+                    contentPadding = PaddingValues(OmniSpacing.focusEdge),
                     horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m),
                     verticalArrangement = Arrangement.spacedBy(OmniSpacing.m),
                     modifier = Modifier.fillMaxWidth().height(360.dp),
@@ -382,6 +391,7 @@ private fun SwapPicker(
                     items(candidates, key = { "${it.key.sourceId.value}/${it.key.remoteId.value}" }) { row ->
                         FocusCard(
                             onClick = { onPick(row.key) },
+                            onLongClick = channelFavoriteMenu(row.key.sourceId.value, row.key.remoteId.value, row.name, row.logoUrl),
                             glass = false,
                             modifier = Modifier.height(92.dp).then(if (row == candidates.first()) Modifier.focusRequester(first) else Modifier),
                         ) {

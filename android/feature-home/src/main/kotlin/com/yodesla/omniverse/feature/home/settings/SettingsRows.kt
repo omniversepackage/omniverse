@@ -181,7 +181,7 @@ private fun SettingRow(
         onClick = onClick ?: {},
         modifier = modifier
             .fillMaxWidth()
-            .heightIn(min = 64.dp)
+            .heightIn(min = 52.dp)
             .then(if (fr != null) Modifier.focusRequester(fr) else Modifier)
             .onKeyEvent { e -> disclosure != null && e.type == KeyEventType.KeyDown && e.key == Key.Info }
             .onFocusChanged {
@@ -190,7 +190,7 @@ private fun SettingRow(
             },
     ) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = OmniSpacing.l, vertical = OmniSpacing.m),
+            Modifier.fillMaxWidth().padding(horizontal = OmniSpacing.m, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m),
         ) {
@@ -228,7 +228,7 @@ fun RowPill(
     onClick: () -> Unit,
 ) {
     val c = OmniTheme.colors
-    FocusCard(onClick = onClick, modifier = modifier.height(OmniSpacing.pill)) {
+    FocusCard(onClick = onClick, modifier = modifier.height(32.dp)) {
         Row(Modifier.fillMaxHeight().padding(horizontal = OmniSpacing.l), verticalAlignment = Alignment.CenterVertically) {
             if (selected) {
                 // A gold check, not a text bullet: the app fonts have no reliable symbol glyphs.

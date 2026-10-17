@@ -102,6 +102,49 @@ class VodBrowseViewModelTest {
     @AfterTest fun tearDown() = Dispatchers.resetMain()
 
     @Test
+    fun horizontalHomeAndAllAreSeparateDestinations() = runTest(dispatcher) {
+        val vm = VodBrowseViewModel(ContentKind.VOD, FakeSources(), FakeCatalog(), FakeUserData(), ShowEverything)
+        assertTrue(vm.state.value.horizontalHome)
+        vm.select(null)
+        assertFalse(vm.state.value.horizontalHome)
+        assertNull(vm.state.value.selected)
+        vm.showHorizontalHome()
+        assertTrue(vm.state.value.horizontalHome)
+        assertFalse(vm.state.value.libraryOpen)
+    }
+
+    @Test
+    fun mainNavigationStartsAtHomeButDetailReturnKeepsTheDestination() = runTest(dispatcher) {
+        val vm = VodBrowseViewModel(ContentKind.VOD, FakeSources(), FakeCatalog(), FakeUserData(), ShowEverything)
+        vm.enterHorizontalSection(1)
+        vm.select(null)
+        vm.enterHorizontalSection(1)
+        assertFalse(vm.state.value.horizontalHome)
+        vm.enterHorizontalSection(2)
+        assertTrue(vm.state.value.horizontalHome)
+    }
+
+    @Test
+    fun horizontalCategoryAndLibraryKeepSelectionUntilReturningHome() = runTest(dispatcher) {
+        val vm = VodBrowseViewModel(ContentKind.VOD, FakeSources(), FakeCatalog(), FakeUserData(), ShowEverything)
+        val category = vm.state.value.categories.first { it.id != null }
+        vm.select(category.id)
+        vm.openLibrary()
+        assertTrue(vm.state.value.libraryOpen)
+        assertFalse(vm.state.value.horizontalHome)
+        vm.closeLibrary()
+        assertEquals(category.id, vm.state.value.selected)
+        assertFalse(vm.state.value.horizontalHome)
+        vm.showHorizontalHome()
+        assertTrue(vm.state.value.horizontalHome)
+        assertFalse(vm.state.value.libraryOpen)
+        // Opening detail performs no browse action; retaining this VM preserves the category.
+        vm.select(category.id)
+        assertEquals(category.id, vm.state.value.selected)
+        assertFalse(vm.state.value.horizontalHome)
+    }
+
+    @Test
     fun showEverythingListsItemsFromBothCategories() = runTest(dispatcher) {
         val vm = VodBrowseViewModel(ContentKind.VOD, FakeSources(), FakeCatalog(), FakeUserData(), ShowEverything)
         val page = vm.items.first().itemInserts().first()

@@ -31,6 +31,8 @@ private data class BrandLook(
     val focusTop: Color,
     val focusBottom: Color,
     val textSecondary: Color = Color(0xFFB3B3B3),
+    /** Focus stroke; defaults to [accent]. */
+    val focusBorder: Color? = null,
 )
 
 private fun brandLook(brand: CategoryBrand): BrandLook = when (brand) {
@@ -69,6 +71,7 @@ private fun brandLook(brand: CategoryBrand): BrandLook = when (brand) {
         base = Color(0xFF05061A), baseLow = Color(0xFF14123A), glow = Color(0x80002BE7), glowCenter = Offset(0.75f, -0.1f),
         accent = Color(0xFF4D7CFF), surface = Color(0xFF15173A), elevated = Color(0xFF20234F),
         focusTop = Color(0xF2263AA6), focusBottom = Color(0xE615173A), textSecondary = Color(0xFFBCC0E0),
+        focusBorder = Color(0xFF9B5CFF), // HBO Max purple
     )
     // Paramount+: deep cobalt stage with the mountain-blue light from the top right.
     CategoryBrand.PARAMOUNT_PLUS -> BrandLook(
@@ -107,11 +110,11 @@ fun BrandStage(categoryName: String, modifier: Modifier = Modifier, content: @Co
         val look = brandLook(b)
         base.copy(
             background = look.base, surface = look.surface, elevated = look.elevated,
-            accent = look.accent, textSecondary = look.textSecondary,
+            accent = look.accent, textSecondary = look.textSecondary, focusBorder = look.focusBorder ?: look.accent,
             scrim = look.base.copy(alpha = 0.9f),
             glassTop = look.surface.copy(alpha = 0.86f), glassBottom = look.base.copy(alpha = 0.7f),
             glassFocusTop = look.focusTop, glassFocusBottom = look.focusBottom,
-            glassBlueSheen = look.accent.copy(alpha = 0.10f), glassWineSheen = Color.Transparent,
+            glassBlueSheen = look.accent.copy(alpha = 0.18f), glassWineSheen = Color.Transparent,
         )
     } ?: base
     Box(modifier) {

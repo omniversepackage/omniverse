@@ -8,7 +8,11 @@ import com.yodesla.omniverse.designsystem.requestFocusWhenReady
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,6 +40,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -44,11 +49,19 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -76,6 +89,7 @@ import com.yodesla.omniverse.core.model.ContentKind
 import com.yodesla.omniverse.core.model.Episode
 import com.yodesla.omniverse.core.model.PlaybackRequest
 import com.yodesla.omniverse.core.model.RemoteId
+import com.yodesla.omniverse.core.model.SourceId
 import com.yodesla.omniverse.core.model.SeriesDetail
 import com.yodesla.omniverse.core.model.VodDetail
 import com.yodesla.omniverse.core.model.mediaProgressKey
@@ -99,6 +113,9 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
 /** Everything the VOD player needs to open and resume an item. */
@@ -158,6 +175,9 @@ data class DetailState(
     /** Episode the play chip is ready on (task 71 "New episodes"); null = normal resume. */
     val focusEpisodeId: RemoteId? = null,
     val episodeProgress: Map<String, Progress> = emptyMap(),
+    /** Progress and playback choices for every episode copy across matching sources. */
+    val episodeCopyProgress: Map<String, Progress> = emptyMap(),
+    val episodeSources: Map<Pair<Int, Int>, List<EpisodeSource>> = emptyMap(),
     val movie: VodDetail? = null,
     val selectedVersionId: String? = null,
     val versionProgress: Map<String, Progress> = emptyMap(),
@@ -345,17 +365,44 @@ class DetailViewModel(
                     val related = catalog?.exactSeriesMatches(key).orEmpty().map {
                         RelatedMovie(it, sourceNames[it.key.sourceId] ?: "Source", userData.itemOverride(it.key)?.editionLabel)
                     }
+                    val visibleRelated = related.filter { row ->
+                        row.poster.categoryId?.let { allowed("SERIES", row.poster.key.sourceId.value, it.value) } ?: true
+                    }
+                    val alternativeDetails = coroutineScope {
+                        visibleRelated.map { row -> async {
+                            try {
+                                sources.contentSource(row.poster.key.sourceId)?.seriesDetail(row.poster.key.remoteId)
+                                    ?.let { it to row.sourceName }
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                throw e
+                            } catch (_: Exception) {
+                                null // One unavailable source must not hide the other episodes.
+                            }
+                        } }.awaitAll().filterNotNull()
+                    }
+                    val merged = mergeSeriesEpisodes(d, sourceNames[key.sourceId] ?: "Source", alternativeDetails)
+                    val unified = merged.detail
                     val fallback = if (d.record.posterUrl.isNullOrBlank() || d.record.plot.isNullOrBlank() || d.cast.isNullOrBlank())
-                        related.firstOrNull { row -> row.poster.categoryId?.let { allowed("SERIES", row.poster.key.sourceId.value, it.value) } ?: true }
+                        visibleRelated.firstOrNull()
                             ?.let { row -> runCatching { sources.contentSource(row.poster.key.sourceId)?.seriesDetail(row.poster.key.remoteId) }.getOrNull()?.let { row to it } }
                     else null
                     val prog = HashMap<String, Progress>()
                     d.seasons.forEach { s -> s.episodes.forEach { e -> userData.progress(ContentKey(key.sourceId, ContentKind.EPISODE, e.remoteId))?.let { prog[e.remoteId.value] = it } } }
+                    val copyProg = HashMap<String, Progress>()
+                    merged.sourcesByEpisode.values.flatten().forEach { option ->
+                        val episode = option.episode
+                        userData.progress(ContentKey(episode.sourceId, ContentKind.EPISODE, episode.remoteId))
+                            ?.let { copyProg[episodeProgressId(episode)] = it }
+                    }
                     // Resume where the viewer left off: season of the most recently watched episode; when
                     // that watch is completed (task 57 "Up next"), the season of the NEXT episode instead.
-                    val ordered = d.seasons.sortedBy { it.number }.flatMap { s -> s.episodes.sortedBy { it.number } }
-                    val lastProg = prog.values.maxByOrNull { it.updatedMs }
-                    val lastEpisode = lastProg?.let { p -> ordered.firstOrNull { it.remoteId == p.key.remoteId } }
+                    val ordered = unified.seasons.sortedBy { it.number }.flatMap { s -> s.episodes.sortedBy { it.number } }
+                    val lastProg = copyProg.values.maxByOrNull { it.updatedMs }
+                    val lastEpisode = lastProg?.let { p -> ordered.firstOrNull { ep ->
+                        merged.sourcesByEpisode[episodeSlot(ep)].orEmpty().any { choice ->
+                            choice.episode.sourceId == p.key.sourceId && choice.episode.remoteId == p.key.remoteId
+                        }
+                    } }
                     val resumeEpisode = if (lastProg?.completed == true && lastEpisode != null) {
                         ordered.getOrNull(ordered.indexOfFirst { it.remoteId == lastEpisode.remoteId } + 1) ?: lastEpisode
                     } else lastEpisode
@@ -363,8 +410,8 @@ class DetailViewModel(
                     // episode; once that episode has progress the normal resume takes over.
                     val focus = focusEpisode?.let { id -> ordered.firstOrNull { it.remoteId == id && prog[id.value] == null } }
                     val lastSeason = (focus ?: resumeEpisode)?.let { ep ->
-                        d.seasons.firstOrNull { s -> s.episodes.any { it.remoteId == ep.remoteId } }?.number
-                    } ?: d.seasons.firstOrNull()?.number ?: 1
+                        unified.seasons.firstOrNull { s -> s.episodes.any { it.remoteId == ep.remoteId && it.sourceId == ep.sourceId } }?.number
+                    } ?: unified.seasons.firstOrNull()?.number ?: 1
                     // Task 86: the chooser lists show copies too; only their saved watch is worth a lookup.
                     val tmdb = d.record.tmdbId?.trim()?.takeIf { it.isNotEmpty() }
                     val lastPick = editionPickSettingKey(tmdb)?.let { k -> userData.setting(k).first()?.takeIf { v -> v.isNotBlank() } }
@@ -381,7 +428,9 @@ class DetailViewModel(
                             cast = d.cast?.takeIf { it.isNotBlank() },
                             sourceName = sourceNames[key.sourceId] ?: "Source",
                             year = d.record.year, genre = d.record.genre, ratingValue = d.record.rating, // season count lives in the overline
-                            series = d, season = lastSeason, episodeProgress = prog, itemOverride = custom,
+                            series = unified, season = lastSeason, episodeProgress = prog,
+                            episodeCopyProgress = copyProg, episodeSources = merged.sourcesByEpisode,
+                            itemOverride = custom,
                             focusEpisodeId = focus?.remoteId,
                             titleIdentity = titleIdentity, titleOverride = titleCustom,
                             relatedMovies = related,
@@ -468,7 +517,7 @@ class DetailViewModel(
 
     /** Task 95: OK on a spoiler-hidden episode card reveals its description for the rest of the visit. */
     fun revealEpisode(ep: Episode) {
-        _state.update { it.copy(revealedSpoilerIds = it.revealedSpoilerIds + ep.remoteId.value) }
+        _state.update { it.copy(revealedSpoilerIds = it.revealedSpoilerIds + episodeProgressId(ep)) }
     }
 
     /** Task 84d: warm TMDB stills for the season being shown (cache-first, off = no request). */
@@ -617,31 +666,43 @@ class DetailViewModel(
     }
 
     fun episodePlayItem(ep: Episode, fromStart: Boolean = false): PlayItem {
-        val all = _state.value.series?.seasons?.flatMap { it.episodes }.orEmpty()
-        return buildEpisodeQueue(ep, all, key, _state.value.title, _state.value.episodeProgress,
+        val all = _state.value.episodeSources.values.flatten().map { it.episode }
+            .filter { it.sourceId == ep.sourceId && it.seriesId == ep.seriesId }
+            .distinctBy { it.remoteId }
+            .sortedWith(compareBy<Episode> { it.season }.thenBy { it.number })
+        val progress = _state.value.episodeCopyProgress.values
+            .filter { it.key.sourceId == ep.sourceId }
+            .associateBy { it.key.remoteId.value }
+        return buildEpisodeQueue(ep, all, ContentKey(ep.sourceId, ContentKind.SERIES, ep.seriesId), _state.value.title, progress,
             _state.value.series?.record?.tmdbId, _state.value.series?.record?.name,
             _state.value.series?.record?.year, fromStart)
     }
 
-    private fun episodeKey(ep: Episode) = ContentKey(key.sourceId, ContentKind.EPISODE, ep.remoteId)
+    private fun episodeKey(ep: Episode) = ContentKey(ep.sourceId, ContentKind.EPISODE, ep.remoteId)
 
     private fun watchedProgress(ep: Episode): Progress {
         val dur = ep.durationSec?.times(1000L)?.takeIf { it > 0 }
-        return Progress(episodeKey(ep), key.remoteId, dur ?: 1L, dur, System.currentTimeMillis(), completed = true)
+        return Progress(episodeKey(ep), ep.seriesId, dur ?: 1L, dur, System.currentTimeMillis(), completed = true)
     }
 
     /** Mark one episode watched (completed, leaves Continue Watching) and refresh state immediately. */
     fun markWatched(ep: Episode) = viewModelScope.launch {
-        userData.setWatched(episodeKey(ep), key.remoteId, true, ep.durationSec?.times(1000L))
-        _state.update { it.copy(episodeProgress = it.episodeProgress + (ep.remoteId.value to watchedProgress(ep))) }
-        launch { pushWatchToProvider(ep.remoteId, true, episodeLabel(ep)) }
+        userData.setWatched(episodeKey(ep), ep.seriesId, true, ep.durationSec?.times(1000L))
+        _state.update { it.copy(
+            episodeProgress = if (ep.sourceId == key.sourceId) it.episodeProgress + (ep.remoteId.value to watchedProgress(ep)) else it.episodeProgress,
+            episodeCopyProgress = it.episodeCopyProgress + (episodeProgressId(ep) to watchedProgress(ep)),
+        ) }
+        launch { pushWatchToProvider(ep.sourceId, ep.remoteId, true, episodeLabel(ep)) }
     }
 
     /** Mark one episode unwatched (its progress row is deleted) and refresh state immediately. */
     fun markUnwatched(ep: Episode) = viewModelScope.launch {
-        userData.setWatched(episodeKey(ep), key.remoteId, false, null)
-        _state.update { it.copy(episodeProgress = it.episodeProgress - ep.remoteId.value) }
-        launch { pushWatchToProvider(ep.remoteId, false, episodeLabel(ep)) }
+        userData.setWatched(episodeKey(ep), ep.seriesId, false, null)
+        _state.update { it.copy(
+            episodeProgress = if (ep.sourceId == key.sourceId) it.episodeProgress - ep.remoteId.value else it.episodeProgress,
+            episodeCopyProgress = it.episodeCopyProgress - episodeProgressId(ep),
+        ) }
+        launch { pushWatchToProvider(ep.sourceId, ep.remoteId, false, episodeLabel(ep)) }
     }
 
     /** Mark every episode of [seasonNumber] watched or unwatched, then refresh state once. */
@@ -649,13 +710,17 @@ class DetailViewModel(
         val eps = _state.value.series?.seasons?.firstOrNull { it.number == seasonNumber }?.episodes.orEmpty()
         if (eps.isEmpty()) return@launch
         var progress = _state.value.episodeProgress
+        var copyProgress = _state.value.episodeCopyProgress
         eps.forEach { ep ->
-            userData.setWatched(episodeKey(ep), key.remoteId, watched, ep.durationSec?.times(1000L))
-            progress = if (watched) progress + (ep.remoteId.value to watchedProgress(ep)) else progress - ep.remoteId.value
+            userData.setWatched(episodeKey(ep), ep.seriesId, watched, ep.durationSec?.times(1000L))
+            if (ep.sourceId == key.sourceId) {
+                progress = if (watched) progress + (ep.remoteId.value to watchedProgress(ep)) else progress - ep.remoteId.value
+            }
+            copyProgress = if (watched) copyProgress + (episodeProgressId(ep) to watchedProgress(ep)) else copyProgress - episodeProgressId(ep)
         }
-        _state.update { it.copy(episodeProgress = progress) }
+        _state.update { it.copy(episodeProgress = progress, episodeCopyProgress = copyProgress) }
         // One sequential provider pass for the whole season, after the local marks are already visible.
-        launch { eps.forEach { pushWatchToProvider(it.remoteId, watched, episodeLabel(it)) } }
+        launch { eps.forEach { pushWatchToProvider(it.sourceId, it.remoteId, watched, episodeLabel(it)) } }
     }
 
     /**
@@ -664,22 +729,23 @@ class DetailViewModel(
      * and [DetailState.watchSyncError] shows a short message until [retryWatchSync] lands it.
      * The source itself serializes/coalesces per ratingKey, so rapid flips cannot invert remotely.
      */
-    private suspend fun pushWatchToProvider(remoteId: RemoteId, watched: Boolean, label: String) {
+    private suspend fun pushWatchToProvider(sourceId: SourceId, remoteId: RemoteId, watched: Boolean, label: String) {
+        val failedKey = "${sourceId.value}|${remoteId.value}"
         try {
-            sources.contentSource(key.sourceId)?.setWatched(remoteId, watched)
-            failedWatchSync.remove(remoteId.value)
+            sources.contentSource(sourceId)?.setWatched(remoteId, watched)
+            failedWatchSync.remove(failedKey)
             _state.update { it.copy(watchSyncError = if (failedWatchSync.isEmpty()) null else watchSyncErrorText()) }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
-            failedWatchSync[remoteId.value] = FailedWatchSync(remoteId, watched, label)
+            failedWatchSync[failedKey] = FailedWatchSync(sourceId, remoteId, watched, label)
             _state.update { it.copy(watchSyncError = watchSyncErrorText()) }
         }
     }
 
     /** Re-send every watched change the provider didn't confirm (local state is already correct). */
     fun retryWatchSync() = viewModelScope.launch {
-        failedWatchSync.values.toList().forEach { failed -> pushWatchToProvider(failed.remoteId, failed.watched, failed.label) }
+        failedWatchSync.values.toList().forEach { failed -> pushWatchToProvider(failed.sourceId, failed.remoteId, failed.watched, failed.label) }
     }
 
     private fun watchSyncErrorText(): String {
@@ -693,7 +759,7 @@ class DetailViewModel(
 
     private fun episodeLabel(ep: Episode) = "S${ep.season}E${ep.number}"
 
-    private class FailedWatchSync(val remoteId: RemoteId, val watched: Boolean, val label: String)
+    private class FailedWatchSync(val sourceId: SourceId, val remoteId: RemoteId, val watched: Boolean, val label: String)
 
     private val failedWatchSync = mutableMapOf<String, FailedWatchSync>()
 }
@@ -853,7 +919,11 @@ fun DetailRoute(viewModel: DetailViewModel, visibility: kotlinx.coroutines.flow.
     val chips: @Composable () -> Unit = { PlayOptionChips(playOptions, selectedOptionId, ::pickPlayOption, { showSources = true }) }
     val c = OmniTheme.colors
     val primary = remember { FocusRequester() }
-    val realBackdrop = s.backdrop != null
+    val movieScroll = rememberScrollState()
+    val seriesHeroScroll = rememberScrollState()
+    val detailScope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
+    val scrollStep = with(LocalDensity.current) { 160.dp.toPx() }
     CosmicBackdrop(Modifier.fillMaxSize()) {
         // Full-bleed artwork dissolving into the page on the left and bottom (Midnight Cinema);
         // with no wide backdrop the poster itself becomes the darkened background.
@@ -879,7 +949,7 @@ fun DetailRoute(viewModel: DetailViewModel, visibility: kotlinx.coroutines.flow.
             // is only an abstract blur. Keep it clear of the series episode column.
             val isSeries = s.series != null
             AsyncImage(
-                model = displayPoster, contentDescription = null, contentScale = ContentScale.Crop,
+                model = displayPoster, contentDescription = null, contentScale = ContentScale.Crop, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt,
                 modifier = Modifier.align(if (isSeries) Alignment.TopEnd else Alignment.CenterEnd)
                     .padding(top = if (isSeries) OmniSpacing.xxl else 0.dp, end = 88.dp)
                     .size(if (isSeries) 220.dp else 280.dp, if (isSeries) 330.dp else 420.dp)
@@ -893,9 +963,20 @@ fun DetailRoute(viewModel: DetailViewModel, visibility: kotlinx.coroutines.flow.
             }
             s.error != null -> ErrorCard("Something went wrong", s.error!!, "Try again", { viewModel.load() }, Modifier.align(Alignment.Center))
             s.series == null -> Column(
-                // A real wide backdrop keeps details bottom-left; over a poster-only page they center.
-                Modifier.align(if (realBackdrop) Alignment.BottomStart else Alignment.CenterStart)
-                    .padding(start = OmniSpacing.tvSide, bottom = if (realBackdrop) OmniSpacing.xxl else 0.dp).widthIn(max = 520.dp),
+                // Logos, metadata and source choices can exceed a TV's height. Keep the actions
+                // inside one bounded scroll viewport so directional focus can reveal every control.
+                Modifier.align(Alignment.TopStart).widthIn(max = 616.dp).fillMaxHeight()
+                    .verticalScroll(movieScroll)
+                    .onKeyEvent { event ->
+                        if (event.type != KeyEventType.KeyDown || event.key != Key.DirectionUp) false
+                        else if (focusManager.moveFocus(FocusDirection.Up)) true
+                        else if (movieScroll.canScrollBackward) {
+                            detailScope.launch { movieScroll.animateScrollBy(-scrollStep) }
+                            true
+                        } else false
+                    }
+                    .padding(start = OmniSpacing.tvSide, end = OmniSpacing.tvSide,
+                        top = OmniSpacing.l, bottom = OmniSpacing.l),
                 verticalArrangement = Arrangement.spacedBy(OmniSpacing.s),
             ) {
                 DetailHeader(s, overline = "Movie", big = true, chips = chips)
@@ -904,9 +985,11 @@ fun DetailRoute(viewModel: DetailViewModel, visibility: kotlinx.coroutines.flow.
                     play = ::playChosenCopy, progressVisible = chosenCopy?.key == currentKey,
                     onMore = { showMore = true })
             }
-            else -> Column(
+            else -> BoxWithConstraints {
+                val heroMaxHeight = maxHeight * DetailSeriesHeroWeight
+                Column(
                 Modifier.fillMaxHeight().fillMaxWidth(if (LocalCompact.current) 1f else 0.72f)
-                    .padding(start = OmniSpacing.tvSide, top = OmniSpacing.xl),
+                    .padding(top = OmniSpacing.m),
             ) {
                 // Task 119: the series hero (title/logo/meta/actions/season tabs) is now a bounded,
                 // internally-scrollable region and the episode list is the weighted remainder. Before
@@ -914,20 +997,28 @@ fun DetailRoute(viewModel: DetailViewModel, visibility: kotlinx.coroutines.flow.
                 // the episode LazyColumn a viewport shorter than a card and the focused episode's
                 // title/description were cut off at the screen bottom (Mushoku Tensei).
                 Column(
-                    Modifier.weight(DetailSeriesHeroWeight).verticalScroll(rememberScrollState())
+                    Modifier.heightIn(max = heroMaxHeight).verticalScroll(seriesHeroScroll)
+                        .onKeyEvent { event ->
+                            if (event.type != KeyEventType.KeyDown || event.key != Key.DirectionUp) false
+                            else if (focusManager.moveFocus(FocusDirection.Up)) true
+                            else if (seriesHeroScroll.canScrollBackward) {
+                                detailScope.launch { seriesHeroScroll.animateScrollBy(-scrollStep) }
+                                true
+                            } else false
+                        }
                         .padding(bottom = OmniSpacing.s),
                     verticalArrangement = Arrangement.spacedBy(OmniSpacing.s),
                 ) {
-                    Column(Modifier.widthIn(max = 560.dp), verticalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
+                    Column(Modifier.padding(start = OmniSpacing.tvSide, end = OmniSpacing.m).widthIn(max = 600.dp), verticalArrangement = Arrangement.spacedBy(OmniSpacing.xs)) {
                         val n = s.series!!.seasons.size
                         DetailHeader(s, overline = "Series  \u00b7  $n season${if (n == 1) "" else "s"}", big = false, chips = chips)
                     }
-                    Spacer(Modifier.height(OmniSpacing.m))
                     // Primary actions first (Continue / Start over / My List / More); management actions
                     // move into the More menu, matching the movie layout.
                     SeriesActions(s, viewModel, onPlay, primary, onMore = { showMore = true })
                 }
                 SeriesEpisodes(s, viewModel, onPlay)
+                }
             }
         }
     }
@@ -975,7 +1066,8 @@ fun DetailRoute(viewModel: DetailViewModel, visibility: kotlinx.coroutines.flow.
                 verticalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
                 Text("Collections", style = OmniTheme.type.title, color = c.textPrimary)
                 val collectionKind = if (s.series == null) ContentKind.VOD else ContentKind.SERIES
-                LazyColumn(Modifier.height(300.dp), verticalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
+                LazyColumn(Modifier.height(300.dp), contentPadding = PaddingValues(horizontal = OmniSpacing.tvSide, vertical = OmniSpacing.focusEdge),
+                    verticalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
                     items(s.collections.filter { it.contentKind == collectionKind }, key = { it.id }) { collection ->
                         Row(horizontalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
                             if (collection.mode == "smart") Text("${collection.name} · Smart", Modifier.weight(1f),
@@ -1106,8 +1198,9 @@ private fun DetailMoreMenu(actions: List<MenuAction>, onDismiss: () -> Unit) {
     val first = remember { FocusRequester() }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(
-            Modifier.widthIn(max = 460.dp).clip(RoundedCornerShape(22.dp)).background(c.elevated).padding(OmniSpacing.xl),
-            verticalArrangement = Arrangement.spacedBy(OmniSpacing.s),
+            Modifier.widthIn(max = 460.dp).heightIn(max = 480.dp).clip(RoundedCornerShape(22.dp))
+                .background(c.elevated).verticalScroll(rememberScrollState()).padding(OmniSpacing.tvSide),
+            verticalArrangement = Arrangement.spacedBy(OmniSpacing.m),
         ) {
             Text("More", style = t.title, color = c.textSecondary)
             actions.forEachIndexed { i, a ->
@@ -1150,12 +1243,12 @@ private fun EditionSourceChooser(
                     if (copy.isCurrent) currentTag else null))
         }
     }
-    val listHeight = minOf(500, rows.size * 78).dp
+    val listHeight = minOf(360, rows.size * 88 + 64).dp
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(
             Modifier
                 .width(560.dp)
-                .heightIn(max = 640.dp)
+                .heightIn(max = 480.dp)
                 .background(c.background, RoundedCornerShape(18.dp))
                 .padding(OmniSpacing.xl),
             verticalArrangement = Arrangement.spacedBy(OmniSpacing.m),
@@ -1164,7 +1257,8 @@ private fun EditionSourceChooser(
             Text(stringResource(R.string.editions_sources_hint), style = t.caption, color = c.textSecondary)
             LazyColumn(
                 modifier = Modifier.height(listHeight),
-                verticalArrangement = Arrangement.spacedBy(OmniSpacing.s),
+                contentPadding = PaddingValues(horizontal = OmniSpacing.tvSide, vertical = OmniSpacing.focusEdge),
+                verticalArrangement = Arrangement.spacedBy(OmniSpacing.m),
             ) {
                 items(rows, key = { it.first.id }) { (copy, title, meta) ->
                     val chosen = copy.id == chosenId
@@ -1206,16 +1300,16 @@ private fun DetailHeader(s: DetailState, overline: String, big: Boolean, chips: 
     // capped so a wide logo never pushes the meta row off-screen). Text stays as the fallback.
     if (s.logoUrl != null) {
         AsyncImage(
-            model = s.logoUrl, contentDescription = s.title, contentScale = ContentScale.Fit,
+            model = s.logoUrl, contentDescription = s.title, contentScale = ContentScale.Fit, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt,
             alignment = Alignment.CenterStart,
-            modifier = Modifier.heightIn(max = 160.dp).widthIn(max = 420.dp),
+            modifier = Modifier.heightIn(max = 72.dp).widthIn(max = 320.dp),
         )
     } else {
-        Text(s.title, style = if (big) t.hero else t.display, color = c.textPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(s.title, style = if (big) t.display else t.headline, color = c.textPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
     DetailMetaRow(s.year, s.runtimeSec, s.genre, s.ratingValue, s.rt, certification = s.certification)
     chips()
-    s.plot?.let { Text(it, style = t.body, color = c.textSecondary, maxLines = if (big) 3 else 2, overflow = TextOverflow.Ellipsis) }
+    s.plot?.let { Text(it, style = t.caption, color = c.textSecondary, maxLines = if (big) 3 else 2, overflow = TextOverflow.Ellipsis) }
     s.plotAttribution?.let { label ->
         val uriHandler = LocalUriHandler.current
         Row(horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m), verticalAlignment = Alignment.CenterVertically) {
@@ -1251,20 +1345,21 @@ private fun DetailHeader(s: DetailState, overline: String, big: Boolean, chips: 
  * details, Collections and the version/source choice move into the More menu (see [DetailMoreMenu]).
  * Task 86 behaviour is unchanged: Play still follows the watched/saved copy.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun MovieActions(s: DetailState, vm: DetailViewModel, primary: FocusRequester,
                          play: (Boolean) -> Unit, progressVisible: Boolean,
                          onMore: () -> Unit) {
     val c = OmniTheme.colors
     val resumable = progressVisible && (s.progress?.positionMs ?: 0L) > 30_000
-    Row(horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m), verticalAlignment = Alignment.CenterVertically) {
-        OmniButton(
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        DetailActionButton(
             if (resumable) "Resume" else "Play",
             { play(false) }, Modifier.focusRequester(primary), primary = true,
         )
-        if (resumable) OmniButton("Start over", { play(true) })
-        OmniButton(if (s.favorite) "In My List" else "+ My List", { vm.toggleFavorite() })
-        OmniButton("More", onMore)
+        if (resumable) DetailActionButton("Start over", { play(true) })
+        DetailActionButton(if (s.favorite) "In My List" else "+ My List", { vm.toggleFavorite() })
+        DetailActionButton("More", onMore)
     }
     if (resumable && s.durationMs != null) {
         Row(Modifier.padding(top = OmniSpacing.s), verticalAlignment = Alignment.CenterVertically) {
@@ -1275,12 +1370,22 @@ private fun MovieActions(s: DetailState, vm: DetailViewModel, primary: FocusRequ
     }
 }
 
-/** Series detail splits its height between a scrollable header and the episode list. */
+/** Compact primary controls used only on movie/show detail pages. */
+@Composable
+private fun DetailActionButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier, primary: Boolean = false) {
+    OmniButton(label, onClick, modifier, primary = primary, compact = true)
+}
+
 internal const val DetailSeriesHeroWeight = 0.65f
-internal const val DetailSeriesEpisodesWeight = 0.35f
+internal const val DetailSeriesEpisodesWeight = 1f
 internal const val DetailEpisodeCardHeightDp = 96f
 internal const val DetailEpisodeFocusParentFraction = 0.2f
 
+private fun DetailState.progressFor(episode: Episode): Progress? =
+    episodeCopyProgress[episodeProgressId(episode)]
+        ?: if (episodeCopyProgress.isEmpty()) episodeProgress[episode.remoteId.value] else null
+
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SeriesActions(s: DetailState, vm: DetailViewModel, onPlay: (PlayItem) -> Unit, primary: FocusRequester,
                           onMore: () -> Unit) {
@@ -1291,24 +1396,24 @@ private fun SeriesActions(s: DetailState, vm: DetailViewModel, onPlay: (PlayItem
     // next") the NEXT episode; otherwise the first episode. A "New episodes" card (task 71) opens
     // the show ready on the episode it flagged instead.
     val all = series.seasons.sortedBy { it.number }.flatMap { s -> s.episodes.sortedBy { it.number } }
-    val lastProg = s.episodeProgress.values.maxByOrNull { it.updatedMs }
-    val last = lastProg?.let { p -> all.firstOrNull { it.remoteId == p.key.remoteId } }
+    val lastProg = (s.episodeCopyProgress.ifEmpty { s.episodeProgress }).values.maxByOrNull { it.updatedMs }
+    val copies = s.episodeSources.values.flatten().map { it.episode }.ifEmpty { all }
+    val last = lastProg?.let { p -> copies.firstOrNull { it.sourceId == p.key.sourceId && it.remoteId == p.key.remoteId } }
     val focus = s.focusEpisodeId?.let { id -> all.firstOrNull { it.remoteId == id } }
-    val start = focus ?: (if (lastProg?.completed == true && last != null) all.getOrNull(all.indexOfFirst { it.remoteId == last.remoteId } + 1) ?: last else last ?: all.firstOrNull())
-    Row(horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
+    val start = focus ?: (if (lastProg?.completed == true && last != null) all.getOrNull(all.indexOfFirst { it.season == last.season && it.number == last.number } + 1) ?: last else last ?: all.firstOrNull())
+    FlowRow(Modifier.padding(horizontal = OmniSpacing.tvSide), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (start != null) {
-            OmniButton(
+            DetailActionButton(
                 (if (last != null && focus == null) "Continue" else "Play") + "  S${start.season} \u00b7 E${start.number}",
                 { onPlay(vm.episodePlayItem(start)) }, Modifier.focusRequester(primary), primary = true,
             )
-            if (last != null && (s.episodeProgress[last.remoteId.value]?.positionMs ?: 0L) > 0L) {
-                OmniButton("Start over", { onPlay(vm.episodePlayItem(last, fromStart = true)) })
+            if (last != null && (s.progressFor(last)?.positionMs ?: 0L) > 0L) {
+                DetailActionButton("Start over", { onPlay(vm.episodePlayItem(last, fromStart = true)) })
             }
         }
-        OmniButton(if (s.favorite) "In My List" else "+ My List", { vm.toggleFavorite() })
-        OmniButton("More", onMore)
+        DetailActionButton(if (s.favorite) "In My List" else "+ My List", { vm.toggleFavorite() })
+        DetailActionButton("More", onMore)
     }
-    Spacer(Modifier.height(OmniSpacing.s))
     // Audit M10: a watched change the provider never accepted stays visible here, not silent.
     s.watchSyncError?.let { msg ->
         Spacer(Modifier.height(OmniSpacing.s))
@@ -1319,12 +1424,12 @@ private fun SeriesActions(s: DetailState, vm: DetailViewModel, onPlay: (PlayItem
             horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m),
         ) {
             Text(msg, style = t.caption, color = c.textPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            OmniButton("Retry", { vm.retryWatchSync() })
+            DetailActionButton("Retry", { vm.retryWatchSync() })
         }
     }
-    Spacer(Modifier.height(OmniSpacing.l))
-    FocusPivot(leading = 0.dp) {
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(OmniSpacing.s), contentPadding = PaddingValues(end = OmniSpacing.tvSide)) {
+    FocusPivot {
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m),
+            contentPadding = PaddingValues(horizontal = OmniSpacing.tvSide, vertical = 8.dp)) {
             items(series.seasons, key = { it.number }) { season ->
                 val selected = season.number == s.season
                 FocusCard(onClick = { vm.selectSeason(season.number) }, modifier = Modifier.height(36.dp)) {
@@ -1335,7 +1440,6 @@ private fun SeriesActions(s: DetailState, vm: DetailViewModel, onPlay: (PlayItem
             }
         }
     }
-    Spacer(Modifier.height(OmniSpacing.s))
 }
 
 /**
@@ -1350,15 +1454,17 @@ private fun ColumnScope.SeriesEpisodes(s: DetailState, vm: DetailViewModel, onPl
     val series = s.series ?: return
     val all = series.seasons.sortedBy { it.number }.flatMap { s -> s.episodes.sortedBy { it.number } }
     // Task 95: unwatched episodes after the newest watch stay spoiler-hidden until OK reveals one.
-    val hiddenIds = if (s.spoilerFree) com.yodesla.omniverse.core.data.SpoilerFree.hiddenEpisodeIds(all.map { it.remoteId.value }, s.episodeProgress) else emptySet()
+    val hiddenIds = if (s.spoilerFree) com.yodesla.omniverse.core.data.SpoilerFree.hiddenEpisodeIds(
+        all.map(::episodeProgressId), s.episodeCopyProgress.ifEmpty { s.episodeProgress }) else emptySet()
     val episodes = series.seasons.firstOrNull { it.number == s.season }?.episodes.orEmpty()
     // An episode with a saved position asks Resume / Start over instead of silently resuming.
     var resumeChoice by remember { mutableStateOf<Episode?>(null) }
+    var sourceChoice by remember { mutableStateOf<Episode?>(null) }
     // Hold-OK on an episode card opens the watched/unwatched menu.
     var menuEpisode by remember { mutableStateOf<Episode?>(null) }
     resumeChoice?.let { ep ->
         val resumeFocus = remember { FocusRequester() }
-        val at = s.episodeProgress[ep.remoteId.value]?.positionMs ?: 0L
+        val at = s.progressFor(ep)?.positionMs ?: 0L
         Dialog(onDismissRequest = { resumeChoice = null }) {
             Column(Modifier.width(420.dp).clip(RoundedCornerShape(16.dp)).background(c.background).padding(OmniSpacing.xl),
                 verticalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
@@ -1372,10 +1478,33 @@ private fun ColumnScope.SeriesEpisodes(s: DetailState, vm: DetailViewModel, onPl
         }
         LaunchedEffect(ep.remoteId) { runCatching { resumeFocus.requestFocusWhenReady() } }
     }
+    sourceChoice?.let { ep ->
+        val options = s.episodeSources[episodeSlot(ep)].orEmpty()
+        val choiceFocus = remember { FocusRequester() }
+        Dialog(onDismissRequest = { sourceChoice = null }) {
+            Column(Modifier.width(460.dp).clip(RoundedCornerShape(16.dp)).background(c.background).padding(OmniSpacing.xl),
+                verticalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
+                Text("Choose source · S${ep.season}E${ep.number}", style = t.title, color = c.textPrimary)
+                options.forEachIndexed { index, option ->
+                    OmniButton(
+                        "Play from ${option.sourceName}",
+                        {
+                            sourceChoice = null
+                            if ((s.progressFor(option.episode)?.positionMs ?: 0L) > 0L) resumeChoice = option.episode
+                            else onPlay(vm.episodePlayItem(option.episode))
+                        },
+                        if (index == 0) Modifier.fillMaxWidth().focusRequester(choiceFocus) else Modifier.fillMaxWidth(),
+                        primary = index == 0,
+                    )
+                }
+            }
+        }
+        LaunchedEffect(ep.season, ep.number) { runCatching { choiceFocus.requestFocusWhenReady() } }
+    }
     menuEpisode?.let { ep ->
-        val watched = isWatchedProgress(s.episodeProgress[ep.remoteId.value])
+        val watched = isWatchedProgress(s.progressFor(ep))
         val seasonEpisodes = series.seasons.firstOrNull { it.number == ep.season }?.episodes.orEmpty()
-        val seasonWatched = seasonEpisodes.isNotEmpty() && seasonEpisodes.all { isWatchedProgress(s.episodeProgress[it.remoteId.value]) }
+        val seasonWatched = seasonEpisodes.isNotEmpty() && seasonEpisodes.all { isWatchedProgress(s.progressFor(it)) }
         Dialog(onDismissRequest = { menuEpisode = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
             TitleMenu(
                 title = "S${ep.season} \u00b7 E${ep.number}  ${episodeTitle(ep.title, s.title, ep.number)}",
@@ -1395,14 +1524,14 @@ private fun ColumnScope.SeriesEpisodes(s: DetailState, vm: DetailViewModel, onPl
     FocusPivot(parentFraction = DetailEpisodeFocusParentFraction, leading = 0.dp) {
         LazyColumn(
             Modifier.fillMaxWidth().weight(DetailSeriesEpisodesWeight),
-            verticalArrangement = Arrangement.spacedBy(OmniSpacing.s),
-            contentPadding = PaddingValues(end = OmniSpacing.tvSide, bottom = OmniSpacing.xxl),
+            verticalArrangement = Arrangement.spacedBy(OmniSpacing.m),
+            contentPadding = PaddingValues(start = OmniSpacing.tvSide, top = 16.dp, end = OmniSpacing.tvSide, bottom = OmniSpacing.xxl),
         ) {
-            items(episodes, key = { it.remoteId.value }) { ep ->
-                val prog = s.episodeProgress[ep.remoteId.value]
+            items(episodes, key = { episodeProgressId(it) }) { ep ->
+                val prog = s.progressFor(ep)
                 val watched = isWatchedProgress(prog)
                 // Task 95: hidden until the viewer presses OK on this card (revealed for the visit).
-                val hidden = s.spoilerFree && ep.remoteId.value in hiddenIds && ep.remoteId.value !in s.revealedSpoilerIds
+                val hidden = s.spoilerFree && episodeProgressId(ep) in hiddenIds && episodeProgressId(ep) !in s.revealedSpoilerIds
                 // Task 84d: TMDB fills the thumbnail only when the provider has no episode still.
                 val still = ep.stillUrl?.takeIf { it.isNotBlank() }
                     ?: s.tmdbStills[ep.season]?.firstOrNull { it.episode == ep.number }?.stillPath
@@ -1410,6 +1539,7 @@ private fun ColumnScope.SeriesEpisodes(s: DetailState, vm: DetailViewModel, onPl
                 FocusCard(
                     onClick = {
                         if (hidden) vm.revealEpisode(ep)
+                        else if (s.episodeSources[episodeSlot(ep)].orEmpty().size > 1) sourceChoice = ep
                         else if ((prog?.positionMs ?: 0L) > 0L) resumeChoice = ep
                         else onPlay(vm.episodePlayItem(ep))
                     },
@@ -1424,7 +1554,7 @@ private fun ColumnScope.SeriesEpisodes(s: DetailState, vm: DetailViewModel, onPl
                             // Task 95: blurred still on API 31+, plain dark placeholder below it.
                             if (!hidden || supportsRuntimeBlur()) {
                                 AsyncImage(
-                                    model = still, contentDescription = null, contentScale = ContentScale.Crop,
+                                    model = still, contentDescription = null, contentScale = ContentScale.Crop, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt,
                                     modifier = if (hidden) Modifier.fillMaxSize().blur(14.dp) else Modifier.fillMaxSize(),
                                 )
                             }
@@ -1437,7 +1567,9 @@ private fun ColumnScope.SeriesEpisodes(s: DetailState, vm: DetailViewModel, onPl
                         Spacer(Modifier.width(OmniSpacing.m))
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(
-                                listOfNotNull("Episode ${ep.number}", ep.durationSec?.let { "${it / 60} min" }).joinToString("  \u00b7  ").uppercase(),
+                                listOfNotNull("Episode ${ep.number}", ep.durationSec?.let { "${it / 60} min" },
+                                    s.episodeSources[episodeSlot(ep)].orEmpty().map { it.sourceName }.distinct().joinToString(" + ").takeIf { it.isNotBlank() })
+                                    .joinToString("  \u00b7  ").uppercase(),
                                 style = t.overline, color = c.textTertiary, maxLines = 1,
                             )
                             // A bare "Episode N" would just repeat the overline above it.

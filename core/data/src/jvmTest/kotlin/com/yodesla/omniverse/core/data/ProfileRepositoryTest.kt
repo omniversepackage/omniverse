@@ -242,6 +242,21 @@ class ProfileRepositoryTest {
     }
 
     @Test
+    fun personalBrowseControlsStayWithTheirProfile() = runTest {
+        profiles.ensureDefault()
+        val other = profiles.create("Other", 1, false)
+        activate(other.id)
+        db.userDataQueries.putSetting("movies_shows_view", "horizontal")
+        user.migrateLegacyProfileSettings()
+        assertEquals("horizontal", user.setting("movies_shows_view").first())
+        for (key in listOf("left_opens_menu", "warn_main_menu", "for_you_news")) user.putSetting(key, "false")
+        activate(ProfileRepository.DEFAULT_ID)
+        for (key in listOf("movies_shows_view", "left_opens_menu", "warn_main_menu", "for_you_news")) assertNull(user.setting(key).first())
+        activate(other.id)
+        assertEquals("false", user.setting("left_opens_menu").first())
+    }
+
+    @Test
     fun legacyViewerSettingsMigrateOnlyToDefault() = runTest {
         profiles.ensureDefault()
         db.userDataQueries.putSetting("search_history", "legacy")

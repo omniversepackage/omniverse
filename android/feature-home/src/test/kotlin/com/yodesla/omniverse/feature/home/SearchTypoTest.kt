@@ -5,7 +5,10 @@ import com.yodesla.omniverse.core.data.CatalogRepository
 import com.yodesla.omniverse.core.data.ChannelRow
 import com.yodesla.omniverse.core.data.PosterRow
 import com.yodesla.omniverse.core.data.SearchHit
+import com.yodesla.omniverse.core.data.SearchFilteredPage
+import com.yodesla.omniverse.core.data.SearchFilters
 import com.yodesla.omniverse.core.data.SearchRepository
+import com.yodesla.omniverse.core.data.SearchSort
 import com.yodesla.omniverse.core.data.ShowEverything
 import com.yodesla.omniverse.core.model.Category
 import com.yodesla.omniverse.core.model.ContentKey
@@ -84,6 +87,10 @@ private class TypoFakeSearch(
     override suspend fun search(query: String, limitPerKind: Int): Map<ContentKind, List<SearchHit>> {
         val hits = hitsFor[query] ?: return emptyMap()
         return mapOf(ContentKind.VOD to hits)
+    }
+    override suspend fun searchFiltered(query: String, filters: SearchFilters, excludedCategoryKeys: Collection<String>, limitPerKind: Int, sort: SearchSort): Map<ContentKind, SearchFilteredPage> {
+        val hits = hitsFor[query] ?: return emptyMap()
+        return mapOf(ContentKind.VOD to SearchFilteredPage(hits.mapNotNull { if (it.key == typoKey) typoPoster else null }))
     }
     override suspend fun recentTitles(limit: Int): List<PosterRow> = recent
 }

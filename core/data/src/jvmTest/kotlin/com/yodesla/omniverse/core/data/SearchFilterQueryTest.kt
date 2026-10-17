@@ -64,6 +64,16 @@ class SearchFilterQueryTest {
 
     private val movies80sAnime = SearchFilters(movies = true, yearFrom = 1980, yearTo = 1989, anime = true)
 
+    @Test fun selectedDecadesIncludeEitherDecadeWithoutIncludingTheYearsBetween() = runTest {
+        val movies = search.searchFiltered("", SearchFilters(movies = true, anime = true, decades = listOf(1970, 1990))).slots(ContentKind.VOD)
+        assertTrue("plex/a79" in movies)
+        assertTrue("plex/a90" in movies)
+        assertFalse("plex/a80" in movies)
+        assertFalse("iptv/act85" in movies)
+        val shows = search.searchFiltered("", SearchFilters(shows = true, decades = listOf(1980, 1990))).slots(ContentKind.SERIES)
+        assertEquals(setOf("plex/s80", "iptv/sf88"), shows.toSet())
+    }
+
     @Test fun blankQueryWithFiltersDiscoversTitles() = runTest {
         // The headline UX: no text at all, Movies + 1980s + Anime & Animation → a real grid, not "nothing found".
         val found = search.searchFiltered("", movies80sAnime)
@@ -167,7 +177,8 @@ class SearchFilterQueryTest {
         assertEquals("plex/a79", search.searchFiltered("", allMovies, limitPerKind = 1, sort = SearchSort.YEAR_OLDEST).slots(ContentKind.VOD).single())
         assertEquals("plex/a79", search.searchFiltered("", allMovies, limitPerKind = 1, sort = SearchSort.TITLE_ASC).slots(ContentKind.VOD).single())
         assertEquals("plex/a80", search.searchFiltered("", allMovies, limitPerKind = 1, sort = SearchSort.RATING).slots(ContentKind.VOD).single())
-        assertEquals("plex/a89", search.searchFiltered("anime", allMovies, limitPerKind = 1, sort = SearchSort.YEAR_NEWEST).slots(ContentKind.VOD).single())
+        // Fragment matching also finds the 1990 title even when its FTS entry is absent.
+        assertEquals("plex/a90", search.searchFiltered("anime", allMovies, limitPerKind = 1, sort = SearchSort.YEAR_NEWEST).slots(ContentKind.VOD).single())
         assertEquals("plex/ny", search.searchFiltered("", allMovies, sort = SearchSort.YEAR_NEWEST).slots(ContentKind.VOD).last())
     }
 

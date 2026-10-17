@@ -14,4 +14,11 @@
     <string name="crash_card_text">Omniverse closed unexpectedly last time — details in Settings › Diagnostics</string>
     <!-- Voice / global search (task 80): hint in the system search field. -->
     <string name="search_hint">Search channels, movies and shows</string>
+    <string name="movies_home">Movies home</string>
+    <string name="shows_home">Shows home</string>
+    <string name="horizontal_move_category">Move left or right</string>
+    <string name="horizontal_hide_category">Hide category</string>
+    <string name="horizontal_cancel">Cancel</string>
+    <string name="horizontal_category_hidden">Category hidden</string>
+    <string name="horizontal_undo">Undo</string>
 </resources>

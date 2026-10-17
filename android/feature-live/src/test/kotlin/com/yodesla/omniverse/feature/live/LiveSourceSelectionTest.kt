@@ -37,9 +37,11 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 
@@ -110,10 +112,88 @@ class LiveSourceSelectionTest {
         assertEquals(true, vm.state.value.noSources)
     }
 
+    @Test
+    fun combinedGuideGroupsQualityCopiesAndKeepsProviderIdsAndEpgSeparate() = runTest(dispatcher) {
+        fun row(source: SourceId, name: String) = ChannelRow(ContentKey(source, ContentKind.LIVE, RemoteId("1")), 1, name, null, "shared-epg", 0, RemoteId("sports"))
+        val a = row(xtream, "ESPN HD")
+        val b = row(m3u, "ESPN FHD")
+        val c = row(m3u, "BBC News").copy(key = ContentKey(m3u, ContentKind.LIVE, RemoteId("2")))
+        val repo = FakeSources(listOf(summary(xtream, SourceKind.XTREAM), summary(m3u, SourceKind.M3U)))
+        val catalog = FakeCatalog(listOf(a, b, c))
+        val epg = FakeEpg()
+        val vm = GuideViewModel(repo, catalog, epg, Clock { 0L })
+        runCurrent()
+        assertEquals(2, vm.state.value.grid!!.channelCount)
+        val secondCategory = vm.state.value.categories.last().id
+        assertEquals(liveScopedId(m3u, "sports"), secondCategory)
+        vm.selectCategory(secondCategory)
+        runCurrent()
+        assertEquals(2, vm.state.value.grid!!.channelCount)
+        vm.state.value.grid!!.programmes(0, 0L, 100L)
+        assertEquals(m3u, epg.requestedSources.last())
+        val grouped = UnifiedLiveCatalog(repo, catalog).rows(LiveViewModel.ALL, xtream, { _, source, _ -> source != xtream.value })
+        assertEquals(listOf(b, c), grouped)
+    }
+
+    @Test
+    fun liveNowNextQueriesTheCorrectProviderForIdenticalEpgIds() = runTest(dispatcher) {
+        val repo = FakeSources(listOf(summary(xtream, SourceKind.XTREAM), summary(m3u, SourceKind.M3U)))
+        val epg = FakeEpg()
+        val vm = LiveViewModel(repo, FakeCatalog(), epg, SettingsOnly(), Clock { 0L })
+        val store = androidx.lifecycle.ViewModelStore().apply { put("live", vm) }
+        runCurrent()
+        vm.requestNowNext(listOf(liveScopedId(xtream, "same"), liveScopedId(m3u, "same")))
+        runCurrent()
+        advanceTimeBy(151)
+        runCurrent()
+        assertEquals(listOf(xtream, m3u), epg.nowNextSources)
+        store.clear()
+    }
+
+    @Test
+    fun addingOrRemovingProvidersUpdatesLiveAndGuideWithoutARestart() = runTest(dispatcher) {
+        val repo = FakeSources(emptyList())
+        val live = LiveViewModel(repo, FakeCatalog(), FakeEpg(), SettingsOnly(), Clock { 0L })
+        val guide = GuideViewModel(repo, FakeCatalog(), FakeEpg(), Clock { 0L })
+        runCurrent()
+        assertEquals(true, live.state.value.noSources)
+        repo.updates.value = listOf(summary(xtream, SourceKind.XTREAM), summary(m3u, SourceKind.M3U))
+        runCurrent()
+        assertEquals(false, live.state.value.noSources)
+        assertEquals("All providers", live.state.value.sourceName)
+        assertEquals(4, live.state.value.categories.size)
+        assertEquals(4, guide.state.value.categories.size)
+        repo.updates.value = emptyList()
+        runCurrent()
+        assertNull(live.state.value.sourceId)
+        assertNull(guide.state.value.sourceId)
+    }
+
+    @Test
+    fun providerFilterNarrowsGuideAndRestoresEverything() = runTest(dispatcher) {
+        val repo = FakeSources(listOf(summary(xtream, SourceKind.XTREAM), summary(m3u, SourceKind.M3U)))
+        fun row(source: SourceId) = ChannelRow(ContentKey(source, ContentKind.LIVE, RemoteId("1")), 1, "ESPN HD", null, "same", 0, RemoteId("sports"))
+        val user = SettingsOnly()
+        val vm = GuideViewModel(repo, FakeCatalog(listOf(row(xtream), row(m3u))), FakeEpg(), Clock { 0L }, userData = user)
+        runCurrent()
+        vm.providerFilter.toggle(xtream.value)
+        runCurrent()
+        assertEquals(liveScopedId(m3u, "1"), vm.state.value.grid!!.channel(0).id)
+        assertEquals(3, vm.state.value.categories.size)
+        vm.providerFilter.toggle(m3u.value)
+        runCurrent()
+        assertEquals(0, vm.state.value.grid!!.channelCount)
+        vm.providerFilter.showAll()
+        runCurrent()
+        assertEquals(liveScopedId(xtream, "1"), vm.state.value.grid!!.channel(0).id)
+        assertEquals(4, vm.state.value.categories.size)
+    }
+
     // ---------------- fakes ----------------
 
     private class FakeSources(private val list: List<SourceSummary>) : SourceRepository {
-        override fun sources(): Flow<List<SourceSummary>> = flowOf(list)
+        val updates = MutableStateFlow(list)
+        override fun sources(): Flow<List<SourceSummary>> = updates
         override suspend fun add(config: SourceConfig) = error("unused")
         override suspend fun update(config: SourceConfig) = Unit
         override suspend fun remove(id: SourceId) = Unit
@@ -122,14 +202,14 @@ class LiveSourceSelectionTest {
         override suspend fun probe(config: SourceConfig): AccountInfo = error("unused")
     }
 
-    private inner class FakeCatalog : CatalogRepository {
+    private inner class FakeCatalog(private val rows: List<ChannelRow> = emptyList()) : CatalogRepository {
         override fun categories(sourceId: SourceId, kind: ContentKind, includeHidden: Boolean): Flow<List<Category>> =
             flowOf(listOf(Category(sourceId, ContentKind.LIVE, RemoteId("sports"), "Sports", null, 0)))
         override fun channels(sourceId: SourceId, categoryId: RemoteId): PagingSource<Int, ChannelRow> = error("unused")
         override fun channelsAll(sourceId: SourceId, excludedCategories: Collection<String>): PagingSource<Int, ChannelRow> = error("unused")
-        override suspend fun channelListAll(sourceId: SourceId, excludedCategories: Collection<String>): List<ChannelRow> = emptyList()
+        override suspend fun channelListAll(sourceId: SourceId, excludedCategories: Collection<String>): List<ChannelRow> = rows.filter { it.key.sourceId == sourceId && it.categoryId.value !in excludedCategories }
         override suspend fun channelOrderAll(sourceId: SourceId, excludedCategories: Collection<String>): List<ContentKey> = emptyList()
-        override suspend fun channelList(sourceId: SourceId, categoryId: RemoteId): List<ChannelRow> = emptyList()
+        override suspend fun channelList(sourceId: SourceId, categoryId: RemoteId): List<ChannelRow> = rows.filter { it.key.sourceId == sourceId && it.categoryId == categoryId }
         override suspend fun channelNeighbours(key: ContentKey, categoryId: RemoteId): Pair<ChannelRow?, ChannelRow?> = null to null
         override suspend fun channel(key: ContentKey): ChannelRow? = null
         override suspend fun channelOrder(sourceId: SourceId, categoryId: RemoteId): List<ContentKey> = emptyList()
@@ -143,11 +223,14 @@ class LiveSourceSelectionTest {
     }
 
     private class FakeEpg : EpgRepository {
-        override suspend fun nowNext(sourceId: SourceId, epgKeys: Collection<String>, atMs: Long): Map<String, NowNext> = emptyMap()
-        override suspend fun programmes(sourceId: SourceId, epgKey: String, window: TimeWindow): List<ProgrammeRecord> = emptyList()
+        val requestedSources = mutableListOf<SourceId>()
+        val nowNextSources = mutableListOf<SourceId>()
+        override suspend fun nowNext(sourceId: SourceId, epgKeys: Collection<String>, atMs: Long): Map<String, NowNext> { nowNextSources += sourceId; return emptyMap() }
+        override suspend fun programmes(sourceId: SourceId, epgKey: String, window: TimeWindow): List<ProgrammeRecord> { requestedSources += sourceId; return emptyList() }
     }
 
     private class SettingsOnly : UserDataRepository {
+        private val settings = MutableStateFlow<Map<String, String>>(emptyMap())
         override fun favorites(kind: ContentKind?): Flow<List<ContentKey>> = flowOf(emptyList())
         override fun isFavorite(key: ContentKey): Flow<Boolean> = flowOf(false)
         override suspend fun setFavorite(key: ContentKey, favorite: Boolean) = Unit
@@ -157,8 +240,8 @@ class LiveSourceSelectionTest {
         override suspend fun recordChannelWatched(key: ContentKey) = Unit
         override fun recentChannels(limit: Int): Flow<List<ContentKey>> = flowOf(emptyList())
         override suspend fun setHidden(key: ContentKey, hidden: Boolean) = Unit
-        override fun setting(key: String): Flow<String?> = flowOf(null)
-        override suspend fun putSetting(key: String, value: String) = Unit
+        override fun setting(key: String): Flow<String?> = settings.map { it[key] }
+        override suspend fun putSetting(key: String, value: String) { settings.value = settings.value + (key to value) }
         override fun hiddenCategoryKeys(): Flow<Set<String>> = flowOf(emptySet())
         override suspend fun setCategoryHidden(sourceId: SourceId, kind: ContentKind, categoryId: String, hidden: Boolean) = Unit
     }

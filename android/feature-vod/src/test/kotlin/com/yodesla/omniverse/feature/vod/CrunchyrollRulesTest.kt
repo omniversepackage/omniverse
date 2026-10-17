@@ -136,7 +136,7 @@ class CrunchyrollRulesTest {
     @Test fun planRowsUseTheCrunchyrollVoiceAndOrder() {
         val rows = crunchyrollRows(bigPool, emptyList(), plan)
         assertEquals(
-            listOf("Top picks for you", "Most popular", "Newly added", "Classics", "Browse all"),
+            listOf("From your collection", "Highly rated in your collection", "Newest release years", "Classics", "Browse all"),
             rows.map { it.title },
         )
     }
@@ -150,7 +150,7 @@ class CrunchyrollRulesTest {
         val pool = (1..45).map { row("$it") }
         val rows = crunchyrollRows(pool, emptyList(), plan)
         assertEquals(listOf("top", "fresh", "more-0", "more-1"), rows.map { it.key })
-        assertEquals(listOf("Top picks for you", "Newly added", "Browse all", "Browse all · 2"), rows.map { it.title })
+        assertEquals(listOf("From your collection", "Newest release years", "Browse all", "Browse all · 2"), rows.map { it.title })
         assertEquals(35, rows.filter { it.key.startsWith("more-") }.sumOf { it.items.size })
     }
 

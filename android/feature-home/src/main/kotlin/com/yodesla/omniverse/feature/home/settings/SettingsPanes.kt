@@ -2,6 +2,7 @@ package com.yodesla.omniverse.feature.home.settings
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -154,12 +155,15 @@ fun SettingsCategoryPane(
         LazyColumn(
             modifier.fillMaxSize(),
             state = listState,
-            contentPadding = PaddingValues(start = OmniSpacing.l, end = OmniSpacing.tvSide, top = OmniSpacing.xl, bottom = 240.dp),
+            contentPadding = PaddingValues(start = OmniSpacing.tvSide, end = OmniSpacing.tvSide, top = OmniSpacing.xl, bottom = 240.dp),
             verticalArrangement = Arrangement.spacedBy(OmniSpacing.s),
         ) {
             item(key = SettingsRowKeys.TITLE) { Text(categoryTitle, style = t.browseHeading, color = c.textPrimary) }
             when (category) {
-                SettingsCategory.Sources -> sourcesRows(state, viewModel, onAddSource, sourceExtras, ctx, registry, openLangDialog = { langDialog = true }, openHiddenDialog = { hiddenDialog = true }, openPicker = { picker = it })
+                SettingsCategory.Sources -> {
+                    slot?.let { s -> item(key = "auto-sources") { SlotFocusBox(ctx.registry, "auto-sources") { s() } } }
+                    sourcesRows(state, viewModel, onAddSource, sourceExtras, ctx, registry, openLangDialog = { langDialog = true }, openHiddenDialog = { hiddenDialog = true }, openPicker = { picker = it })
+                }
                 SettingsCategory.Playback -> playbackRows(state, viewModel, rows, ctx, openStyleDialog = { styleDialog = true }) { picker = it }
                 SettingsCategory.Display -> {
                     displayRows(viewModel, rows, ctx) { picker = it }
@@ -171,7 +175,10 @@ fun SettingsCategoryPane(
                 }
                 }
                 SettingsCategory.ProfilesAndKids -> profileRows(state, guestMode, onOpenProfiles, onSetPickerAtStart, onCreateProfile, ctx, slot)
-                SettingsCategory.Metadata -> metadataRows(state, viewModel, ctx)
+                SettingsCategory.Metadata -> {
+                    slot?.let { s -> item(key = "auto-discovery") { SlotFocusBox(ctx.registry, "auto-discovery") { s() } } }
+                    metadataRows(state, viewModel, ctx)
+                }
                 // Slot-only categories: the app module owns everything here.
                 SettingsCategory.PhoneRemote, SettingsCategory.BackupRestore -> slot?.let { s -> item(key = SettingsRowKeys.SLOT) { SlotFocusBox(ctx.registry, SettingsRowKeys.SLOT) { s() } } }
                 SettingsCategory.AboutAndUpdates -> {
@@ -381,7 +388,7 @@ private fun HiddenCategoriesDialog(
                     Spacer(Modifier.height(OmniSpacing.s))
                     Text(stringResource(R.string.settings_hidden_categories_note), style = t.body, color = c.textSecondary)
                     Spacer(Modifier.height(OmniSpacing.l))
-                    LazyColumn(Modifier.height(360.dp), verticalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
+                    LazyColumn(Modifier.heightIn(max = 200.dp), contentPadding = PaddingValues(OmniSpacing.focusEdge), verticalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
                         items(rows, key = { it.key }) { row ->
                             HiddenCategoryRow(row, onShow, if (row == rows.firstOrNull()) firstFr else null)
                         }
@@ -655,6 +662,38 @@ private fun LazyListScope.displayRows(
             ctx = ctx, key = SettingsRowKeys.TEXT_SIZE,
         )
     }
+    // Task 203: Movies & Shows layout (TV-only). Classic is the sidebar the app has always used.
+    if (SettingsRowKeys.MOVIES_SHOWS_VIEW in rows) {
+        item(key = SettingsRowKeys.MOVIES_SHOWS_VIEW) {
+            val state by viewModel.state.collectAsStateWithLifecycle()
+            val options = listOf(
+                PickerOption(com.yodesla.omniverse.core.data.MoviesShowsView.CLASSIC, stringResource(R.string.movies_shows_view_classic)),
+                PickerOption(com.yodesla.omniverse.core.data.MoviesShowsView.HORIZONTAL, stringResource(R.string.movies_shows_view_horizontal)),
+            )
+            val title = stringResource(R.string.movies_shows_view_label)
+            OmniPickerRow(
+                title,
+                value = options.firstOrNull { it.value == state.moviesShowsView }?.label ?: options.first().label,
+                onClick = { openPicker(PickerSpec(title, options, state.moviesShowsView) { viewModel.setMoviesShowsView(it) }) },
+                secondary = stringResource(R.string.movies_shows_view_note),
+                ctx = ctx, key = SettingsRowKeys.MOVIES_SHOWS_VIEW,
+            )
+        }
+    }
+    if (SettingsRowKeys.LEFT_MENU in rows) {
+        item(key = SettingsRowKeys.LEFT_MENU) {
+            val state by viewModel.state.collectAsStateWithLifecycle()
+            OmniSwitchRow("Left opens main menu",
+                checked = state.leftOpensMenu, onCheckedChange = viewModel::setLeftOpensMenu,
+                disclosure = "Press Left twice at the category edge to open the main menu. Turn off to use Back instead.", ctx = ctx, key = SettingsRowKeys.LEFT_MENU)
+        }
+        item(key = SettingsRowKeys.MENU_WARNING) {
+            val state by viewModel.state.collectAsStateWithLifecycle()
+            OmniSwitchRow("Confirm before opening main menu",
+                checked = state.warnBeforeMainMenu, onCheckedChange = viewModel::setWarnBeforeMenu,
+                disclosure = "The warning also offers Don’t show again.", ctx = ctx, key = SettingsRowKeys.MENU_WARNING)
+        }
+    }
     // The Display slot (Customize Home) is rendered by the pane caller after these rows.
     if (SettingsRowKeys.SCREENSAVER in rows) {
         item(key = SettingsRowKeys.SCREENSAVER) {
@@ -756,7 +795,7 @@ private fun OmniInfoDialog(title: String, body: String, onDismiss: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(OmniSpacing.m),
             ) {
                 Text(title, style = t.headline, color = c.textPrimary)
-                Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                Column(Modifier.heightIn(max = 200.dp).verticalScroll(rememberScrollState())) {
                     Text(body, style = OmniTheme.type.body, color = c.textSecondary)
                 }
                 OmniButton(stringResource(R.string.settings_close), onDismiss, Modifier.focusRequester(fr), primary = true)
@@ -796,7 +835,7 @@ private fun CategoryLanguageDialog(
                 if (groups.isEmpty()) {
                     Text(stringResource(R.string.settings_cat_lang_choose_empty), style = t.body, color = c.textSecondary)
                 } else {
-                    LazyColumn(Modifier.heightIn(max = 360.dp), verticalArrangement = Arrangement.spacedBy(OmniSpacing.xs)) {
+                    LazyColumn(Modifier.heightIn(max = 200.dp), contentPadding = PaddingValues(OmniSpacing.focusEdge), verticalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
                         items(groups, key = { it.language.name }) { g ->
                             LangToggleRow(
                                 label = g.language.label,
@@ -810,7 +849,7 @@ private fun CategoryLanguageDialog(
                         }
                     }
                 }
-                Row(Modifier.fillMaxWidth().padding(top = OmniSpacing.m), horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m, Alignment.End)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m, Alignment.End)) {
                     OmniButton(stringResource(R.string.settings_cat_lang_cancel), onDismiss)
                     OmniButton(stringResource(R.string.settings_cat_lang_save), { onSave(sel) }, Modifier.focusRequester(fr), primary = true)
                 }
@@ -854,6 +893,7 @@ private fun LangToggleRow(label: String, secondary: String, checked: Boolean, fo
             .focusRequester(fr)
             .onFocusChanged { focused = it.isFocused }
             .then(if (focused || checked) Modifier.glassSurface(corner = 26.dp, focused = focused, shadow = false) else Modifier)
+            .then(if (focused) Modifier.border(2.dp, c.focusBorder, RoundedCornerShape(26.dp)) else Modifier)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,

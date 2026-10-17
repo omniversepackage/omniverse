@@ -1,4 +1,8 @@
 package com.yodesla.omniverse.feature.live.sports
+import com.yodesla.omniverse.designsystem.channelFavoriteMenu
+import com.yodesla.omniverse.designsystem.ChannelFavoriteButton
+import com.yodesla.omniverse.designsystem.FavoriteChannel
+
 
 import android.view.TextureView
 import androidx.compose.foundation.Canvas
@@ -81,7 +85,7 @@ import androidx.compose.runtime.setValue
 import java.util.Calendar
 
 private val LiveRed = Color(0xFFFF3B30)
-private val Turf = Color(0xFF34C77B)
+private val Turf = Color(0xFF00FB79)
 
 @Composable
 private fun sportsColors(): OmniColors = OmniTheme.colors.copy(
@@ -107,7 +111,7 @@ fun SportsRoute(viewModel: SportsViewModel, onWatch: (ContentKey, RemoteId) -> U
         Box(Modifier.fillMaxSize().background(OmniTheme.colors.background)) {
             StadiumStage(Modifier.fillMaxSize())
             FocusPivot(parentFraction = 0.30f, leading = 0.dp) {
-                LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = 160.dp), verticalArrangement = Arrangement.spacedBy(OmniSpacing.l)) {
+                LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(top = OmniSpacing.focusEdge, bottom = 160.dp), verticalArrangement = Arrangement.spacedBy(OmniSpacing.l)) {
                     item(key = "header") { SportsHeader(s) }
                     // Task 103: the teams this profile follows come first, ahead of everything else.
                     val mine = s.myTeams.size + s.myTeamGroups.size + s.myTeamAirings.size
@@ -225,8 +229,8 @@ private fun SportsHeader(s: SportsUiState) {
             Text(
                 "GAME DAY",
                 style = androidx.compose.ui.text.TextStyle(
-                    fontFamily = t.family, fontWeight = FontWeight.Bold, fontSize = 72.sp, lineHeight = 80.sp, letterSpacing = (-1.5).sp,
-                    brush = Brush.verticalGradient(listOf(Color.White, Color(0xFFB9F5D4), Turf)),
+                    fontFamily = t.family, fontWeight = FontWeight.Bold, fontSize = 40.sp, lineHeight = 48.sp, letterSpacing = (-1.5).sp,
+                    brush = Brush.verticalGradient(listOf(Color.White, Color(0xFFAFFFD3), Turf)),
                     shadow = Shadow(Turf.copy(alpha = 0.45f), offset = Offset(0f, 4f), blurRadius = 28f),
                 ),
                 modifier = Modifier.padding(end = OmniSpacing.m),
@@ -256,7 +260,7 @@ private fun GameHero(g: GameUi, now: Long, playing: HighlightClip?, paused: Bool
     val t = OmniTheme.type
     val game = g.game
     val clip = playing ?: g.clip
-    FocusCard(onClick = onOpen, onLongClick = onLongPress, modifier = modifier.padding(horizontal = OmniSpacing.tvSide).fillMaxWidth().height(330.dp)
+    FocusCard(onClick = onOpen, onLongClick = onLongPress, modifier = modifier.padding(horizontal = OmniSpacing.tvSide).fillMaxWidth().height(230.dp)
         .onPreviewKeyEvent { e -> if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionLeft) { onLeft(); true } else false }) {
         Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(teamColor(game.away).deep(), Color(0xFF070D16), teamColor(game.home).deep()), start = Offset.Zero, end = Offset.Infinite))) {
             if (playing != null) {
@@ -276,7 +280,7 @@ private fun GameHero(g: GameUi, now: Long, playing: HighlightClip?, paused: Bool
                     ClipVideo(clip.videoUrl, muted = paused, paused = paused, modifier = Modifier.fillMaxSize())
                 }
                 Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0.38f to Color(0xF2070D16), 0.62f to Color(0x80070D16), 1f to Color.Transparent)))
-            } else AsyncImage(model = game.imageUrl, contentDescription = null, contentScale = ContentScale.Fit, alpha = 0.35f,
+            } else AsyncImage(model = game.imageUrl, contentDescription = null, contentScale = ContentScale.Fit, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt, alpha = 0.35f,
                 modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight().aspectRatio(16f / 9f))
             Column(Modifier.fillMaxSize().padding(OmniSpacing.xl), verticalArrangement = Arrangement.SpaceBetween) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
@@ -289,13 +293,13 @@ private fun GameHero(g: GameUi, now: Long, playing: HighlightClip?, paused: Bool
                     if (clip != null) Tag(if (playing != null) "▶ ${clip.headline.take(48)}" else "▶ HIGHLIGHTS", c.textPrimary)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(OmniSpacing.l)) {
-                    TeamBlock(game.away, 96)
+                    TeamBlock(game.away, 64)
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         if (game.state != GameState.PRE) Text(FollowedTeams.scoreText(game.away.score, game.home.score, hiddenScore, false, " – "),
-                            style = if (hiddenScore) t.headline.copy(fontWeight = FontWeight.Bold) else t.hero.copy(fontWeight = FontWeight.Black, fontSize = 56.sp), color = c.textPrimary)
+                            style = if (hiddenScore) t.headline.copy(fontWeight = FontWeight.Bold) else t.hero.copy(fontWeight = FontWeight.Black, fontSize = 36.sp), color = c.textPrimary)
                         else Text("AT", style = t.title.copy(fontWeight = FontWeight.Black), color = c.accent)
                     }
-                    TeamBlock(game.home, 96)
+                    TeamBlock(game.home, 64)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
                     game.networks.take(3).forEach { NetworkChip(it) }
@@ -324,8 +328,8 @@ private fun TeamBlock(team: GameTeam, logo: Int) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
         TeamLogo(team, logo)
         Column {
-            Text(team.shortName, style = t.hero.copy(fontWeight = FontWeight.Black, shadow = Shadow(Color.Black.copy(alpha = 0.5f), blurRadius = 10f)),
-                color = OmniTheme.colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 280.dp))
+            Text(team.shortName, style = t.title.copy(fontSize = 28.sp, fontWeight = FontWeight.Bold, shadow = Shadow(Color.Black.copy(alpha = 0.5f), blurRadius = 10f)),
+                color = OmniTheme.colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 180.dp))
             team.record?.let { Text(it, style = t.body, color = OmniTheme.colors.textSecondary) }
         }
     }
@@ -334,7 +338,7 @@ private fun TeamBlock(team: GameTeam, logo: Int) {
 @Composable
 private fun TeamLogo(team: GameTeam, sizeDp: Int) {
     Box(Modifier.size(sizeDp.dp).clip(CircleShape).background(Brush.radialGradient(listOf(Color.White.copy(alpha = 0.16f), teamColor(team).copy(alpha = 0.5f)))), contentAlignment = Alignment.Center) {
-        if (team.logoUrl != null) AsyncImage(model = team.logoUrl, contentDescription = team.name, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().padding((sizeDp / 10).dp))
+        if (team.logoUrl != null) AsyncImage(model = team.logoUrl, contentDescription = team.name, contentScale = ContentScale.Fit, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt, modifier = Modifier.fillMaxSize().padding((sizeDp / 10).dp))
         else Text(team.abbreviation.take(3), style = OmniTheme.type.title.copy(fontWeight = FontWeight.Black, fontSize = (sizeDp * 0.3f).sp), color = Color.White)
     }
 }
@@ -355,7 +359,7 @@ private fun GameCard(g: GameUi, now: Long, reminded: Boolean, photos: Map<com.yo
         Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(teamColor(game.away).deep(0.6f), Color(0xFF0A111B), teamColor(game.home).deep(0.6f))))) {
             // A real photo behind the logos: this game's clip, else a recent photo from the sport.
             (g.clip?.thumbnailUrl ?: sportPhoto(photos, game.sport, game.id))?.let { url ->
-                AsyncImage(model = url, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(), alpha = 0.55f)
+                AsyncImage(model = url, contentDescription = null, contentScale = ContentScale.Crop, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt, modifier = Modifier.fillMaxSize(), alpha = 0.55f)
                 Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(teamColor(game.away).deep(0.6f).copy(alpha = 0.75f), Color(0xB30A111B), teamColor(game.home).deep(0.6f).copy(alpha = 0.75f)))))
             }
             Column(Modifier.fillMaxSize().padding(OmniSpacing.m), verticalArrangement = Arrangement.SpaceBetween) {
@@ -405,7 +409,7 @@ private fun ClipCard(clip: HighlightClip, previewing: Boolean, onFocus: (Boolean
     val playing = previewing
     FocusCard(onClick = onClick, modifier = Modifier.width(320.dp).height(200.dp).onFocusChanged { focused = it.hasFocus }) {
         Box(Modifier.fillMaxSize()) {
-            AsyncImage(model = clip.thumbnailUrl, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            AsyncImage(model = clip.thumbnailUrl, contentDescription = null, contentScale = ContentScale.Crop, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt, modifier = Modifier.fillMaxSize())
             if (previewing) ClipVideo(clip.videoUrl, muted = false, paused = false, modifier = Modifier.fillMaxSize())
             Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.35f to Color.Transparent, 1f to Color(0xF2050B14))))
             if (!playing) Box(Modifier.align(Alignment.Center).size(52.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.55f)), contentAlignment = Alignment.Center) {
@@ -448,7 +452,7 @@ private fun AiringCard(a: SportsAiring, now: Long, reminded: Boolean, channels: 
             if (left != null && right != null) Brush.horizontalGradient(listOf(teamColor(left).deep(0.6f), Color(0xFF0A111B), teamColor(right).deep(0.6f)))
             else Brush.verticalGradient(listOf(Turf.copy(alpha = 0.25f), Color(0xFF0A111B))))) {
             photo?.let { url ->
-                AsyncImage(model = url, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                AsyncImage(model = url, contentDescription = null, contentScale = ContentScale.Crop, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt, modifier = Modifier.fillMaxSize())
                 Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0x80050B14), Color(0xEB050B14)))))
             }
             Column(Modifier.fillMaxSize().padding(OmniSpacing.m), verticalArrangement = Arrangement.SpaceBetween) {
@@ -481,7 +485,7 @@ private fun AiringCard(a: SportsAiring, now: Long, reminded: Boolean, channels: 
 private fun ChannelCard(ch: SportsChannelUi, now: Long, onClick: () -> Unit) {
     val c = OmniTheme.colors
     val t = OmniTheme.type
-    FocusCard(onClick = onClick, modifier = Modifier.width(240.dp).height(140.dp)) {
+    FocusCard(onClick = onClick, onLongClick = channelFavoriteMenu(ch.row.key.sourceId.value, ch.row.key.remoteId.value, ch.row.name, ch.row.logoUrl), modifier = Modifier.width(240.dp).height(140.dp)) {
         Column(Modifier.fillMaxSize().padding(OmniSpacing.m), verticalArrangement = Arrangement.SpaceBetween) {
             LogoImage(ch.row.logoUrl, ch.row.name, Modifier.width(80.dp).height(44.dp))
             Column {
@@ -496,7 +500,7 @@ private fun ChannelCard(ch: SportsChannelUi, now: Long, onClick: () -> Unit) {
 
 @Composable
 private fun LeagueChips(leagues: List<String>, selected: String?, onSelect: (String?) -> Unit) {
-    LazyRow(contentPadding = PaddingValues(horizontal = OmniSpacing.tvSide), horizontalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
+    LazyRow(contentPadding = PaddingValues(horizontal = OmniSpacing.tvSide, vertical = OmniSpacing.focusEdge), horizontalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
         item { Chip("All sports", selected == null) { onSelect(null) } }
         items(leagues, key = { it }) { lg -> Chip(lg, selected == lg) { onSelect(lg) } }
     }
@@ -523,7 +527,7 @@ private fun Shelf(title: String, caption: String, liveDot: Boolean = false, cont
             Text(caption, style = OmniTheme.type.caption, color = c.textSecondary)
         }
         FocusPivot {
-            LazyRow(contentPadding = PaddingValues(horizontal = OmniSpacing.tvSide, vertical = OmniSpacing.s), horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m), content = content)
+            LazyRow(contentPadding = PaddingValues(horizontal = OmniSpacing.tvSide, vertical = OmniSpacing.focusEdge), horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m), content = content)
         }
     }
 }
@@ -594,9 +598,9 @@ private fun WatchPickerOverlay(p: WatchPicker, onPick: (WatchOption) -> Unit, on
             Text(p.title, style = t.headline, color = c.textPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(p.subtitle, style = t.body, color = c.textSecondary)
             Spacer(Modifier.height(OmniSpacing.s))
-            LazyColumn(Modifier.height((p.options.size.coerceAtMost(6) * 64).dp), verticalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
+            LazyColumn(Modifier.height((p.options.size.coerceAtMost(6) * 72 + 64).coerceAtMost(300).dp), contentPadding = PaddingValues(horizontal = OmniSpacing.tvSide, vertical = OmniSpacing.focusEdge), verticalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
                 items(p.options, key = { "${it.key.sourceId.value}-${it.key.remoteId.value}" }) { o ->
-                    FocusCard(onClick = { onPick(o) }, modifier = Modifier.fillMaxWidth().height(56.dp).then(if (o == p.options.first()) Modifier.focusRequester(first) else Modifier)) {
+                    FocusCard(onClick = { onPick(o) }, onLongClick = channelFavoriteMenu(o.key.sourceId.value, o.key.remoteId.value, o.name, o.logoUrl), modifier = Modifier.fillMaxWidth().height(56.dp).then(if (o == p.options.first()) Modifier.focusRequester(first) else Modifier)) {
                         Row(Modifier.fillMaxSize().padding(horizontal = OmniSpacing.m), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
                             LogoImage(o.logoUrl, o.name, Modifier.width(64.dp).height(36.dp))
                             Column(Modifier.weight(1f)) {
@@ -627,7 +631,7 @@ private fun FollowMenuOverlay(m: FollowMenu, onToggle: (FollowOption) -> Unit, o
             Text(m.title, style = t.headline, color = c.textPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text("OK follows a team; its games then lead the Sports page and Home.", style = t.body, color = c.textSecondary)
             Spacer(Modifier.height(OmniSpacing.s))
-            LazyColumn(Modifier.height((m.options.size.coerceAtMost(4) * 64).dp), verticalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
+            LazyColumn(Modifier.height((m.options.size.coerceAtMost(4) * 72 + 64).coerceAtMost(300).dp), contentPadding = PaddingValues(horizontal = OmniSpacing.tvSide, vertical = OmniSpacing.focusEdge), verticalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
                 items(m.options, key = { it.name }) { o ->
                     FocusCard(onClick = { onToggle(o) }, modifier = Modifier.fillMaxWidth().height(56.dp).then(if (o == m.options.first()) Modifier.focusRequester(first) else Modifier)) {
                         Row(Modifier.fillMaxSize().padding(horizontal = OmniSpacing.m), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {

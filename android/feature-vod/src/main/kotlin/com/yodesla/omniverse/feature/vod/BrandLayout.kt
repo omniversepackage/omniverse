@@ -84,7 +84,7 @@ internal data class BrandPlan(
 
 internal fun plan(brand: CategoryBrand, kindLabel: String): BrandPlan {
     val kind = kindLabel.uppercase()
-    return when (brand) {
+    val base = when (brand) {
         CategoryBrand.NETFLIX -> BrandPlan("Top 10 $kindLabel in this collection", "Critically acclaimed", "New releases", "Blockbusters from the vault", "Trending now", true, kind)
         CategoryBrand.DISNEY_PLUS -> BrandPlan("Recommended for you", "Top rated", "New to Disney+", "Timeless classics", "Explore more", false, kind)
         CategoryBrand.PRIME_VIDEO -> BrandPlan("Top 10 here", "Highly rated", "Recently released", "Throwbacks", "More to watch", true, kind)
@@ -95,12 +95,14 @@ internal fun plan(brand: CategoryBrand, kindLabel: String): BrandPlan {
         CategoryBrand.PEACOCK -> BrandPlan("Top 10 on Peacock", "Highly rated", "New on Peacock", "Throwbacks", "Binge-worthy", true, kind)
         CategoryBrand.CRUNCHYROLL -> BrandPlan("Top picks for you", "Most popular", "Newly added", "Classics", "Browse all", false, kind)
     }
+    // Provider ordering and ratings are not service viewing charts. Never invent ranks.
+    return base.copy(top10 = "From your collection", rated = "Highly rated in your collection", fresh = "Newest release years", more = "Browse all", rankNumerals = false)
 }
 
 /** Fixed spotlight height: cinematic, but still leaves a full poster row in view below it. */
 private val SpotlightHeight = 220.dp
 /** Once focus leaves the top row the spotlight collapses to a slim strip: 2+ rows stay in view (Kory). */
-private val SpotlightCompactHeight = 64.dp
+private val SpotlightCompactHeight = 128.dp
 private val PosterWidth = 104.dp
 
 /** Every poster on a service page opens the same hold-OK menu without threading it through each row. */
@@ -109,8 +111,8 @@ internal val LocalPosterMenu = androidx.compose.runtime.staticCompositionLocalOf
 /**
  * Service-style home for a branded category, laid out like the service's own TV app: a fixed
  * spotlight that follows whichever title has focus, over clean caption-free poster rows built
- * from the category's own titles (in provider order; "Top 10" means this collection's first ten,
- * not a popularity chart). Loads more pages as rows are built.
+ * from the category's own titles. Popularity comes from public TMDB US service data,
+ * never provider order. Loads more pages as rows are built.
  */
 @Composable
 internal fun BrandLayout(
@@ -167,24 +169,28 @@ internal fun BrandLayout(
     val pool by androidx.compose.runtime.produceState(basePool, basePool.map { it.uid() }, artVersion) {
         value = remapArt(basePool)
     }
+    val popular = servicePopularity(brand, kindLabel, selection, pool, visible)
     val p = plan(brand, kindLabel)
     // Task 84c: Netflix gets its own native-app layout (billboard + landscape rows).
     if (brand == CategoryBrand.NETFLIX) {
-        NetflixLayout(pool, p, kindLabel, firstFocus, onOpen, scores, continueWatching, myList, profileName, selection, onCwMenu, onLibrary)
+        NetflixLayout(pool, p, kindLabel, firstFocus, onOpen, scores, continueWatching, myList, profileName, selection, onCwMenu, onLibrary, popular, visible)
         return@CompositionLocalProvider
     }
-    val top = pool.take(10)
     // Task 102: the shelves in display order, built once per pool so the renderer and the prefetcher
     // walk the same rows — and the prefetch list keeps its identity across recompositions.
-    val shelves = remember(pool, brand, kindLabel) { brandShelves(p, pool) }
+    val shelves = remember(pool, brand, kindLabel, popular) {
+        val shelves = brandShelves(p, pool)
+        if (popular.isEmpty()) shelves else listOf(BrandShelf("popular", "Popular on ${brand.name.replace("_PLUS", "+").replace("_", " ").lowercase().replaceFirstChar { it.uppercase() }} · TMDB / US", popular, false)) + shelves
+    }
     var focused by remember(brand) { mutableStateOf<PosterRow?>(null) }
     val shown = focused ?: pool.firstOrNull { !it.posterUrl.isNullOrBlank() } ?: pool.firstOrNull()
-    val rank = shown?.let { s -> top.indexOfFirst { it.uid() == s.uid() }.takeIf { it >= 0 }?.plus(1) }
+    val rank: Int? = null
     var inTopRow by remember(brand) { mutableStateOf(true) }
     val onTopFocus: (PosterRow) -> Unit = { focused = it; inTopRow = true }
     val onFocus: (PosterRow) -> Unit = { focused = it; inTopRow = false }
     val spotlightHeight by androidx.compose.animation.core.animateDpAsState(
-        if (inTopRow) SpotlightHeight else SpotlightCompactHeight, tween(260), label = "spotlightHeight")
+        (if (inTopRow) SpotlightHeight else SpotlightCompactHeight) * com.yodesla.omniverse.designsystem.LocalTextScale.current,
+        tween(260), label = "spotlightHeight")
     var posterFocus by remember(brand) { mutableStateOf<PosterFocus?>(null) }
     PosterPrefetch(
         rows = remember(shelves) { shelves.map { shelf -> shelf.rows.map { it.posterUrl } } },
@@ -265,7 +271,7 @@ private fun Spotlight(row: PosterRow?, brand: CategoryBrand, p: BrandPlan, rank:
                 // The art fades itself out (alpha mask), so it melts into whatever stage is behind it
                 // (gradients, glow) instead of sitting in a solid box.
                 AsyncImage(
-                    model = r.posterUrl, contentDescription = null, contentScale = ContentScale.Crop,
+                    model = r.posterUrl, contentDescription = null, contentScale = ContentScale.Crop, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt,
                     alignment = Alignment.TopCenter,
                     modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight().fillMaxWidth(0.62f)
                         .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
@@ -284,7 +290,7 @@ private fun Spotlight(row: PosterRow?, brand: CategoryBrand, p: BrandPlan, rank:
                 )
             }
             Column(
-                Modifier.align(Alignment.CenterStart).padding(start = OmniSpacing.m).widthIn(max = 560.dp),
+                Modifier.align(Alignment.CenterStart).padding(start = OmniSpacing.tvSide).widthIn(max = 560.dp),
                 verticalArrangement = Arrangement.spacedBy(OmniSpacing.s),
             ) {
                 if (!compact) Row(verticalAlignment = Alignment.CenterVertically) {
@@ -301,19 +307,19 @@ private fun Spotlight(row: PosterRow?, brand: CategoryBrand, p: BrandPlan, rank:
                 // (fit, left-aligned, capped); the text stays as the fallback.
                 if (r.logoUrl != null) {
                     AsyncImage(
-                        model = r.logoUrl, contentDescription = r.name, contentScale = ContentScale.Fit,
+                        model = r.logoUrl, contentDescription = r.name, contentScale = ContentScale.Fit, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt,
                         alignment = Alignment.CenterStart,
-                        modifier = Modifier.heightIn(max = if (compact) 64.dp else 160.dp)
+                        modifier = Modifier.height(if (compact) 56.dp else 80.dp)
                             .widthIn(max = if (compact) 220.dp else 420.dp),
                     )
                 } else {
                     Text(
-                        displayTitle(r.name, null), maxLines = if (compact) 1 else 2, overflow = TextOverflow.Ellipsis, color = c.textPrimary,
-                        style = t.display.copy(fontSize = if (compact) 26.sp else 44.sp, lineHeight = if (compact) 30.sp else 48.sp, fontWeight = FontWeight.Bold,
+                        displayTitle(r.name, null), maxLines = 1, overflow = TextOverflow.Ellipsis, color = c.textPrimary,
+                        style = t.display.copy(fontSize = if (compact) 26.sp else 36.sp, lineHeight = if (compact) 30.sp else 40.sp, fontWeight = FontWeight.Bold,
                             shadow = Shadow(Color.Black.copy(alpha = 0.6f), blurRadius = 12f)),
                     )
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
                     if (rank != null && p.rankNumerals) {
                         Box(Modifier.background(c.accent, RoundedCornerShape(3.dp)).padding(horizontal = 6.dp, vertical = 2.dp)) {
                             Text("TOP 10", style = t.overline.copy(letterSpacing = 1.sp), color = Color.White)
@@ -337,9 +343,9 @@ private fun Spotlight(row: PosterRow?, brand: CategoryBrand, p: BrandPlan, rank:
 private fun Shelf(title: String, leading: androidx.compose.ui.unit.Dp = OmniSpacing.tvSide, content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit) {
     Column {
         Text(title, style = OmniTheme.type.title.copy(fontWeight = FontWeight.Bold), color = OmniTheme.colors.textPrimary,
-            modifier = Modifier.padding(start = OmniSpacing.s, bottom = OmniSpacing.xs))
+            modifier = Modifier.padding(start = OmniSpacing.focusEdge, bottom = OmniSpacing.xs))
         FocusPivot(leading = leading) {
-            LazyRow(contentPadding = PaddingValues(start = OmniSpacing.s, end = OmniSpacing.tvSide, top = OmniSpacing.s, bottom = OmniSpacing.s),
+            LazyRow(contentPadding = PaddingValues(start = OmniSpacing.focusEdge, end = OmniSpacing.tvSide, top = OmniSpacing.focusEdge, bottom = OmniSpacing.focusEdge),
                 horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m), content = content)
         }
     }
@@ -359,7 +365,7 @@ private fun BrandPoster(row: PosterRow, modifier: Modifier, onFocus: (PosterRow)
                     color = OmniTheme.colors.textPrimary, maxLines = 4, overflow = TextOverflow.Ellipsis)
             }
         } else {
-            AsyncImage(model = row.posterUrl, contentDescription = row.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            AsyncImage(model = row.posterUrl, contentDescription = row.name, contentScale = ContentScale.Crop, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt, modifier = Modifier.fillMaxSize())
         }
     }
 }

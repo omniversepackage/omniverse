@@ -26,14 +26,14 @@ import kotlin.math.floor
 
 /** Built-in avatar looks: no image assets, just a gradient disc + the name's initial. */
 private val AvatarPalettes = listOf(
-    Color(0xFF7C4DFF) to Color(0xFF311B92),
-    Color(0xFFFF6E40) to Color(0xFFBF360C),
-    Color(0xFF26C6DA) to Color(0xFF006064),
-    Color(0xFF66BB6A) to Color(0xFF1B5E20),
+    Color(0xFF7C4DFF) to Color(0xFF2000AD),
+    Color(0xFFFF6E40) to Color(0xFFCB3000),
+    Color(0xFF01E3FF) to Color(0xFF006064),
+    Color(0xFF22FF2C) to Color(0xFF007909),
     Color(0xFFFFD54F) to Color(0xFFE65100),
-    Color(0xFFEC407A) to Color(0xFF880E4F),
-    Color(0xFF5C6BC0) to Color(0xFF1A237E),
-    Color(0xFF9CCC65) to Color(0xFF33691E),
+    Color(0xFFFF2D74) to Color(0xFF960050),
+    Color(0xFF1D3FFF) to Color(0xFF000E98),
+    Color(0xFF9FFF32) to Color(0xFF268700),
 )
 
 /**
@@ -57,8 +57,8 @@ internal val PixelAvatars: List<PixelAvatarDef> = listOf(
         name = "Cat",
         bg = Color(0xFF3A2410),
         palette = pal(
-            'K' to Color(0xFF241A12), 'O' to Color(0xFFE8913C), 'G' to Color(0xFF57D65A),
-            'P' to Color(0xFFFF7EB0), 'W' to Color(0xFFFFFFFF), 'D' to Color(0xFFB35A16),
+            'K' to Color(0xFF241A12), 'O' to Color(0xFFFF9125), 'G' to Color(0xFF2EFF33),
+            'P' to Color(0xFFFF7EB0), 'W' to Color(0xFFFFFFFF), 'D' to Color(0xFFC95700),
         ),
         grid = listOf(
             "..KK........KK..",
@@ -83,7 +83,7 @@ internal val PixelAvatars: List<PixelAvatarDef> = listOf(
         name = "Dog",
         bg = Color(0xFF2E2013),
         palette = pal(
-            'K' to Color(0xFF241A12), 'B' to Color(0xFFA9714B), 'W' to Color(0xFFF7F0E6),
+            'K' to Color(0xFF241A12), 'B' to Color(0xFFF46300), 'W' to Color(0xFFFFF1DE),
             'T' to Color(0xFFFF6E9F),
         ),
         grid = listOf(
@@ -109,8 +109,8 @@ internal val PixelAvatars: List<PixelAvatarDef> = listOf(
         name = "Fox",
         bg = Color(0xFF331B0E),
         palette = pal(
-            'K' to Color(0xFF241A12), 'O' to Color(0xFFE8763C), 'G' to Color(0xFF2A2118),
-            'W' to Color(0xFFF7F0E6), 'P' to Color(0xFFFF7EB0),
+            'K' to Color(0xFF241A12), 'O' to Color(0xFFFF6F25), 'G' to Color(0xFF2A2118),
+            'W' to Color(0xFFFFF1DE), 'P' to Color(0xFFFF7EB0),
         ),
         grid = listOf(
             "..K..........K..",
@@ -135,7 +135,7 @@ internal val PixelAvatars: List<PixelAvatarDef> = listOf(
         name = "Frog",
         bg = Color(0xFF12281A),
         palette = pal(
-            'K' to Color(0xFF12281A), 'G' to Color(0xFF5FD05F), 'W' to Color(0xFFFFFFFF),
+            'K' to Color(0xFF12281A), 'G' to Color(0xFF30FF30), 'W' to Color(0xFFFFFFFF),
         ),
         grid = listOf(
             "..KKK......KKK..",
@@ -185,7 +185,7 @@ internal val PixelAvatars: List<PixelAvatarDef> = listOf(
         name = "Slime",
         bg = Color(0xFF16301C),
         palette = pal(
-            'K' to Color(0xFF1E3A1E), 'G' to Color(0xFF7BE06A), 'W' to Color(0xFFFFFFFF),
+            'K' to Color(0xFF1E3A1E), 'G' to Color(0xFF65FF4B), 'W' to Color(0xFFFFFFFF),
         ),
         grid = listOf(
             "................",
@@ -211,7 +211,7 @@ internal val PixelAvatars: List<PixelAvatarDef> = listOf(
         bg = Color(0xFF1A2230),
         palette = pal(
             'K' to Color(0xFF10141C), 'S' to Color(0xFFB9C4D6), 'R' to Color(0xFFFF4757),
-            'G' to Color(0xFF57D65A),
+            'G' to Color(0xFF2EFF33),
         ),
         grid = listOf(
             ".......KK.......",
@@ -236,7 +236,7 @@ internal val PixelAvatars: List<PixelAvatarDef> = listOf(
         name = "Alien",
         bg = Color(0xFF14281A),
         palette = pal(
-            'K' to Color(0xFF14281A), 'G' to Color(0xFF6FE07A), 'B' to Color(0xFF101820),
+            'K' to Color(0xFF14281A), 'G' to Color(0xFF50FF61), 'B' to Color(0xFF101820),
         ),
         grid = listOf(
             ".....KKKKKK.....",
@@ -261,7 +261,7 @@ internal val PixelAvatars: List<PixelAvatarDef> = listOf(
         name = "Astronaut",
         bg = Color(0xFF1B2A44),
         palette = pal(
-            'K' to Color(0xFF2A2A33), 'S' to Color(0xFFD8DEE9), 'V' to Color(0xFF3A6EA8),
+            'K' to Color(0xFF2A2A33), 'S' to Color(0xFFD8DEE9), 'V' to Color(0xFF006BE2),
             'W' to Color(0xFFFFFFFF),
         ),
         grid = listOf(
@@ -287,7 +287,7 @@ internal val PixelAvatars: List<PixelAvatarDef> = listOf(
         name = "Rocket",
         bg = Color(0xFF141A28),
         palette = pal(
-            'K' to Color(0xFF2A2A33), 'W' to Color(0xFFF7F0E6), 'R' to Color(0xFFFF5252),
+            'K' to Color(0xFF2A2A33), 'W' to Color(0xFFFFF1DE), 'R' to Color(0xFFFF5252),
             'O' to Color(0xFFFFB347), 'Y' to Color(0xFFFFE066),
         ),
         grid = listOf(
@@ -313,7 +313,7 @@ internal val PixelAvatars: List<PixelAvatarDef> = listOf(
         name = "Planet",
         bg = Color(0xFF241A44),
         palette = pal(
-            'K' to Color(0xFF1A1433), 'P' to Color(0xFFB07CE8), 'D' to Color(0xFF7A4FBF),
+            'K' to Color(0xFF1A1433), 'P' to Color(0xFFAF65FF), 'D' to Color(0xFF6B0FFF),
             'R' to Color(0xFFFFD54F),
         ),
         grid = listOf(
@@ -339,8 +339,8 @@ internal val PixelAvatars: List<PixelAvatarDef> = listOf(
         name = "Mushroom",
         bg = Color(0xFF2A1A12),
         palette = pal(
-            'K' to Color(0xFF2A1A12), 'R' to Color(0xFFE8484F), 'W' to Color(0xFFF7F0E6),
-            'D' to Color(0xFFB33A3F),
+            'K' to Color(0xFF2A1A12), 'R' to Color(0xFFFF313A), 'W' to Color(0xFFFFF1DE),
+            'D' to Color(0xFFED000A),
         ),
         grid = listOf(
             "................",
@@ -365,8 +365,8 @@ internal val PixelAvatars: List<PixelAvatarDef> = listOf(
         name = "Pizza",
         bg = Color(0xFF33200E),
         palette = pal(
-            'K' to Color(0xFF3A2410), 'Y' to Color(0xFFFFD54F), 'R' to Color(0xFFE8484F),
-            'G' to Color(0xFF5FA845), 'O' to Color(0xFFD9A05B),
+            'K' to Color(0xFF4A2300), 'Y' to Color(0xFFFFD54F), 'R' to Color(0xFFFF313A),
+            'G' to Color(0xFF3EED00), 'O' to Color(0xFFFFA435),
         ),
         grid = listOf(
             "................",
@@ -392,7 +392,7 @@ internal val PixelAvatars: List<PixelAvatarDef> = listOf(
         bg = Color(0xFF181820),
         palette = pal(
             'K' to Color(0xFF181820), 'S' to Color(0xFF3F4657), 'R' to Color(0xFFFF5252),
-            'G' to Color(0xFF57D65A), 'Y' to Color(0xFFFFD54F), 'W' to Color(0xFFFFFFFF),
+            'G' to Color(0xFF2EFF33), 'Y' to Color(0xFFFFD54F), 'W' to Color(0xFFFFFFFF),
         ),
         grid = listOf(
             "................",
@@ -417,8 +417,8 @@ internal val PixelAvatars: List<PixelAvatarDef> = listOf(
         name = "Cactus",
         bg = Color(0xFF123018),
         palette = pal(
-            'K' to Color(0xFF123018), 'G' to Color(0xFF4FBF67), 'P' to Color(0xFFD98243),
-            'O' to Color(0xFFB35A16),
+            'K' to Color(0xFF123018), 'G' to Color(0xFF0FFF42), 'P' to Color(0xFFFF7C1D),
+            'O' to Color(0xFFC95700),
         ),
         grid = listOf(
             "................",
@@ -443,7 +443,7 @@ internal val PixelAvatars: List<PixelAvatarDef> = listOf(
         name = "Star",
         bg = Color(0xFF2E2A10),
         palette = pal(
-            'K' to Color(0xFF6B5A10), 'W' to Color(0xFFFFE066),
+            'K' to Color(0xFF7B6400), 'W' to Color(0xFFFFE066),
         ),
         grid = listOf(
             "................",

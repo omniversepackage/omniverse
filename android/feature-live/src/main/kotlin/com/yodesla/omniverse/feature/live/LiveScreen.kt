@@ -1,4 +1,5 @@
 package com.yodesla.omniverse.feature.live
+import com.yodesla.omniverse.designsystem.channelFavoriteMenu
 import com.yodesla.omniverse.designsystem.OmniButton
 
 import androidx.compose.animation.core.animateFloatAsState
@@ -192,6 +193,8 @@ private fun LiveScreen(state: LiveUiState, vm: LiveViewModel, playingKey: Conten
             }
             Spacer(Modifier.weight(1f))
             // Task 84h: the active category-language filter; OK opens Settings > Sources.
+            LiveProviderButton(vm.providerFilter)
+            Spacer(Modifier.width(OmniSpacing.m))
             state.langFilter?.let { lf ->
                 OmniButton(context.getString(R.string.live_lang_filter_chip, lf.label, lf.hiddenLive), onClick = onOpenLanguageFilter)
                 Spacer(Modifier.width(OmniSpacing.l))
@@ -236,7 +239,7 @@ private fun LiveScreen(state: LiveUiState, vm: LiveViewModel, playingKey: Conten
                                 }
                             } else if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionLeft) { onOpenNavigation(); true } else false
                         },
-                    contentPadding = PaddingValues(start = OmniSpacing.tvSide, end = OmniSpacing.m, bottom = OmniSpacing.xxl),
+                    contentPadding = PaddingValues(start = OmniSpacing.tvSide, top = OmniSpacing.focusEdge, end = OmniSpacing.tvSide, bottom = OmniSpacing.xxl),
                     verticalArrangement = Arrangement.spacedBy(OmniSpacing.s),
                 ) {
                     if (onSearch != null) item(key = "__search") {
@@ -250,7 +253,7 @@ private fun LiveScreen(state: LiveUiState, vm: LiveViewModel, playingKey: Conten
                             Box(Modifier.fillMaxSize().padding(horizontal = OmniSpacing.m), contentAlignment = Alignment.CenterStart) {
                                 Column {
                                     Text("Multiview", style = OmniTheme.type.body, color = c.textPrimary, maxLines = 1)
-                                    Text("2\u20134 channels at once", style = OmniTheme.type.caption, color = c.textTertiary, maxLines = 1)
+                                    Text("2\u20134 channels", style = OmniTheme.type.caption, color = c.textTertiary, maxLines = 1)
                                 }
                             }
                         }
@@ -307,7 +310,7 @@ private fun LiveScreen(state: LiveUiState, vm: LiveViewModel, playingKey: Conten
                                 // Nothing focusable to the right of the list: Right opens the guide.
                                 if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionRight) { onOpenGuide(); true } else false
                             },
-                        contentPadding = PaddingValues(end = OmniSpacing.m, bottom = OmniSpacing.xxl),
+                        contentPadding = PaddingValues(start = OmniSpacing.tvSide, top = OmniSpacing.focusEdge, end = OmniSpacing.tvSide, bottom = OmniSpacing.xxl),
                         verticalArrangement = Arrangement.spacedBy(OmniSpacing.s),
                     ) {
                         if (channels.itemCount == 0 && state.loading) {
@@ -315,7 +318,7 @@ private fun LiveScreen(state: LiveUiState, vm: LiveViewModel, playingKey: Conten
                         }
                         items(channels.itemCount, key = channels.itemKey { "${it.key.sourceId.value}/${it.key.remoteId.value}" }) { index ->
                             val row = channels[index] ?: return@items
-                            val nn = row.epgKey?.let { state.nowNext[it] }
+                            val nn = liveEpgKey(row)?.let { state.nowNext[it] }
                             val fav = row.key in state.favorites
                             val ui = remember(row, nn, fav, playingKey) { row.toUi(nn, fav, row.key == playingKey) }
                             ChannelRow(
@@ -339,7 +342,7 @@ private fun LiveScreen(state: LiveUiState, vm: LiveViewModel, playingKey: Conten
             // Preview of the focused channel: see what's on before switching.
             LivePreviewPane(
                 row = focused,
-                nn = focused?.epgKey?.let { state.nowNext[it] },
+                nn = focused?.let(::liveEpgKey)?.let { state.nowNext[it] },
                 modifier = Modifier.weight(1f - effectiveListWeight).fillMaxHeight().widthIn(min = previewMinWidth).padding(start = OmniSpacing.s, end = OmniSpacing.tvSide, bottom = OmniSpacing.m),
                 video = miniPlayer,
             )
@@ -376,7 +379,10 @@ private fun LiveScreen(state: LiveUiState, vm: LiveViewModel, playingKey: Conten
     // Hold-OK on a channel: Watch / Favorites / Multiview / Remind me (no longer a silent favourite toggle).
     val menu = menuRow
     if (menu != null) {
-        val nn = menu.epgKey?.let { state.nowNext[it] }
+        val sourceChoices by androidx.compose.runtime.produceState<List<Pair<String, ChannelRow>>>(emptyList(), menu.key) {
+            value = vm.sourceChoices(menu)
+        }
+        val nn = liveEpgKey(menu)?.let { state.nowNext[it] }
         val actions = channelMenuActions(
             ChannelMenuState(
                 favorite = menu.key in state.favorites,
@@ -394,7 +400,9 @@ private fun LiveScreen(state: LiveUiState, vm: LiveViewModel, playingKey: Conten
             title = menu.name,
             subtitle = listOfNotNull(menu.number?.toString(), nn?.nowTitle).joinToString("  ·  "),
             posterUrl = menu.logoUrl,
-            actions = actions,
+            actions = actions + sourceChoices.map { (sourceName, row) ->
+                com.yodesla.omniverse.designsystem.MenuAction("Watch via $sourceName · ${row.name}", { vm.onChannelClick(row) })
+            },
             onDismiss = { menuRow = null },
         )
     }
@@ -453,7 +461,7 @@ private fun LiveScreen(state: LiveUiState, vm: LiveViewModel, playingKey: Conten
     // Ask for now/next of rows entering the viewport (the VM debounces).
     LaunchedEffect(channels, listState) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.map { it.index } }
-            .map { idx -> idx.mapNotNull { i -> if (i < channels.itemCount) channels.peek(i)?.epgKey else null } }
+            .map { idx -> idx.mapNotNull { i -> if (i < channels.itemCount) channels.peek(i)?.let(::liveEpgKey) else null } }
             .distinctUntilChanged()
             .collectLatest { vm.requestNowNext(it) }
     }
@@ -474,6 +482,8 @@ private fun LiveScreenCompact(state: LiveUiState, vm: LiveViewModel, playingKey:
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.padding(horizontal = OmniSpacing.tvSide, vertical = OmniSpacing.s), verticalAlignment = Alignment.CenterVertically) {
             Text("Live", style = OmniTheme.type.title, color = c.textPrimary)
+            Spacer(Modifier.width(OmniSpacing.m))
+            LiveProviderButton(vm.providerFilter)
             CategoryDestinationAccent(
                 selectedName,
                 Modifier.padding(start = OmniSpacing.s).width(3.dp).height(14.dp),
@@ -482,7 +492,7 @@ private fun LiveScreenCompact(state: LiveUiState, vm: LiveViewModel, playingKey:
         }
         LazyRow(
             Modifier.fillMaxWidth(),
-            contentPadding = PaddingValues(horizontal = OmniSpacing.tvSide, vertical = OmniSpacing.s),
+            contentPadding = PaddingValues(horizontal = OmniSpacing.tvSide, vertical = OmniSpacing.focusEdge),
             horizontalArrangement = Arrangement.spacedBy(OmniSpacing.s),
         ) {
             items(state.categories, key = { it.id }) { cat ->
@@ -510,7 +520,7 @@ private fun LiveScreenCompact(state: LiveUiState, vm: LiveViewModel, playingKey:
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize().focusRestorer(firstChannel),
-                contentPadding = PaddingValues(start = OmniSpacing.tvSide, end = OmniSpacing.tvSide, bottom = OmniSpacing.xxl),
+                contentPadding = PaddingValues(start = OmniSpacing.tvSide, top = OmniSpacing.focusEdge, end = OmniSpacing.tvSide, bottom = OmniSpacing.xxl),
                 verticalArrangement = Arrangement.spacedBy(OmniSpacing.s),
             ) {
                 if (channels.itemCount == 0 && state.loading) {
@@ -518,12 +528,13 @@ private fun LiveScreenCompact(state: LiveUiState, vm: LiveViewModel, playingKey:
                 }
                 items(channels.itemCount, key = channels.itemKey { "${it.key.sourceId.value}/${it.key.remoteId.value}" }) { index ->
                     val row = channels[index] ?: return@items
-                    val nn = row.epgKey?.let { state.nowNext[it] }
+                    val nn = liveEpgKey(row)?.let { state.nowNext[it] }
                     val fav = row.key in state.favorites
                     val ui = remember(row, nn, fav, playingKey) { row.toUi(nn, fav, row.key == playingKey) }
                     CompactChannelRow(
                         ui = ui,
                         onClick = { vm.onChannelClick(row) },
+                        onLongClick = channelFavoriteMenu(row.key.sourceId.value, row.key.remoteId.value, row.name, row.logoUrl),
                         modifier = if (index == 0) Modifier.focusRequester(firstChannel) else Modifier,
                     )
                 }
@@ -547,7 +558,7 @@ private fun LiveScreenCompact(state: LiveUiState, vm: LiveViewModel, playingKey:
     // Ask for now/next of rows entering the viewport (the VM debounces).
     LaunchedEffect(channels, listState) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.map { it.index } }
-            .map { idx -> idx.mapNotNull { i -> if (i < channels.itemCount) channels.peek(i)?.epgKey else null } }
+            .map { idx -> idx.mapNotNull { i -> if (i < channels.itemCount) channels.peek(i)?.let(::liveEpgKey) else null } }
             .distinctUntilChanged()
             .collectLatest { vm.requestNowNext(it) }
     }
@@ -555,9 +566,9 @@ private fun LiveScreenCompact(state: LiveUiState, vm: LiveViewModel, playingKey:
 
 /** Phone channel row: number, logo, name, current programme (one line each). */
 @Composable
-private fun CompactChannelRow(ui: ChannelRowUi, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun CompactChannelRow(ui: ChannelRowUi, onClick: () -> Unit, onLongClick: () -> Unit, modifier: Modifier = Modifier) {
     val c = OmniTheme.colors
-    FocusCard(onClick = onClick, modifier = modifier.fillMaxWidth().height(64.dp)) {
+    FocusCard(onClick = onClick, onLongClick = onLongClick, modifier = modifier.fillMaxWidth().height(64.dp)) {
         Row(Modifier.fillMaxSize().padding(horizontal = OmniSpacing.m), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 ui.number?.toString() ?: "", style = OmniTheme.type.numeric, color = c.textTertiary,

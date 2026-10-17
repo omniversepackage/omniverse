@@ -1,4 +1,8 @@
 package com.yodesla.omniverse.feature.live.multiview
+import com.yodesla.omniverse.designsystem.channelFavoriteMenu
+import com.yodesla.omniverse.designsystem.ChannelFavoriteButton
+import com.yodesla.omniverse.designsystem.FavoriteChannel
+
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -6,6 +10,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -131,7 +136,7 @@ fun MultiviewPicker(
                 Spacer(Modifier.height(OmniSpacing.m))
                 Text(context.getString(R.string.multiview_saved_groups), style = OmniTheme.type.title, color = c.textPrimary)
                 Spacer(Modifier.height(OmniSpacing.s))
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
+                LazyRow(contentPadding = PaddingValues(OmniSpacing.focusEdge), horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
                     itemsIndexed(groups, key = { i, g -> "group-$i-${g.name}" }) { index, group ->
                         GroupCard(
                             group = group,
@@ -144,6 +149,7 @@ fun MultiviewPicker(
             Spacer(Modifier.height(OmniSpacing.m))
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 200.dp),
+                contentPadding = PaddingValues(OmniSpacing.focusEdge),
                 horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m),
                 verticalArrangement = Arrangement.spacedBy(OmniSpacing.m),
                 modifier = Modifier.fillMaxSize(),
@@ -153,6 +159,7 @@ fun MultiviewPicker(
                     val badge = selected.indexOfFirst { it == row.key }
                     FocusCard(
                         onClick = { selected = MultiviewLayout.toggled(selected, row.key) },
+                        onLongClick = channelFavoriteMenu(row.key.sourceId.value, row.key.remoteId.value, row.name, row.logoUrl),
                         modifier = Modifier.height(92.dp).then(if (index == 0) Modifier.focusRequester(first) else Modifier),
                     ) {
                         Row(Modifier.fillMaxSize().padding(OmniSpacing.m), verticalAlignment = Alignment.CenterVertically) {

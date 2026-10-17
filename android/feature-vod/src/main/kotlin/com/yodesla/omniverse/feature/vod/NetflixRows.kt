@@ -50,7 +50,7 @@ internal fun netflixBillboardArt(row: PosterRow): NetflixArt = when {
 /** One row of the Netflix home, in the order the native app shows them. */
 internal sealed interface NetflixRow {
     data class ContinueWatching(val title: String, val cards: List<ContinuePosterUi>) : NetflixRow
-    data class Top10(val title: String, val rows: List<PosterRow>) : NetflixRow
+    data class Top10(val title: String, val rows: List<PosterRow>, val ranks: Map<String, Int> = emptyMap()) : NetflixRow
     data class MyList(val title: String, val rows: List<PosterRow>) : NetflixRow
     data class Shelf(val key: String, val title: String, val rows: List<PosterRow>) : NetflixRow
 }
@@ -65,6 +65,8 @@ internal fun netflixRows(
     pool: List<PosterRow>,
     plan: BrandPlan,
     profileName: String?,
+    popular: List<PosterRow> = emptyList(),
+    official: OfficialNetflix = OfficialNetflix(),
 ): List<NetflixRow> {
     val rows = mutableListOf<NetflixRow>()
     if (continueWatching.isNotEmpty()) {
@@ -72,7 +74,9 @@ internal fun netflixRows(
         rows += NetflixRow.ContinueWatching(title, continueWatching)
     }
     val top = pool.take(10)
-    if (top.isNotEmpty()) rows += NetflixRow.Top10(plan.top10, top)
+    if (official.rows.isNotEmpty()) rows += NetflixRow.Top10("Netflix US Top 10 · week ending ${official.week}", official.rows, official.ranks)
+    if (official.rows.isEmpty() && popular.isNotEmpty()) rows += NetflixRow.Shelf("popular", "Popular on Netflix · TMDB / US", popular)
+    if (top.isNotEmpty()) rows += NetflixRow.Shelf("collection", "From your collection", top)
     if (myList.isNotEmpty()) rows += NetflixRow.MyList("My List", myList)
     val rated = pool.filter { (it.rating ?: 0f) >= 7f }.sortedByDescending { it.rating }.take(20)
     if (rated.size >= 4) rows += NetflixRow.Shelf("rated", plan.rated, rated)

@@ -66,6 +66,12 @@ class Tmdb(
     private var windowStartMs = 0L
     private var windowCount = 0
 
+    /** Public discovery requests contain no provider credentials or viewer history. */
+    suspend fun discovery(path: String, query: String = ""): JsonObject = withContext(io) {
+        require(path.matches(Regex("[a-z/]+")))
+        fetch("$apiBase/$path?api_key=$apiKey&language=en-US$query")
+    }
+
     suspend fun movie(id: String): TmdbMeta = withContext(io) {
         val json = fetch("$apiBase/movie/$id?api_key=$apiKey&append_to_response=images,release_dates&include_image_language=en,null")
         parseMeta(json, usCertification(json["release_dates"] as? JsonObject))

@@ -63,7 +63,9 @@ import com.yodesla.omniverse.designsystem.OmniTheme
 import com.yodesla.omniverse.designsystem.PosterCard
 import com.yodesla.omniverse.designsystem.displayTitle
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -73,6 +75,7 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.transformLatest
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import com.yodesla.omniverse.core.data.ShowEverything
@@ -81,6 +84,8 @@ import com.yodesla.omniverse.feature.home.R
 
 @Immutable
 data class SearchState(val query: String = "", val rows: List<HomeRow> = emptyList(), val searched: Boolean = false, val message: String? = null,
+    val favoriteChannels: Set<com.yodesla.omniverse.core.model.ContentKey> = emptySet(),
+    val loading: Boolean = false,
     /** Most recent first, at most [SEARCH_HISTORY_MAX]. */
     val history: List<String> = emptyList(),
     /** Closest visible title offered when a search finds nothing (task 82 "Did you mean …?"). */
@@ -138,6 +143,7 @@ class SearchViewModel(
      *  libraries). [visibility] still double-checks every row; this keeps hidden rows out of the
      *  TMDB dedup winner, so a locked Plex copy never hides its visible IPTV twin. */
     private val excludedCategoryKeys: Flow<Collection<String>> = kotlinx.coroutines.flow.flowOf(emptySet()),
+    private val userData: com.yodesla.omniverse.core.data.UserDataRepository? = null,
 ) : ViewModel() {
     @Volatile private var programmeCards: Map<String, com.yodesla.omniverse.core.data.ProgrammeHit> = emptyMap()
     private val _state = MutableStateFlow(SearchState())
@@ -151,6 +157,9 @@ class SearchViewModel(
     private val limitFlow = MutableStateFlow(SEARCH_PAGE)
 
     init {
+        userData?.favorites(ContentKind.LIVE)?.onEach { keys ->
+            _state.update { it.copy(favoriteChannels = keys.toSet()) }
+        }?.launchIn(viewModelScope)
         // Voice / global search (task 80): the spoken text arrives pre-filled and is searched at once.
         initialQuery?.trim()?.takeIf { it.isNotEmpty() }?.let { q ->
             _state.update { it.copy(query = q) }
@@ -163,34 +172,53 @@ class SearchViewModel(
         // Re-runs on parental lock/unlock and filter changes too, not just on typing.
         combine(query.debounce(200).distinctUntilChanged(), visibility, combine(filtersFlow, sortFlow) { f, sort -> f to sort }, excludedCategoryKeys.distinctUntilChanged(), limitFlow) { q, vis, filterSort, off, limit ->
             SearchInput(q, vis, filterSort.first, off, limit, filterSort.second)
-        }.mapLatest { input ->
+        }.transformLatest { input ->
             val q = input.q; val vis = input.vis; val f = input.f; val off = input.off; val limit = input.limit; val sort = input.sort
-            if (q.isBlank() && !f.active) return@mapLatest SearchResults(emptyList(), false, null)
-            val built = if (f.active) buildFilteredRows(q, f, vis, off, limit, sort) else if (sort == SearchSort.RELEVANCE) buildRows(q, vis) else buildSortedRows(q, vis, off, limit, sort)
+            if (q.isBlank() && !f.active) {
+                programmeCards = emptyMap()
+                emit(SearchResults(emptyList(), false, null))
+                return@transformLatest
+            }
+            // Clear the previous query immediately. The title section can appear while guide search
+            // is still running, and transformLatest prevents an old query from publishing late rows.
+            programmeCards = emptyMap()
+            emit(SearchResults(emptyList(), false, null, loading = true))
+            val built = buildFilteredRows(q, f, vis, off, limit, sort)
             var rows = built.rows
-            var cards = built.programmeCards
             var truncated = built.truncated
             var titleCount = titleCount(rows)
-            var suggestion: String? = null
+            emit(SearchResults(rows, true, null, truncated, loading = !f.active && rows.isEmpty()))
             // Typo tolerance (task 82): no titles for a real query → retry the normalized form, then
             // offer the closest visible title as "Did you mean …?". The retry keeps the filters on;
             // the suggestion ignores them, so it only appears when no filter is active.
             if (titleCount == 0 && q.trim().length >= 4) {
                 val normalized = normalize(q)
                 if (normalized.isNotBlank() && normalized != q.trim().lowercase()) {
-                    val retry = if (f.active) buildFilteredRows(normalized, f, vis, off, limit, sort) else if (sort == SearchSort.RELEVANCE) buildRows(normalized, vis) else buildSortedRows(normalized, vis, off, limit, sort)
+                    val retry = buildFilteredRows(normalized, f, vis, off, limit, sort)
                     val retryTitles = titleCount(retry.rows)
-                    if (retryTitles > 0) { rows = retry.rows; cards = retry.programmeCards; truncated = retry.truncated; titleCount = retryTitles }
+                    if (retryTitles > 0) {
+                        rows = retry.rows; truncated = retry.truncated; titleCount = retryTitles
+                        emit(SearchResults(rows, true, null, truncated))
+                    }
                 }
-                if (titleCount == 0 && !f.active) suggestion = closestVisibleTitle(q, vis)
             }
-            programmeCards = cards
-            SearchResults(rows, true, suggestion, truncated)
-        }.onEach { result -> _state.update { it.copy(rows = result.rows, searched = result.searched, didYouMean = result.didYouMean, truncated = result.truncated, limit = limitFlow.value) } }
+            if (f.active) return@transformLatest
+            val channels = try { buildChannelRows(q, vis) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { emptyList() }
+            if (channels.isNotEmpty()) emit(SearchResults(channels + rows, true, null, truncated))
+            val programmes = try { buildProgrammeRows(q, vis) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { Built(emptyList(), emptyMap()) }
+            programmeCards = programmes.programmeCards
+            val suggestion = if (titleCount == 0 && q.trim().length >= 4) closestVisibleTitle(q, vis) else null
+            emit(SearchResults(channels + programmes.rows + rows, true, suggestion, truncated))
+        }.onEach { result -> _state.update { it.copy(rows = result.rows, searched = result.searched, loading = result.loading, didYouMean = result.didYouMean, truncated = result.truncated, limit = limitFlow.value) } }
             .launchIn(viewModelScope)
         // Task 122: the chips come from the data — only decades that actually have titles and genres
         // that exist, for the kinds currently selected, under the same category exclusions.
         combine(filtersFlow, excludedCategoryKeys.distinctUntilChanged()) { f, off -> f.kinds to off }
+            .distinctUntilChanged()
             .mapLatest { (kinds, off) ->
                 search.decadeOptions(kinds, off) to kinds.flatMap { catalog.genreOptions(it, null, null, off) }
                     .filterNot { it.lowercase() in SEARCH_RETIRED_GENRE_CHIPS }
@@ -205,17 +233,22 @@ class SearchViewModel(
     /** One search pass: display rows plus the "On TV" cards that back them (kept for reminder toggles). */
     private class Built(val rows: List<HomeRow>, val programmeCards: Map<String, com.yodesla.omniverse.core.data.ProgrammeHit>, val truncated: Boolean = false)
 
-    private data class SearchResults(val rows: List<HomeRow>, val searched: Boolean, val didYouMean: String?, val truncated: Boolean = false)
+    private data class SearchResults(val rows: List<HomeRow>, val searched: Boolean, val didYouMean: String?, val truncated: Boolean = false, val loading: Boolean = false)
 
-    private suspend fun buildRows(q: String, vis: Visibility): Built {
-        val hits = search.search(q, limitPerKind = 24)
+    private suspend fun buildChannelRows(q: String, vis: Visibility): List<HomeRow> {
+        val hits = search.searchLive(q, limit = 24)
         val rows = ArrayList<HomeRow>()
-        hits[ContentKind.LIVE]?.let { list ->
-            rows += HomeRow("live", "Channels", list.mapNotNull { h ->
+        if (hits.isNotEmpty()) {
+            rows += HomeRow("live", "Channels", hits.mapNotNull { h ->
                 val ch = catalog.channel(h.key)?.takeIf { vis("LIVE", it.key.sourceId.value, it.categoryId.value) } ?: return@mapNotNull null
                 HomeCard("c-${h.key.sourceId.value}-${h.key.remoteId.value}", ch.key, ch.name, null, ch.logoUrl, isChannel = true, categoryId = ch.categoryId)
             })
         }
+        return rows.filter { it.cards.isNotEmpty() }
+    }
+
+    private suspend fun buildProgrammeRows(q: String, vis: Visibility): Built {
+        val rows = ArrayList<HomeRow>()
         // "On TV": guide programmes airing now or in the next 24 h (TiviMate-style EPG search).
         val now = clock.nowMs()
         val progs = search.searchProgrammes(q, now).filter { vis("LIVE", it.channel.sourceId.value, it.categoryId.value) }
@@ -224,19 +257,7 @@ class SearchViewModel(
             val time = if (h.startMs <= now) "Now" else com.yodesla.omniverse.designsystem.ClockFormat.format(h.startMs)
             HomeCard(id, h.channel, h.title, "$time  ·  ${h.channelName}", h.logoUrl, isChannel = true, categoryId = h.categoryId)
         })
-        for ((kind, label) in listOf(ContentKind.VOD to "Movies", ContentKind.SERIES to "Shows")) {
-            hits[kind]?.let { list ->
-                // One card per title: the best-ranked VISIBLE hit wins for each exact TMDB id; the
-                // detail page offers the other sources/editions. Never grouped on title guesses.
-                val visible = list.mapNotNull { h ->
-                    catalog.poster(h.key)?.takeIf { p -> p.categoryId?.let { vis(kind.name, p.key.sourceId.value, it.value) } ?: true }
-                }.distinctBy { p -> p.tmdbId?.takeIf { it.isNotBlank() }?.let { "tmdb:$it" } ?: "key:${p.key.sourceId.value}:${p.key.remoteId.value}" }
-                if (visible.isNotEmpty()) rows += HomeRow(kind.name, label, visible.map { p ->
-                    HomeCard("${kind.name}-${p.key.sourceId.value}-${p.key.remoteId.value}", p.key, displayTitle(p.name, p.year), p.year?.toString(), p.posterUrl)
-                })
-            }
-        }
-        return Built(rows.filter { it.cards.isNotEmpty() }, progCards)
+        return Built(rows, progCards)
     }
 
     /**
@@ -245,12 +266,6 @@ class SearchViewModel(
      * paging a recent-title subset. No Channels / On TV rows here: live and programme search is
      * the no-filter path (a decade or genre says nothing about a live channel).
      */
-    private suspend fun buildSortedRows(q: String, vis: Visibility, off: Collection<String>, limit: Int, sort: SearchSort): Built {
-        val live = buildRows(q, vis)
-        val titles = buildFilteredRows(q, com.yodesla.omniverse.core.data.SearchFilters.None, vis, off, limit, sort)
-        return Built(live.rows.filterNot { it.id == ContentKind.VOD.name || it.id == ContentKind.SERIES.name } + titles.rows, live.programmeCards, titles.truncated)
-    }
-
     private suspend fun buildFilteredRows(q: String, f: com.yodesla.omniverse.core.data.SearchFilters, vis: Visibility, off: Collection<String>, limit: Int, sort: SearchSort): Built {
         val found = search.searchFiltered(q, f, off, limitPerKind = limit, sort = sort)
         val rows = ArrayList<HomeRow>()
@@ -259,7 +274,6 @@ class SearchViewModel(
             found[kind]?.let { page ->
                 truncated = truncated || page.more
                 val visible = page.rows.filter { p -> p.categoryId?.let { vis(kind.name, p.key.sourceId.value, it.value) } ?: true }
-                    .distinctBy { p -> p.tmdbId?.takeIf { it.isNotBlank() }?.let { "tmdb:$it" } ?: "key:${p.key.sourceId.value}:${p.key.remoteId.value}" }
                 if (visible.isNotEmpty()) rows += HomeRow(kind.name, label, visible.map { p ->
                     HomeCard("${kind.name}-${p.key.sourceId.value}-${p.key.remoteId.value}", p.key, displayTitle(p.name, p.year), p.year?.toString(), p.posterUrl)
                 })
@@ -278,6 +292,18 @@ class SearchViewModel(
             .filter { p -> p.categoryId?.let { vis(p.key.kind.name, p.key.sourceId.value, it.value) } ?: true }
             .map { it.name }
         return closest(q, names, 2)
+    }
+
+    fun toggleChannelFavorite(card: HomeCard) {
+        val user = userData ?: return
+        if (!card.isChannel || card.open.kind != ContentKind.LIVE) return
+        viewModelScope.launch {
+            val row = catalog.channel(card.open) ?: return@launch
+            if (!visibility.first()("LIVE", row.key.sourceId.value, row.categoryId.value)) return@launch
+            val favorite = !user.isFavorite(card.open).first()
+            user.setFavorite(card.open, favorite)
+            _state.update { it.copy(message = if (favorite) "Channel added to Favorites" else "Channel removed from Favorites") }
+        }
     }
 
     /**
@@ -354,11 +380,10 @@ class SearchViewModel(
      *  kept (it ripples through the data layer and SQL), but it now means anime + animation. */
     fun toggleAnime() = setFilters(_state.value.filters.let { it.copy(anime = !it.anime) })
 
-    /** Decade chip (1980 = 1980..1989): tapping the active decade clears it, tapping another moves. */
+    /** Decade chips combine: 1980s + 1990s includes either decade. */
     fun toggleDecade(decade: Int) = setFilters(
         _state.value.filters.let {
-            if (it.yearFrom == decade && it.yearTo == decade + 9) it.copy(yearFrom = null, yearTo = null)
-            else it.copy(yearFrom = decade, yearTo = decade + 9)
+            it.copy(decades = if (decade in it.decades) it.decades - decade else (it.decades + decade).sorted())
         },
     )
 
@@ -393,6 +418,7 @@ class SearchViewModel(
 @Composable
 fun SearchRoute(viewModel: SearchViewModel, onOpen: (HomeCard) -> Unit) {
     val s by viewModel.state.collectAsStateWithLifecycle()
+    var channelMenu by remember { mutableStateOf<HomeCard?>(null) }
     val c = OmniTheme.colors
     val field = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
@@ -411,7 +437,7 @@ fun SearchRoute(viewModel: SearchViewModel, onOpen: (HomeCard) -> Unit) {
     // LazyColumn so the header scrolls away when focus moves into the results (on a TV the
     // three header rows used to pin the posters below the screen edge).
     FocusPivot(parentFraction = 0.15f, leading = 0.dp) {
-        LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(OmniSpacing.l), contentPadding = PaddingValues(top = OmniSpacing.xl, bottom = 200.dp)) {
+        LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(OmniSpacing.l), contentPadding = PaddingValues(top = OmniSpacing.xl, bottom = 72.dp)) {
             item(key = "__header") {
                 Column {
                 // Documented exception (task 69): the query field keeps material3's own focus treatment
@@ -447,7 +473,10 @@ fun SearchRoute(viewModel: SearchViewModel, onOpen: (HomeCard) -> Unit) {
             }
             item(key = "__state") {
                 Column {
-                if (s.searched && s.rows.isEmpty()) {
+                if (s.loading && s.rows.isEmpty()) {
+                    Text(stringResource(R.string.search_loading), style = OmniTheme.type.browseHeading, color = c.textSecondary,
+                        modifier = Modifier.padding(horizontal = OmniSpacing.tvSide, vertical = OmniSpacing.xl))
+                } else if (s.searched && s.rows.isEmpty()) {
                     Column(Modifier.padding(horizontal = OmniSpacing.tvSide, vertical = OmniSpacing.xl), verticalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
                         Text(stringResource(R.string.search_nothing_found), style = OmniTheme.type.browseHeading, color = c.textPrimary)
                         // A blank query with filters active says "these filters", not "no titles match ''".
@@ -485,7 +514,7 @@ fun SearchRoute(viewModel: SearchViewModel, onOpen: (HomeCard) -> Unit) {
                             })
                         }
                         FocusPivot {
-                            LazyRow(horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m), contentPadding = PaddingValues(horizontal = OmniSpacing.tvSide, vertical = OmniSpacing.s)) {
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m), contentPadding = PaddingValues(horizontal = OmniSpacing.tvSide, vertical = OmniSpacing.focusEdge)) {
                                 items(s.history, key = { it }) { term ->
                                     com.yodesla.omniverse.designsystem.OmniButton(term, { viewModel.onQuery(term) })
                                 }
@@ -508,10 +537,11 @@ fun SearchRoute(viewModel: SearchViewModel, onOpen: (HomeCard) -> Unit) {
                     Column {
                         Text(row.title, style = OmniTheme.type.title, color = c.textPrimary, modifier = Modifier.padding(start = OmniSpacing.tvSide, bottom = OmniSpacing.s))
                         FocusPivot {
-                            LazyRow(state = cardsState, horizontalArrangement = Arrangement.spacedBy(OmniSpacing.l), contentPadding = PaddingValues(horizontal = OmniSpacing.tvSide, vertical = OmniSpacing.s)) {
+                            LazyRow(state = cardsState, horizontalArrangement = Arrangement.spacedBy(OmniSpacing.l), contentPadding = PaddingValues(horizontal = OmniSpacing.tvSide, vertical = OmniSpacing.focusEdge)) {
                                 items(row.cards, key = { it.id }) { card ->
                                     val focused = card.id == focusTarget
-                                    if (card.isChannel) SearchChannelTile(card, if (focused) Modifier.focusRequester(cardFocus) else Modifier) { viewModel.rememberQuery(); if (!viewModel.handle(card)) { viewModel.resultOpened(card); onOpen(card) } }
+                                    if (card.isChannel) SearchChannelTile(card, if (focused) Modifier.focusRequester(cardFocus) else Modifier,
+                                        favorite = card.open in s.favoriteChannels, onLongClick = { channelMenu = card }) { viewModel.rememberQuery(); if (!viewModel.handle(card)) { viewModel.resultOpened(card); onOpen(card) } }
                                     else PosterCard(card.title, card.image, { viewModel.rememberQuery(); viewModel.resultOpened(card); onOpen(card) }, if (focused) Modifier.width(124.dp).focusRequester(cardFocus) else Modifier.width(124.dp), card.subtitle)
                                 }
                             }
@@ -547,16 +577,27 @@ fun SearchRoute(viewModel: SearchViewModel, onOpen: (HomeCard) -> Unit) {
     }
     if (filterOpen) SearchFilterPanel(s, viewModel, onDismiss = { filterOpen = false; scope.launch { filterButton.requestFocusWhenReady() } })
     if (sortOpen) SearchSortPanel(s.sort, viewModel, onDismiss = { sortOpen = false; scope.launch { sortButton.requestFocusWhenReady() } })
+    channelMenu?.let { card ->
+        val favorite = card.open in s.favoriteChannels
+        com.yodesla.omniverse.designsystem.TitleMenu(
+            title = card.title, subtitle = card.subtitle, posterUrl = card.image,
+            actions = listOf(com.yodesla.omniverse.designsystem.MenuAction(
+                if (favorite) "Remove channel from Favorites" else "Add channel to Favorites",
+                { viewModel.toggleChannelFavorite(card); channelMenu = null },
+            )),
+            onDismiss = { channelMenu = null },
+        )
+    }
 }
 
 private fun searchFilterCount(f: com.yodesla.omniverse.core.data.SearchFilters): Int =
-    listOf(f.movies, f.shows, f.anime, f.yearFrom != null, f.ratingAtLeast != null).count { it } + f.genres.size
+    listOf(f.movies, f.shows, f.anime, f.ratingAtLeast != null).count { it } + f.decades.size + f.genres.size
 
 private fun searchFilterSummary(f: com.yodesla.omniverse.core.data.SearchFilters): String = buildList {
     if (f.movies) add("Movies")
     if (f.shows) add("Shows")
     if (f.anime) add("Anime & Animation")
-    f.yearFrom?.let { add("${it}s") }
+    f.decades.forEach { add("${it}s") }
     f.ratingAtLeast?.let { add("${it.toInt()}+ rating") }
     addAll(f.genres)
 }.joinToString("  ·  ")
@@ -577,8 +618,8 @@ private fun SearchFilterPanel(s: SearchState, viewModel: SearchViewModel, onDism
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.68f))) {
             LazyColumn(
-                Modifier.align(Alignment.CenterEnd).width(560.dp).fillMaxHeight().clip(RoundedCornerShape(topStart = 28.dp, bottomStart = 28.dp)).background(c.surface),
-                contentPadding = PaddingValues(top = OmniSpacing.xl, bottom = OmniSpacing.xl),
+                Modifier.align(Alignment.CenterEnd).width(460.dp).fillMaxHeight().clip(RoundedCornerShape(topStart = 28.dp, bottomStart = 28.dp)).background(c.surface),
+                contentPadding = PaddingValues(top = OmniSpacing.xxl, bottom = OmniSpacing.xxl),
                 verticalArrangement = Arrangement.spacedBy(OmniSpacing.s),
             ) {
                 item { Row(Modifier.fillMaxWidth().padding(horizontal = OmniSpacing.tvSide), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -594,7 +635,7 @@ private fun SearchFilterPanel(s: SearchState, viewModel: SearchViewModel, onDism
                     com.yodesla.omniverse.designsystem.OmniButton("Anime & Animation", { viewModel.toggleAnime() }, primary = f.anime)
                 } }
                 if (s.decades.isNotEmpty()) item { SearchFilterGroup("DECADE") {
-                    s.decades.forEach { d -> com.yodesla.omniverse.designsystem.OmniButton("${d}s", { viewModel.toggleDecade(d) }, primary = f.yearFrom == d && f.yearTo == d + 9) }
+                    s.decades.forEach { d -> com.yodesla.omniverse.designsystem.OmniButton("${d}s", { viewModel.toggleDecade(d) }, primary = d in f.decades) }
                 } }
                 item { SearchFilterGroup("MINIMUM RATING") {
                     SEARCH_RATING_CHIPS.forEach { r -> com.yodesla.omniverse.designsystem.OmniButton("${r.toInt()}.0+", { viewModel.toggleRating(r) }, primary = f.ratingAtLeast == r) }
@@ -621,7 +662,7 @@ private fun SearchSortPanel(sort: SearchSort, viewModel: SearchViewModel, onDism
     val c = OmniTheme.colors
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.68f))) {
-            LazyColumn(Modifier.align(Alignment.CenterEnd).width(480.dp).fillMaxHeight().clip(RoundedCornerShape(topStart = 28.dp, bottomStart = 28.dp)).background(c.surface), contentPadding = PaddingValues(OmniSpacing.xl), verticalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
+            LazyColumn(Modifier.align(Alignment.CenterEnd).width(400.dp).fillMaxHeight().clip(RoundedCornerShape(topStart = 28.dp, bottomStart = 28.dp)).background(c.surface), contentPadding = PaddingValues(OmniSpacing.xxl), verticalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
                 item { Text("Sort movies & shows", style = OmniTheme.type.browseHeading, color = c.textPrimary) }
                 items(SearchSort.entries) { choice ->
                     com.yodesla.omniverse.designsystem.OmniButton(searchSortLabel(choice), { viewModel.setSort(choice); onDismiss() }, primary = sort == choice)
@@ -633,11 +674,14 @@ private fun SearchSortPanel(sort: SearchSort, viewModel: SearchViewModel, onDism
 }
 
 @Composable
-private fun SearchChannelTile(card: HomeCard, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun SearchChannelTile(card: HomeCard, modifier: Modifier = Modifier, favorite: Boolean = false, onLongClick: (() -> Unit)? = null, onClick: () -> Unit) {
     val c = OmniTheme.colors
-    com.yodesla.omniverse.designsystem.FocusCard(onClick = onClick, modifier = modifier.width(240.dp).height(140.dp)) {
+    com.yodesla.omniverse.designsystem.FocusCard(onClick = onClick, onLongClick = onLongClick, modifier = modifier.width(240.dp).height(140.dp)) {
         Column(Modifier.fillMaxSize().padding(OmniSpacing.m), verticalArrangement = Arrangement.SpaceBetween) {
-            com.yodesla.omniverse.designsystem.LogoImage(card.image, card.subtitle ?: card.title, Modifier.width(96.dp).height(54.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                com.yodesla.omniverse.designsystem.LogoImage(card.image, card.subtitle ?: card.title, Modifier.width(96.dp).height(54.dp))
+                if (favorite) Text("★", style = OmniTheme.type.title, color = c.accent)
+            }
             Column {
                 Text(card.title, style = OmniTheme.type.body, color = c.textPrimary, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 card.subtitle?.let { Text(it, style = OmniTheme.type.caption, color = c.textSecondary, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }

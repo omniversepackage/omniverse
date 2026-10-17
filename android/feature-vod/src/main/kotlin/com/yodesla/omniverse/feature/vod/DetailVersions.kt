@@ -3,11 +3,16 @@ package com.yodesla.omniverse.feature.vod
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.remember
@@ -119,6 +124,7 @@ internal fun singlePlayOptionLabel(options: List<PlayOption>): String? =
     options.singleOrNull()?.label?.takeIf { it.isNotBlank() }
 
 /** Compact chip row under the title; a single option is a plain label, not a chip. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun PlayOptionChips(
     options: List<PlayOption>,
@@ -133,18 +139,20 @@ internal fun PlayOptionChips(
         return
     }
     val (shown, hasMore) = remember(options, selectedId) { visiblePlayOptions(options, selectedId) }
-    LazyRow(modifier, horizontalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
-        items(shown, key = { it.id }) { option ->
+    FlowRow(modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        shown.forEach { option ->
             DetailChip(option.chipLabel, option.id == selectedId) { onPick(option) }
         }
-        if (hasMore) item(key = "more") { DetailChip(stringResource(R.string.detail_more_sources), false, onMore) }
+        if (hasMore) { DetailChip(stringResource(R.string.detail_more_sources), false, onMore) }
     }
 }
 
 @Composable
 internal fun DetailChip(label: String, selected: Boolean, onClick: () -> Unit) {
     val c = OmniTheme.colors
-    FocusCard(onClick = onClick, modifier = Modifier.height(40.dp)) {
+    FocusCard(onClick = onClick, modifier = Modifier.widthIn(max = 240.dp).width(IntrinsicSize.Max).height(28.dp)) {
         Box(
             Modifier.fillMaxSize()
                 .background(if (selected) c.accent.copy(alpha = 0.24f) else Color.Transparent)
@@ -153,7 +161,7 @@ internal fun DetailChip(label: String, selected: Boolean, onClick: () -> Unit) {
         ) {
             Text(
                 label,
-                style = OmniTheme.type.body.copy(fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal),
+                style = OmniTheme.type.caption.copy(fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal),
                 color = if (selected) c.textPrimary else c.textSecondary,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )

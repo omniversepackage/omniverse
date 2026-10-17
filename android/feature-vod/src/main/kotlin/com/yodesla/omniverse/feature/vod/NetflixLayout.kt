@@ -43,7 +43,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -96,6 +95,8 @@ internal fun NetflixLayout(
     onCwMenu: (ContinuePosterUi) -> Unit,
     /** Task 117: open this destination's Library grid (billboard button row). */
     onLibrary: () -> Unit = {},
+    popular: List<PosterRow> = emptyList(),
+    visible: (PosterRow) -> Boolean = { true },
 ) {
     val c = OmniTheme.colors
     val cinematic = LocalVisualTier.current == VisualTier.CINEMATIC
@@ -103,8 +104,9 @@ internal fun NetflixLayout(
     // poster's own category, or the same title (exact key / exact TMDB id) in the category's pool.
     val cw = cwForBrowseCategory(continueWatching, pool, selection)
     val mine = myList.filter { inBrowseCategory(it, selection) }
-    val rows = remember(cw, mine, pool, plan, profileName) { netflixRows(cw, mine, pool, plan, profileName) }
-    val topUids = remember(pool) { pool.take(10).map { it.uid() }.toSet() }
+    val official = officialNetflix(kindLabel, selection, pool, visible)
+    val rows = remember(official, cw, mine, pool, plan, profileName, popular) { netflixRows(cw, mine, pool, plan, profileName, popular, official) }
+    val topUids = official.rows.map { it.uid() }.toSet()
 
     var focused by remember { mutableStateOf<PosterRow?>(null) }
     // Task 119: the browse billboard no longer carries Play / More info, so poster focus only drives
@@ -125,9 +127,9 @@ internal fun NetflixLayout(
         // softly under the first row instead of stopping at a hard edge.
         NetflixBackdrop(shown, cinematic, Modifier.align(Alignment.TopEnd).fillMaxWidth().fillMaxHeight(0.80f))
         Column(Modifier.fillMaxSize()) {
-            NetflixBillboard(shown, kindLabel, scores, cinematic, Modifier.fillMaxWidth().weight(0.55f), onLibrary)
+            NetflixBillboard(shown, kindLabel, scores, cinematic, Modifier.fillMaxWidth().weight(1f), onLibrary)
             Box(Modifier.fillMaxWidth().weight(1f)) {
-                FocusPivot(parentFraction = 0f, leading = 44.dp) {
+                FocusPivot(parentFraction = 0f, leading = 80.dp) {
                     LazyColumn(
                         Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(top = OmniSpacing.s, bottom = OmniSpacing.xxl),
@@ -145,7 +147,7 @@ internal fun NetflixLayout(
                                 is NetflixRow.Top10 -> NetflixShelf(row.title, ranked = true) {
                                     items(row.rows.withIndex().toList(), key = { "t-" + it.value.uid() }) { (i, r) ->
                                         val mod = if (first && i == 0) Modifier.focusRequester(firstFocus) else Modifier
-                                        RankedCard(i + 1, r, mod, onFocus, solidColor = NetflixRed) { onOpen(r.key) }
+                                        RankedCard(row.ranks[r.tmdbId] ?: (i + 1), r, mod, onFocus, solidColor = NetflixRed) { onOpen(r.key) }
                                     }
                                 }
                                 is NetflixRow.MyList -> NetflixShelf(row.title) {
@@ -224,7 +226,7 @@ private fun NetflixBackdrop(shown: PosterRow?, cinematic: Boolean, modifier: Mod
         ) {
             AsyncImage(
                 model = art.url, contentDescription = r.name,
-                contentScale = ContentScale.Crop, alignment = Alignment.TopCenter,
+                contentScale = ContentScale.Crop, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt, alignment = Alignment.TopCenter,
                 modifier = Modifier.align(Alignment.TopEnd).fillMaxHeight().fillMaxWidth(0.78f)
                     .graphicsLayer { scaleX = zoomNow; scaleY = zoomNow; transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.7f, 0.3f) },
             )
@@ -261,7 +263,7 @@ private fun NetflixBillboard(
                 // boundary and the Play/More info pills ended up covered and unfocusable-looking.
                 Column(
                     Modifier.align(Alignment.BottomStart).fillMaxHeight()
-                        .padding(start = OmniSpacing.tvSide, bottom = OmniSpacing.l)
+                        .padding(start = OmniSpacing.tvSide, top = OmniSpacing.m, bottom = OmniSpacing.l)
                         .widthIn(max = 620.dp),
                     verticalArrangement = Arrangement.spacedBy(OmniSpacing.s),
                 ) {
@@ -274,6 +276,7 @@ private fun NetflixBillboard(
                         )
                         // Library is a destination action, not a title action: it stays in the always-
                         // present brand row so it is visible and focusable on every shelf focus state.
+                        Spacer(Modifier.width(OmniSpacing.l))
                         NetflixPill("Library", filled = false) { onLibrary() }
                     }
                     // Task 84d: the official TMDB title logo replaces the text title when cached
@@ -281,20 +284,21 @@ private fun NetflixBillboard(
                     // the text stays as the fallback.
                     if (r.logoUrl != null) {
                         AsyncImage(
-                            model = r.logoUrl, contentDescription = r.name, contentScale = ContentScale.Fit,
+                            model = r.logoUrl, contentDescription = r.name, contentScale = ContentScale.Fit, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt,
                             alignment = Alignment.CenterStart,
-                            modifier = Modifier.heightIn(max = 140.dp).widthIn(max = 420.dp),
+                            modifier = Modifier.height(72.dp).widthIn(max = 360.dp),
                         )
                     } else {
                         Text(
-                            displayTitle(r.name, null), maxLines = 2, overflow = TextOverflow.Ellipsis, color = c.textPrimary,
-                            style = t.display.copy(fontSize = 52.sp, lineHeight = 56.sp, fontWeight = FontWeight.Bold, letterSpacing = (-1.2).sp),
+                            displayTitle(r.name, null), maxLines = 1, overflow = TextOverflow.Ellipsis, color = c.textPrimary,
+                            style = t.display.copy(fontSize = 36.sp, lineHeight = 40.sp, fontWeight = FontWeight.Bold, letterSpacing = (-1.2).sp),
                         )
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             listOfNotNull(r.year?.toString(), qualityTag(r.name)).joinToString("  ·  "),
-                            style = t.body, color = c.textSecondary,
+                            style = t.body, color = c.textSecondary, maxLines = 1,
+                            modifier = Modifier.weight(1f, fill = false), overflow = TextOverflow.Ellipsis,
                         )
                         rt?.takeIf { r.key == shown?.key }?.let { s -> RtBadges(s, Modifier.padding(start = OmniSpacing.m)) }
                     }
@@ -308,7 +312,7 @@ private fun NetflixBillboard(
                         Text(
                             r.plot!!, style = t.body, color = c.textPrimary.copy(alpha = 0.92f),
                             modifier = Modifier.weight(1f, fill = false),
-                            maxLines = 4, overflow = TextOverflow.Ellipsis,
+                            maxLines = 2, overflow = TextOverflow.Ellipsis,
                         )
                     }
                     // Task 119 (Kory): the browse billboard drops Play / More info entirely — they were
@@ -336,7 +340,7 @@ private fun NetflixPill(label: String, filled: Boolean, onClick: () -> Unit) {
         ),
         border = CardDefaults.border(
             border = Border.None,
-            focusedBorder = Border(BorderStroke(2.dp, SolidColor(Color.White)), 0.dp, shape),
+            focusedBorder = Border(BorderStroke(2.dp, OmniTheme.colors.focusBorder), 0.dp, shape),
         ),
     ) {
         Box(Modifier.fillMaxHeight().padding(horizontal = OmniSpacing.l), contentAlignment = Alignment.Center) {
@@ -363,8 +367,8 @@ private fun NetflixShelf(
         )
         FocusPivot(parentFraction = 0f, leading = if (ranked) OmniSpacing.tvSide + 100.dp else OmniSpacing.tvSide) {
             LazyRow(
-                contentPadding = PaddingValues(start = OmniSpacing.tvSide, end = OmniSpacing.tvSide, top = OmniSpacing.s, bottom = OmniSpacing.s),
-                horizontalArrangement = Arrangement.spacedBy(OmniSpacing.s),
+                contentPadding = PaddingValues(start = OmniSpacing.tvSide, end = OmniSpacing.tvSide, top = OmniSpacing.focusEdge, bottom = OmniSpacing.focusEdge),
+                horizontalArrangement = Arrangement.spacedBy(OmniSpacing.l),
                 content = content,
             )
         }
@@ -395,24 +399,24 @@ private fun NetflixLandscapeCard(
         colors = CardDefaults.colors(containerColor = c.elevated, focusedContainerColor = c.elevated),
         border = CardDefaults.border(
             border = Border.None,
-            focusedBorder = Border(BorderStroke(3.dp, SolidColor(Color.White)), 0.dp, NetflixCardShape),
+            focusedBorder = Border(BorderStroke(2.dp, OmniTheme.colors.focusBorder), 0.dp, NetflixCardShape),
         ),
     ) {
         Box(Modifier.fillMaxSize().clip(NetflixCardShape)) {
             when (art) {
                 is NetflixArt.Backdrop, is NetflixArt.BannerReuse -> AsyncImage(
-                    model = art.url, contentDescription = row.name, contentScale = ContentScale.Crop,
+                    model = art.url, contentDescription = row.name, contentScale = ContentScale.Crop, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt,
                     modifier = Modifier.fillMaxSize(),
                 )
                 is NetflixArt.PosterFill -> {
                     AsyncImage(
-                        model = art.url, contentDescription = null, contentScale = ContentScale.Crop,
+                        model = art.url, contentDescription = null, contentScale = ContentScale.Crop, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt,
                         modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = 1.3f; scaleY = 1.3f }
                             .then(if (supportsRuntimeBlur()) Modifier.blur(24.dp) else Modifier),
                     )
                     if (!supportsRuntimeBlur()) Box(Modifier.fillMaxSize().background(NetflixCanvas.copy(alpha = 0.72f)))
                     AsyncImage(
-                        model = art.url, contentDescription = row.name, contentScale = ContentScale.Fit,
+                        model = art.url, contentDescription = row.name, contentScale = ContentScale.Fit, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt,
                         alignment = Alignment.Center, modifier = Modifier.align(Alignment.Center).fillMaxHeight(),
                     )
                 }
@@ -493,7 +497,7 @@ private fun BoxScope.CardLogo(row: PosterRow, logoUrl: String) {
             .padding(start = OmniSpacing.m, end = OmniSpacing.m, top = OmniSpacing.m, bottom = OmniSpacing.s),
     ) {
         AsyncImage(
-            model = logoUrl, contentDescription = row.name, contentScale = ContentScale.Fit,
+            model = logoUrl, contentDescription = row.name, contentScale = ContentScale.Fit, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt,
             alignment = Alignment.CenterStart,
             modifier = Modifier.heightIn(max = 56.dp).widthIn(max = 180.dp),
         )

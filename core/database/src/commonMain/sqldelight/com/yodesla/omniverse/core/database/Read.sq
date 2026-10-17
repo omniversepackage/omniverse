@@ -198,6 +198,22 @@ WHERE c.removed_ms IS NULL AND (c.name LIKE '% vs%' OR c.name LIKE '% v %' OR c.
 ORDER BY c.number IS NULL, c.number, c.sort_index
 LIMIT :limit;
 
+-- Task 142: candidate channels for the Anime hub — the channel or its category names an
+-- anime/cartoon outlet. AnimeHubRules (Kotlin) makes the final whole-word call and splits anime
+-- from cartoon channels; this only narrows the scan.
+animeChannels:
+SELECT c.source_id, c.remote_id, c.number, c.name, c.logo_url, c.epg_channel_id, c.catchup_days, c.primary_category_id, cat.name AS category_name
+FROM channel c
+LEFT JOIN category cat ON cat.source_id = c.source_id AND cat.kind = 'LIVE' AND cat.remote_id = c.primary_category_id
+WHERE c.removed_ms IS NULL AND (
+     c.name LIKE '%anim%' OR cat.name LIKE '%anim%' OR c.name LIKE '%toon%' OR cat.name LIKE '%toon%'
+  OR c.name LIKE '%crunchyroll%' OR c.name LIKE '%funimation%' OR c.name LIKE '%hidive%' OR c.name LIKE '%adult swim%'
+  OR c.name LIKE '%boomerang%' OR c.name LIKE '%nick%' OR c.name LIKE '%disney%' OR cat.name LIKE '%kids%'
+  OR c.name LIKE '%pokemon%' OR c.name LIKE '%pokémon%' OR c.name LIKE '%dragon ball%' OR c.name LIKE '%naruto%' OR c.name LIKE '%one piece%'
+)
+ORDER BY c.number IS NULL, c.number, c.sort_index
+LIMIT :limit;
+
 -- Live Sports: channels whose name mentions a TV network ("%prime video%"); scored in Kotlin.
 channelsNameLike:
 SELECT c.source_id, c.remote_id, c.number, c.name, c.logo_url, c.epg_channel_id, c.catchup_days, c.primary_category_id
@@ -240,7 +256,7 @@ genre_norm AS (
     SELECT lower(replace(replace(replace(replace(replace(replace(replace(replace(replace(token, '|', ' '), '(', ' '), ')', ' '), '[', ' '), ']', ' '), '-', ' '), ':', ' '), '/', ' '), ',', ' ')) AS token FROM genre_token WHERE token <> ''
 ),
 matched AS (
-    SELECT source_id, remote_id FROM search_index
+    SELECT DISTINCT source_id, remote_id FROM search_index
     WHERE :matchQuery IS NOT NULL AND search_index MATCH :matchQuery AND kind = 'VOD'
 ),
 pool AS (
@@ -255,7 +271,7 @@ pool AS (
     LEFT JOIN category c ON c.source_id = v.source_id AND c.kind = 'VOD' AND c.remote_id = v.primary_category_id
     WHERE v.removed_ms IS NULL
       AND (v.primary_category_id IS NULL OR ('VOD|' || v.source_id || '|' || v.primary_category_id) NOT IN :excludedKeys)
-      AND (:matchQuery IS NULL OR EXISTS (SELECT 1 FROM matched m WHERE m.source_id = v.source_id AND m.remote_id = v.remote_id))
+      AND (:matchQuery IS NULL OR (v.source_id || char(0) || v.remote_id) IN (SELECT source_id || char(0) || remote_id FROM matched) OR (:titleNeedle IS NOT NULL AND instr(lower(v.name), :titleNeedle) > 0))
 ),
 -- Only visible AND filter-matching rows compete for the group slot (task 122 review, group_key since task 141): the winner
 -- is chosen after year/anime/genre/text, so a nonmatching Plex duplicate cannot suppress a
@@ -274,18 +290,17 @@ filtered AS (
    OR instr(' ' || norm || ' ', ' cartoons ') > 0)))
   AND (:yearFrom IS NULL OR year >= :yearFrom)
   AND (:yearTo IS NULL OR year <= :yearTo)
+  AND (:decadesOff = 1 OR (year / 10) * 10 IN :selectedDecades)
   AND (:minRating IS NULL OR rating >= :minRating)
   AND (:genresCsv IS NULL OR EXISTS (SELECT 1 FROM genre_norm g WHERE instr(' ' || gnorm || ' ', ' ' || g.token || ' ') > 0))
 )
-SELECT source_id, remote_id, name, poster_url, primary_category_id, rating, year, tmdb_id FROM filtered v
-WHERE (v.group_key IS NULL OR NOT EXISTS (
-    SELECT 1 FROM filtered w
-    WHERE w.group_key = v.group_key
-      AND (w.plex_rank < v.plex_rank
-        OR (w.plex_rank = v.plex_rank AND (w.src_sort < v.src_sort
-          OR (w.src_sort = v.src_sort AND (w.item_sort < v.item_sort
-            OR (w.item_sort = v.item_sort AND (w.source_id < v.source_id
-              OR (w.source_id = v.source_id AND w.remote_id < v.remote_id))))))))))
+-- One aggregate pass over the filtered candidates. SQLite returns the other selected
+-- columns from the row containing this single MIN(), preserving the existing Plex-first
+-- tie-break while avoiding the quadratic correlated self-scan on large blank searches.
+SELECT source_id, remote_id, name, poster_url, primary_category_id, rating, year, tmdb_id,
+       MIN(printf('%01d:%020d:%020d:%s:%s', plex_rank, src_sort, item_sort, source_id, remote_id)) AS winner_rank
+FROM filtered v
+GROUP BY COALESCE(group_key, 'u:' || source_id || ':' || remote_id)
 ORDER BY
   CASE WHEN :sortMode = 'TITLE_ASC' THEN lower(v.name) END ASC,
   CASE WHEN :sortMode = 'TITLE_DESC' THEN lower(v.name) END DESC,
@@ -309,7 +324,7 @@ genre_norm AS (
     SELECT lower(replace(replace(replace(replace(replace(replace(replace(replace(replace(token, '|', ' '), '(', ' '), ')', ' '), '[', ' '), ']', ' '), '-', ' '), ':', ' '), '/', ' '), ',', ' ')) AS token FROM genre_token WHERE token <> ''
 ),
 matched AS (
-    SELECT source_id, remote_id FROM search_index
+    SELECT DISTINCT source_id, remote_id FROM search_index
     WHERE :matchQuery IS NOT NULL AND search_index MATCH :matchQuery AND kind = 'SERIES'
 ),
 pool AS (
@@ -324,7 +339,7 @@ pool AS (
     LEFT JOIN category c ON c.source_id = v.source_id AND c.kind = 'SERIES' AND c.remote_id = v.primary_category_id
     WHERE v.removed_ms IS NULL
       AND (v.primary_category_id IS NULL OR ('SERIES|' || v.source_id || '|' || v.primary_category_id) NOT IN :excludedKeys)
-      AND (:matchQuery IS NULL OR EXISTS (SELECT 1 FROM matched m WHERE m.source_id = v.source_id AND m.remote_id = v.remote_id))
+      AND (:matchQuery IS NULL OR (v.source_id || char(0) || v.remote_id) IN (SELECT source_id || char(0) || remote_id FROM matched) OR (:titleNeedle IS NOT NULL AND instr(lower(v.name), :titleNeedle) > 0))
 ),
 filtered AS (
     SELECT * FROM pool
@@ -340,18 +355,17 @@ filtered AS (
    OR instr(' ' || norm || ' ', ' cartoons ') > 0)))
   AND (:yearFrom IS NULL OR year >= :yearFrom)
   AND (:yearTo IS NULL OR year <= :yearTo)
+  AND (:decadesOff = 1 OR (year / 10) * 10 IN :selectedDecades)
   AND (:minRating IS NULL OR rating >= :minRating)
   AND (:genresCsv IS NULL OR EXISTS (SELECT 1 FROM genre_norm g WHERE instr(' ' || gnorm || ' ', ' ' || g.token || ' ') > 0))
 )
-SELECT source_id, remote_id, name, poster_url, primary_category_id, rating, year, tmdb_id FROM filtered v
-WHERE (v.group_key IS NULL OR NOT EXISTS (
-    SELECT 1 FROM filtered w
-    WHERE w.group_key = v.group_key
-      AND (w.plex_rank < v.plex_rank
-        OR (w.plex_rank = v.plex_rank AND (w.src_sort < v.src_sort
-          OR (w.src_sort = v.src_sort AND (w.item_sort < v.item_sort
-            OR (w.item_sort = v.item_sort AND (w.source_id < v.source_id
-              OR (w.source_id = v.source_id AND w.remote_id < v.remote_id))))))))))
+-- One aggregate pass over the filtered candidates. SQLite returns the other selected
+-- columns from the row containing this single MIN(), preserving the existing Plex-first
+-- tie-break while avoiding the quadratic correlated self-scan on large blank searches.
+SELECT source_id, remote_id, name, poster_url, primary_category_id, rating, year, tmdb_id,
+       MIN(printf('%01d:%020d:%020d:%s:%s', plex_rank, src_sort, item_sort, source_id, remote_id)) AS winner_rank
+FROM filtered v
+GROUP BY COALESCE(group_key, 'u:' || source_id || ':' || remote_id)
 ORDER BY
   CASE WHEN :sortMode = 'TITLE_ASC' THEN lower(v.name) END ASC,
   CASE WHEN :sortMode = 'TITLE_DESC' THEN lower(v.name) END DESC,
@@ -1637,3 +1651,28 @@ ORDER BY
   CASE WHEN :sort = 0 THEN NULL ELSE COALESCE(t.sort_title, o.sort_title, v.name) END COLLATE NOCASE,
   v.remote_id
 LIMIT :limit OFFSET :offset;
+
+-- ---------- Task 142: Anime hub pools ----------
+-- Cheap candidate scan for the Anime hub: LIKE prefilters on the category name and provider genre
+-- (no per-row normalisation, FTS or counts — the filtered-search query took 9–27 s on a 31k-title
+-- catalog). AnimeHubPool (Kotlin) makes the whole-word anime / animation call, applies the viewer's
+-- exclusions and the Plex-first group_key dedup.
+animatedVod:
+SELECT v.source_id, v.remote_id, v.name, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id, v.genre, v.group_key,
+       c.name AS category_name, s.kind AS source_kind, s.sort_index AS source_sort, v.sort_index
+FROM vod v JOIN source s ON s.id = v.source_id
+LEFT JOIN category c ON c.source_id = v.source_id AND c.kind = 'VOD' AND c.remote_id = v.primary_category_id
+WHERE v.removed_ms IS NULL AND (
+     c.name LIKE '%anim%' OR c.name LIKE '%cartoon%' OR c.name LIKE '%crunchyroll%' OR c.name LIKE '%funimation%' OR c.name LIKE '%hidive%' OR c.name LIKE '%manga%'
+  OR v.genre LIKE '%anim%' OR v.genre LIKE '%cartoon%' OR v.genre LIKE '%crunchyroll%' OR v.genre LIKE '%funimation%' OR v.genre LIKE '%hidive%' OR v.genre LIKE '%manga%'
+);
+
+animatedSeries:
+SELECT v.source_id, v.remote_id, v.name, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id, v.genre, v.group_key,
+       c.name AS category_name, s.kind AS source_kind, s.sort_index AS source_sort, v.sort_index
+FROM series v JOIN source s ON s.id = v.source_id
+LEFT JOIN category c ON c.source_id = v.source_id AND c.kind = 'SERIES' AND c.remote_id = v.primary_category_id
+WHERE v.removed_ms IS NULL AND (
+     c.name LIKE '%anim%' OR c.name LIKE '%cartoon%' OR c.name LIKE '%crunchyroll%' OR c.name LIKE '%funimation%' OR c.name LIKE '%hidive%' OR c.name LIKE '%manga%'
+  OR v.genre LIKE '%anim%' OR v.genre LIKE '%cartoon%' OR v.genre LIKE '%crunchyroll%' OR v.genre LIKE '%funimation%' OR v.genre LIKE '%hidive%' OR v.genre LIKE '%manga%'
+);

@@ -33,7 +33,7 @@ fun DevGuideScreen(onExit: () -> Unit) {
     LaunchedEffect(Unit) { focus.requestFocus() }
     Column(Modifier.fillMaxSize()) {
         Text(
-            info.ifEmpty { "Guide preview · 800 channels" },
+            "Guide preview · 800 channels" + info.takeIf { it.isNotEmpty() }?.let { " · $it" }.orEmpty(),
             style = OmniTheme.type.title, color = OmniTheme.colors.textPrimary,
             modifier = Modifier.padding(horizontal = OmniSpacing.tvSide, vertical = OmniSpacing.m),
         )

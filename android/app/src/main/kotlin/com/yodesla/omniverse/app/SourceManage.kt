@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -53,7 +55,11 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun SourceExtras(graph: AppGraph, id: SourceId, onReenterLogin: () -> Unit = {}) {
-    var panel by remember(id) { mutableStateOf<String?>(null) } // "libs" | "servers" | null
+    var panel by remember(id) { mutableStateOf<String?>(null) } // "libs" | "servers" | "rename" | null
+    var nameDraft by remember(id) { mutableStateOf("") }
+    var renameError by remember(id) { mutableStateOf<String?>(null) }
+    val sourceList by remember(graph) { graph.sources.sources() }.collectAsState(initial = emptyList())
+    val sourceName = sourceList.firstOrNull { it.id == id }?.name.orEmpty()
     val isPlex by produceState(false, id) { value = graph.sources.config(id) is SourceConfig.Plex }
     val libs by remember(graph, id) {
         combine(
@@ -89,12 +95,33 @@ fun SourceExtras(graph: AppGraph, id: SourceId, onReenterLogin: () -> Unit = {})
             "Re-enter login" -> OmniButton("Re-enter login", onReenterLogin)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
+            OmniButton(if (panel == "rename") "Cancel rename" else "Rename source", {
+                if (panel == "rename") panel = null else { nameDraft = sourceName; renameError = null; panel = "rename" }
+            })
             if (libs.isNotEmpty()) {
                 val onCount = libs.count { (k, cat) -> key(k, cat.remoteId.value) !in off }
                 OmniButton(if (panel == "libs") "Done" else "Libraries  ·  $onCount of ${libs.size} on",
                     { panel = if (panel == "libs") null else "libs" })
             }
             if (isPlex) OmniButton(if (panel == "servers") "Done" else "Plex servers", { panel = if (panel == "servers") null else "servers" })
+        }
+        if (panel == "rename") {
+            OutlinedTextField(
+                value = nameDraft, onValueChange = { nameDraft = it; renameError = null },
+                label = { Text("Source name", style = t.caption, color = c.textSecondary) },
+                singleLine = true, textStyle = t.body.copy(color = c.textPrimary),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = c.accent, unfocusedBorderColor = c.elevated, cursorColor = c.accent,
+                    focusedContainerColor = c.surface, unfocusedContainerColor = c.surface,
+                ),
+            )
+            OmniButton("Save name", { scope.launch {
+                renameError = try {
+                    if (graph.sources.rename(id, nameDraft)) { panel = null; null } else "Enter a source name."
+                } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { "Couldn't rename this source. Try again." }
+            } }, primary = true)
+            renameError?.let { Text(it, style = t.caption, color = c.live) }
         }
         if (panel == "libs") {
             Text("Switched-off libraries leave the category list and All. Nothing changes on the server.", style = t.caption, color = c.textSecondary)

@@ -1,6 +1,7 @@
 package com.yodesla.omniverse.designsystem
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -69,7 +70,7 @@ fun OmniPickerDialog(
                 verticalArrangement = Arrangement.spacedBy(OmniSpacing.xs),
             ) {
                 Text(title, style = t.headline, color = c.textPrimary, modifier = Modifier.padding(bottom = OmniSpacing.s))
-                LazyColumn(Modifier.heightIn(max = 420.dp), verticalArrangement = Arrangement.spacedBy(OmniSpacing.xs)) {
+                LazyColumn(Modifier.heightIn(max = 320.dp), verticalArrangement = Arrangement.spacedBy(OmniSpacing.xs)) {
                     items(options, key = { it.value }) { opt ->
                         PickerRow(opt, selected = opt.value == selected, onClick = { onSelect(opt.value) })
                     }
@@ -91,6 +92,7 @@ private fun PickerRow(opt: PickerOption, selected: Boolean, onClick: () -> Unit)
             .focusRequester(fr)
             .onFocusChanged { focused = it.isFocused }
             .then(if (focused || selected) Modifier.glassSurface(corner = 26.dp, focused = focused, shadow = false) else Modifier)
+            .then(if (focused) Modifier.border(2.dp, c.focusBorder, RoundedCornerShape(26.dp)) else Modifier)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,

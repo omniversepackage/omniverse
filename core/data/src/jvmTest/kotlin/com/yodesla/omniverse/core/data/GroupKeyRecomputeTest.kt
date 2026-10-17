@@ -114,6 +114,18 @@ class GroupKeyRecomputeTest {
         assertEquals("t:550254", seriesGroup("iptv", "s3"))
     }
 
+    @Test fun sameShowAcrossThreeSourcesGroupsDespiteConflictingProviderIds() {
+        series("plex", "s1", "Attack on Titan", 2013, "1429")
+        series("iptv-a", "s2", "Attack on Titan (2013)", 2013, "999999")
+        series("iptv-b", "s3", "EN - Attack on Titan", 2013, null)
+        series("iptv-b", "s4", "Attack on Titan", 2023, "123")
+        db.storeQueries.recomputeSeriesGroups()
+        assertEquals("m:attackontitan|2013", seriesGroup("plex", "s1"))
+        assertEquals("m:attackontitan|2013", seriesGroup("iptv-a", "s2"))
+        assertEquals("m:attackontitan|2013", seriesGroup("iptv-b", "s3"))
+        assertEquals("t:123", seriesGroup("iptv-b", "s4"))
+    }
+
     @Test fun resyncClearsTheKeyAndThePassRecomputesIt() {
         vod("plex", "27002", "Akira", 1988, "149")
         vod("iptv", "5501", "EN - Akira (1988)", 1988, null)

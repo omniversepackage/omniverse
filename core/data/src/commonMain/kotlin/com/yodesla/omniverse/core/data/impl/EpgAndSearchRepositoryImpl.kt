@@ -97,6 +97,12 @@ class EpgRepositoryImpl(
         (fromGuide + fromNames).sortedBy { it.startMs }
     }
 
+    override suspend fun animeChannelCandidates(limit: Int): List<Pair<ChannelRow, String?>> = withContext(io) {
+        db.readQueries.animeChannels(limit.toLong()).executeAsList().map { r ->
+            ChannelRow(ContentKey(SourceId(r.source_id), ContentKind.LIVE, RemoteId(r.remote_id)), r.number?.toInt(), r.name, r.logo_url, r.epg_channel_id, r.catchup_days.toInt(), RemoteId(r.primary_category_id)) to r.category_name
+        }
+    }
+
     override suspend fun channelsNamed(term: String, limit: Int): List<ChannelRow> = withContext(io) {
         val t = term.trim().replace("%", "").replace("_", "").takeIf { it.length >= 2 } ?: return@withContext emptyList()
         db.readQueries.channelsNameLike("%$t%", limit.toLong()).executeAsList().map { r ->
@@ -130,6 +136,18 @@ class SearchRepositoryImpl(
     private val io: CoroutineDispatcher,
 ) : SearchRepository {
 
+    override suspend fun searchLive(query: String, limit: Int): List<SearchHit> = withContext(io) {
+        val match = toMatchExpression(query) ?: return@withContext emptyList()
+        val needle = normalize(query)
+        val fetch = (limit * 8L).coerceAtMost(400L)
+        db.readQueries.searchByKind(match, ContentKind.LIVE.name, fetch).executeAsList().mapNotNull { r ->
+            val sid = r.source_id ?: return@mapNotNull null
+            val rid = r.remote_id ?: return@mapNotNull null
+            SearchHit(ContentKey(SourceId(sid), ContentKind.LIVE, RemoteId(rid)), r.title.orEmpty())
+        }.sortedWith(compareBy<SearchHit>({ rank(normalize(it.title), needle) }, { it.title.length }, { it.title }))
+            .take(limit)
+    }
+
     override suspend fun search(query: String, limitPerKind: Int): Map<ContentKind, List<SearchHit>> = withContext(io) {
         val match = toMatchExpression(query) ?: return@withContext emptyMap()
         val out = LinkedHashMap<ContentKind, List<SearchHit>>()
@@ -156,11 +174,15 @@ class SearchRepositoryImpl(
         limitPerKind: Int,
         sort: com.yodesla.omniverse.core.data.SearchSort,
     ): Map<ContentKind, SearchFilteredPage> = withContext(io) {
-        if (!filters.active && (sort == com.yodesla.omniverse.core.data.SearchSort.RELEVANCE || query.isBlank())) return@withContext emptyMap()
+        if (!filters.active && query.isBlank()) return@withContext emptyMap()
         val text = query.trim().takeIf { it.isNotEmpty() }
-        val match = text?.let { toMatchExpression(it) }
+        val match = text?.let { value ->
+            (listOf(value) + com.yodesla.omniverse.core.data.search.SmartTitleSearch.expansions(value))
+                .mapNotNull(::toMatchExpression).distinct().joinToString(" OR ") { "($it)" }.takeIf { it.isNotBlank() }
+        }
         val needle = text?.let { normalize(it) }
         val genresCsv = filters.genres.map { it.trim() }.filter { it.isNotEmpty() }.joinToString("|").takeIf { it.isNotEmpty() }
+        val selectedDecades = filters.decades.map { it.toLong() }
         // Blank query: fetch exactly limit+1 so `more` is exact. Text: over-fetch for Kotlin ranking
         // (FTS4 has no relevance), same as plain search; `more` then means "more in the window".
         val fetch = if (text == null || sort != com.yodesla.omniverse.core.data.SearchSort.RELEVANCE) limitPerKind + 1L else (limitPerKind * 8L).coerceAtMost(400L)
@@ -168,9 +190,10 @@ class SearchRepositoryImpl(
         for (kind in filters.kinds) {
             val rows: List<PosterRow> = when (kind) {
                 ContentKind.VOD -> db.readQueries.searchVodFiltered(
-                    genresCsv = genresCsv, matchQuery = match, excludedKeys = excludedCategoryKeys,
+                    genresCsv = genresCsv, matchQuery = match, titleNeedle = text?.lowercase()?.takeIf { it.length >= 3 }, excludedKeys = excludedCategoryKeys,
                     animeOnly = if (filters.anime) 1L else null,
                     yearFrom = filters.yearFrom?.toLong(), yearTo = filters.yearTo?.toLong(),
+                    decadesOff = if (selectedDecades.isEmpty()) 1L else 0L, selectedDecades = selectedDecades,
                     minRating = filters.ratingAtLeast?.toDouble(), limit = fetch, sortMode = sort.name,
                 ).executeAsList().map { r ->
                     PosterRow(
@@ -184,9 +207,10 @@ class SearchRepositoryImpl(
                     )
                 }
                 else -> db.readQueries.searchSeriesFiltered(
-                    genresCsv = genresCsv, matchQuery = match, excludedKeys = excludedCategoryKeys,
+                    genresCsv = genresCsv, matchQuery = match, titleNeedle = text?.lowercase()?.takeIf { it.length >= 3 }, excludedKeys = excludedCategoryKeys,
                     animeOnly = if (filters.anime) 1L else null,
                     yearFrom = filters.yearFrom?.toLong(), yearTo = filters.yearTo?.toLong(),
+                    decadesOff = if (selectedDecades.isEmpty()) 1L else 0L, selectedDecades = selectedDecades,
                     minRating = filters.ratingAtLeast?.toDouble(), limit = fetch, sortMode = sort.name,
                 ).executeAsList().map { r ->
                     PosterRow(
@@ -201,7 +225,7 @@ class SearchRepositoryImpl(
                 }
             }
             val ranked = if (needle != null && sort == com.yodesla.omniverse.core.data.SearchSort.RELEVANCE) {
-                rows.sortedWith(compareBy({ rank(normalize(it.name), needle) }, { it.name.length }, { it.name }))
+                rows.sortedWith(compareBy({ com.yodesla.omniverse.core.data.search.SmartTitleSearch.rank(it.name, needle) }, { it.name.length }, { it.name }))
             } else rows
             if (ranked.isNotEmpty()) out[kind] = SearchFilteredPage(ranked.take(limitPerKind), ranked.size > limitPerKind)
         }

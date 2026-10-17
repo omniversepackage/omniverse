@@ -1,8 +1,10 @@
 package com.yodesla.omniverse.feature.home.profiles
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -59,6 +61,7 @@ fun WhosWatchingRoute(
         ) {
             Text(stringResource(R.string.profiles_whos_watching), style = OmniTheme.type.browseHero, color = c.textPrimary)
             LazyRow(
+                contentPadding = PaddingValues(start = OmniSpacing.focusEdge, end = OmniSpacing.focusEdge, top = OmniSpacing.focusEdge, bottom = OmniSpacing.focusEdge),
                 horizontalArrangement = Arrangement.spacedBy(OmniSpacing.l),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -81,7 +84,11 @@ fun WhosWatchingRoute(
                                 focusedContainerColor = Color.Transparent,
                                 pressedContainerColor = Color.Transparent,
                             ),
-                            border = CardDefaults.border(border = Border.None, focusedBorder = Border.None, pressedBorder = Border.None),
+                            border = CardDefaults.border(
+                                border = Border.None,
+                                focusedBorder = Border(BorderStroke(2.dp, c.focusBorder), 0.dp, CircleShape),
+                                pressedBorder = Border.None,
+                            ),
                             glow = CardDefaults.glow(
                                 focusedGlow = Glow(elevationColor = c.accent.copy(alpha = 0.55f), elevation = 18.dp),
                             ),

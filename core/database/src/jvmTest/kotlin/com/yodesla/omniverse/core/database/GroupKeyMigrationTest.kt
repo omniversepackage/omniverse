@@ -50,12 +50,32 @@ class GroupKeyMigrationTest {
     @Test fun freshSchemaCarriesGroupKeyOnBothCatalogTables() {
         val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
         OmniverseDb.Schema.create(driver)
-        assertEquals(15L, OmniverseDb.Schema.version) // 14: group_key (140)
+        assertEquals(16L, OmniverseDb.Schema.version) // 14: group_key, 15: conflicting series IDs
         val db = OmniverseDb(driver)
         db.storeQueries.upsertSeries("s", "1", "Dark Matter", null, null, "c", null, null, null, 2024L, null, 0, 1, "darkmatter|2024", "550254")
         db.storeQueries.upsertSeries("s", "2", "EN - Dark Matter (2024)", null, null, "c", null, null, null, 2024L, null, 0, 1, "darkmatter|2024", null)
         db.storeQueries.recomputeSeriesGroups()
         assertEquals("t:550254", db.readQueries.seriesByKey("s", "1").executeAsOne().group_key)
         assertEquals("t:550254", db.readQueries.seriesByKey("s", "2").executeAsOne().group_key)
+    }
+
+    @Test fun existingShowCopiesWithDifferentIdsRegroupOnUpgrade() {
+        val snapshot = Path.of("src/commonMain/sqldelight/databases/1.db")
+        val copy = Files.createTempFile("omniverse-series-regroup-", ".db")
+        Files.copy(snapshot, copy, StandardCopyOption.REPLACE_EXISTING)
+        val driver = JdbcSqliteDriver("jdbc:sqlite:${copy.toAbsolutePath()}")
+        try {
+            OmniverseDb.Schema.migrate(driver, 1, 15)
+            driver.execute(null, "INSERT INTO series(source_id,remote_id,name,primary_category_id,year,tmdb_id,match_key,group_key,sort_index,sync_gen) VALUES " +
+                "('plex','one','Attack on Titan','shows',2013,'1429','attackontitan|2013','t:1429',0,1)," +
+                "('iptv','two','Attack on Titan','shows',2013,'999999','attackontitan|2013','t:999999',0,1)", 0)
+            OmniverseDb.Schema.migrate(driver, 15, OmniverseDb.Schema.version)
+            val db = OmniverseDb(driver)
+            assertEquals("m:attackontitan|2013", db.readQueries.seriesByKey("plex", "one").executeAsOne().group_key)
+            assertEquals("m:attackontitan|2013", db.readQueries.seriesByKey("iptv", "two").executeAsOne().group_key)
+        } finally {
+            driver.close()
+            Files.deleteIfExists(copy)
+        }
     }
 }

@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Keeps channels, guide and catalog fresh without the app being opened (PLAN.md §6.1).
- * Runs the same stale-only sync as app start: fresh stages are skipped, the engine's safety
+ * Checks the viewer's source/discovery schedules every 15 minutes. The engine's safety
  * rules apply (no removals from empty/collapsed lists), and one sync per source runs at a time.
  * No streams are opened, so it never uses a provider's playback connection slot.
  */
@@ -20,7 +20,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
     override suspend fun doWork(): Result {
         val graph = (applicationContext as OmniverseApp).graph
         return try {
-            graph.syncAllStale()
+            graph.autoRefresh.run()
             Result.success()
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -31,13 +31,14 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
     }
 
     companion object {
-        private const val NAME = "omniverse-periodic-sync"
+        private const val NAME = "omniverse-auto-refresh-v2"
 
         /** Idempotent: KEEP leaves an existing schedule alone. */
         fun schedule(context: Context) {
-            val request = PeriodicWorkRequestBuilder<SyncWorker>(6, TimeUnit.HOURS, 1, TimeUnit.HOURS)
+            val request = PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .build()
+            WorkManager.getInstance(context).cancelUniqueWork("omniverse-periodic-sync")
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(NAME, ExistingPeriodicWorkPolicy.KEEP, request)
         }
     }

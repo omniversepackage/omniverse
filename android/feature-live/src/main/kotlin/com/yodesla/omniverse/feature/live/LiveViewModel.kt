@@ -110,6 +110,12 @@ class LiveViewModel(
 
     private val _state = MutableStateFlow(LiveUiState())
     val state: StateFlow<LiveUiState> = _state.asStateFlow()
+    private val unified = UnifiedLiveCatalog(sources, catalog)
+    internal val providerFilter = LiveProviderFilter(sources, userData)
+    private val browseFavoritesVisibility = favoritesVisibility.combine(providerFilter.visibility) { a, b ->
+        { kind: String, source: String, category: String -> a(kind, source, category) && b(kind, source, category) }
+    }
+    private var categoriesJob: Job? = null
 
     private val events = Channel<LiveEvent>(Channel.BUFFERED)
     val eventFlow: Flow<LiveEvent> = events.receiveAsFlow()
@@ -129,7 +135,8 @@ class LiveViewModel(
      * ones — even for profiles the catalog SQL (default profile) does not filter.
      */
     private val categoryVisibility: Flow<Visibility> =
-        visibility.combine(userData.hiddenCategoryKeys()) { v, h -> { k, s, c -> v(k, s, c) && "$k|$s|$c" !in h } }
+        visibility.combine(userData.hiddenCategoryKeys()) { v, h -> { k: String, s: String, c: String -> v(k, s, c) && "$k|$s|$c" !in h } }
+            .combine(providerFilter.visibility) { a, b -> { k, s, c -> a(k, s, c) && b(k, s, c) } }
     private val nowNextRequests = MutableSharedFlow<List<String>>(extraBufferCapacity = 8)
     private var lastRequested: List<String> = emptyList()
     /** Latest parental policy, so opening a saved group can skip channels it now denies. */
@@ -139,37 +146,34 @@ class LiveViewModel(
         .flatMapLatest { sel ->
             when {
                 sel == null -> flowOf(PagingData.empty())
-                sel.second == FAVORITES -> combine(userData.favorites(ContentKind.LIVE), favoritesVisibility) { keys, vis ->
+                sel.second == FAVORITES -> combine(userData.favorites(ContentKind.LIVE), browseFavoritesVisibility) { keys, vis ->
                     PagingData.from(keys.mapNotNull { k -> catalog.channel(k)?.takeIf { vis("LIVE", it.key.sourceId.value, it.categoryId.value) }?.copy(categoryId = RemoteId(FAVORITES)) })
                 }
-                sel.second == ALL -> combine(catalog.categories(sel.first, ContentKind.LIVE), categoryVisibility) { cats, vis ->
-                    // Locked categories are excluded in SQL; a channel still shows if it is also in an open one.
-                    cats.filterNot { vis("LIVE", sel.first.value, it.remoteId.value) }.map { it.remoteId.value }.toSet()
-                }.distinctUntilChanged().flatMapLatest { excluded ->
-                    Pager(PagingConfig(pageSize = 60, prefetchDistance = 30, enablePlaceholders = false)) {
-                        catalog.channelsAll(sel.first, excluded)
-                    }.flow
+                sel.second == ALL -> combine(unified.categories(), categoryVisibility) { _, vis ->
+                    PagingData.from(unified.rows(ALL, sel.first, vis, providerFilter.hiddenIds.first()))
                 }
-                sel.second == RECENT -> combine(userData.recentChannels(), favoritesVisibility) { keys, vis ->
+                sel.second == RECENT -> combine(userData.recentChannels(), browseFavoritesVisibility) { keys, vis ->
                     PagingData.from(keys.mapNotNull { k -> catalog.channel(k)?.takeIf { vis("LIVE", it.key.sourceId.value, it.categoryId.value) }?.copy(categoryId = RemoteId(RECENT)) })
                 }
-                else -> Pager(PagingConfig(pageSize = 60, prefetchDistance = 30, enablePlaceholders = false)) {
-                    catalog.channels(sel.first, RemoteId(sel.second))
-                }.flow
+                else -> categoryVisibility.map { vis -> PagingData.from(unified.rows(sel.second, sel.first, vis, providerFilter.hiddenIds.first())) }
             }
         }
         .cachedIn(viewModelScope)
 
     init {
         viewModelScope.launch {
-            val all = sources.sources().first()
+            sources.sources().map { it.filter { source -> source.isLiveCapable() } }
+                .distinctUntilChanged { a, b -> a.map { it.id to it.name } == b.map { it.id to it.name } }.collect { all ->
             val src = all.firstLiveCapable()
             if (src == null) {
-                _state.update { it.copy(loading = false, noSources = true) }
-                return@launch
+                categoriesJob?.cancel()
+                selection.value = null
+                _state.update { it.copy(loading = false, noSources = true, sourceId = null, categories = emptyList(), selectedCategoryId = null) }
+                return@collect
             }
-            _state.update { it.copy(sourceId = src.id, sourceName = src.name) }
+            _state.update { it.copy(noSources = false, sourceId = src.id, sourceName = if (all.size > 1) "All providers" else src.name) }
             observeCategories(src.id)
+            }
         }
         userData.favorites(ContentKind.LIVE)
             .onEach { favs -> _state.update { it.copy(favorites = favs.toSet()) } }
@@ -204,8 +208,9 @@ class LiveViewModel(
     }
 
     private fun observeCategories(sourceId: SourceId) {
-        combine(
-            catalog.categories(sourceId, ContentKind.LIVE),
+        categoriesJob?.cancel()
+        categoriesJob = combine(
+            unified.categories(),
             userData.favorites(ContentKind.LIVE),
             userData.recentChannels(),
             categoryVisibility,
@@ -218,7 +223,7 @@ class LiveViewModel(
                     CategoryUi(ALL, "All channels", special = true),
                     if (recents.isNotEmpty()) CategoryUi(RECENT, "Recently watched", special = true) else null,
                 )
-                val providers = cats.filter { vis("LIVE", sourceId.value, it.remoteId.value) }.map { CategoryUi(it.remoteId.value, it.name) }
+                val providers = cats.filter { vis("LIVE", it.source.id.value, it.category.remoteId.value) }.map { CategoryUi(it.id, it.label) }
                 // Task 84g: the order saved from this profile (hold-OK move), same rule as VOD.
                 addAll(mergeCategoryOrder(pinned, providers, saved.orEmpty().split('\n').filter { it.isNotBlank() }, { it.id }))
             }
@@ -314,7 +319,8 @@ class LiveViewModel(
             )
         }
         selection.value = src to selected
-        viewModelScope.launch { userData.setCategoryHidden(src, ContentKind.LIVE, id, hidden = true) }
+        val (owner, category) = liveScope(id, src)
+        viewModelScope.launch { userData.setCategoryHidden(owner, ContentKind.LIVE, category, hidden = true) }
     }
 
     /** Task 84m: Undo — show the hidden category again and clear the toast. */
@@ -322,7 +328,8 @@ class LiveViewModel(
         val n = _state.value.hiddenNotice ?: return
         val src = _state.value.sourceId ?: return
         _state.update { it.copy(hiddenNotice = null) }
-        viewModelScope.launch { userData.setCategoryHidden(src, ContentKind.LIVE, n.categoryId, hidden = false) }
+        val (owner, category) = liveScope(n.categoryId, src)
+        viewModelScope.launch { userData.setCategoryHidden(owner, ContentKind.LIVE, category, hidden = false) }
     }
 
     /** Task 84m: the Undo toast timed out. */
@@ -340,7 +347,10 @@ class LiveViewModel(
         lastRequested = keys
         val at = clock.nowMs()
         val src = _state.value.sourceId ?: return
-        val result = epg.nowNext(src, keys, at).mapValues { (_, nn) ->
+        val result = keys.groupBy { liveScope(it, src).first }.flatMap { (owner, lookups) ->
+            val requested = lookups.associateBy { liveScope(it, src).second }
+            epg.nowNext(owner, requested.keys.toList(), at).map { (id, nn) -> requested.getValue(id) to nn }
+        }.toMap().mapValues { (_, nn) ->
             val now = nn.now
             NowNextUi(
                 nowTitle = now?.title,
@@ -365,7 +375,7 @@ class LiveViewModel(
      * channel's NEXT programme. No-op when there is no future programme to remind about.
      */
     fun remindNext(row: ChannelRow) {
-        val nn = row.epgKey?.let { _state.value.nowNext[it] } ?: return
+        val nn = liveEpgKey(row)?.let { _state.value.nowNext[it] } ?: return
         val start = nn.nextStartMs ?: return
         val end = nn.nextEndMs ?: return
         if (start <= clock.nowMs()) return
@@ -377,7 +387,13 @@ class LiveViewModel(
     }
 
     fun onChannelClick(row: ChannelRow) {
-        events.trySend(LiveEvent.PlayChannel(row.key, row.categoryId))
+        events.trySend(LiveEvent.PlayChannel(row.key, RemoteId(_state.value.selectedCategoryId ?: row.categoryId.value)))
+    }
+
+    suspend fun sourceChoices(row: ChannelRow): List<Pair<String, ChannelRow>> {
+        val names = sources.sources().first().associate { it.id to it.name }
+        val choices = listOf(row) + unified.alternatives(row, latestVisibility)
+        return if (choices.size < 2) emptyList() else choices.map { (names[it.key.sourceId] ?: it.key.sourceId.value) to it }
     }
 
     /**

@@ -95,6 +95,7 @@ class LivePlayerViewModelTest {
         repeat(5) { vm.zapNext(); advanceTimeBy(100) }
         // Banner follows every press immediately...
         assertEquals("Ch 6", vm.state.value.banner?.name)
+        assertEquals(channels[5].key, vm.state.value.channelKey)
         // ...but no stream opened yet while surfing.
         assertEquals(listOf("1"), opened)
 
@@ -124,6 +125,7 @@ class LivePlayerViewModelTest {
         repeat(5) { vm.zapNext() } // no time in between: used to collapse onto "Ch 2"
         advanceUntilIdle()
         assertEquals("Ch 6", vm.state.value.banner?.name)
+        assertEquals(channels[5].key, vm.state.value.channelKey)
         assertEquals(listOf("1", "6"), opened)
     }
 
@@ -152,28 +154,44 @@ class LivePlayerViewModelTest {
     // ---- Task 93: alternate-source live fallback ----
 
     @Test
-    fun failedChannelOffersSameNameFromAnotherSource() = runTest(dispatcher) {
+    fun failedChannelAutomaticallyUsesTheOtherProvider() = runTest(dispatcher) {
         val vm = vm()
         vm.start(channels[0].key, cat)
         advanceUntilIdle()
         vm.onStreamFailed()
         advanceUntilIdle()
-        assertEquals("alt1", vm.state.value.switchTo?.key?.remoteId?.value)
-        assertEquals("Src2", vm.state.value.switchTo?.sourceName)
+        assertEquals(listOf("s/1", "s2/alt1"), openedAt)
+        assertEquals(altChannels.first().key, vm.state.value.channelKey)
+        assertTrue(vm.state.value.sourceNotice!!.contains("Src2"))
     }
 
     @Test
-    fun switchingToTheOfferedSourceOpensThatChannel() = runTest(dispatcher) {
+    fun manualSourceChoiceOpensThatChannel() = runTest(dispatcher) {
+        val vm = vm()
+        vm.start(channels[0].key, cat)
+        advanceUntilIdle()
+        assertEquals(2, vm.state.value.channelSources.size)
+        vm.switchChannel(vm.state.value.channelSources.last().key)
+        advanceUntilIdle()
+        assertEquals(listOf("1", "alt1"), opened)
+        assertEquals(listOf("s/1", "s2/alt1"), openedAt)
+        assertEquals(altChannels.first().key, vm.state.value.channelKey)
+        assertNull(vm.state.value.switchTo)
+    }
+
+    @Test
+    fun exhaustedProvidersDoNotBounceBackAndForth() = runTest(dispatcher) {
         val vm = vm()
         vm.start(channels[0].key, cat)
         advanceUntilIdle()
         vm.onStreamFailed()
         advanceUntilIdle()
-        vm.switchChannel(vm.state.value.switchTo!!.key)
+        vm.onStreamFailed()
         advanceUntilIdle()
-        assertEquals(listOf("1", "alt1"), opened)
+        repeat(3) { vm.onStreamFailed(); advanceUntilIdle() }
         assertEquals(listOf("s/1", "s2/alt1"), openedAt)
-        assertNull(vm.state.value.switchTo)
+        assertEquals(altChannels.first().key, vm.state.value.channelKey)
+        assertNotNull(vm.state.value.error)
     }
 
     @Test
@@ -201,7 +219,7 @@ class LivePlayerViewModelTest {
     }
 
     @Test
-    fun parentalLocksHideTheOfferedSourceSwitch() = runTest(dispatcher) {
+    fun parentalLocksExcludeSourcesFromThePickerAndAutomaticBackup() = runTest(dispatcher) {
         val denySrc2: Visibility = { _, sourceId, categoryId -> !(sourceId == "s2" && categoryId == "c") }
         val vm = vm(visibility = flowOf(denySrc2))
         vm.start(channels[0].key, cat)
@@ -209,13 +227,27 @@ class LivePlayerViewModelTest {
         vm.onStreamFailed()
         advanceUntilIdle()
         assertNull(vm.state.value.switchTo)
+        assertEquals(listOf("s/1"), openedAt)
+        assertEquals(1, vm.state.value.channelSources.size)
+        assertNotNull(vm.state.value.error)
     }
 
     @Test
-    fun channelNamesMatchAfterPunctuationAndCaseAreIgnored() {
+    fun openingAnAlternateCopyStillZapsThroughTheCombinedOrder() = runTest(dispatcher) {
         val vm = vm()
-        assertTrue(vm.sameChannelName("Ch 1 HD", "ch1hd"))
-        assertTrue(vm.sameChannelName("Ch 1", "Ch.1!"))
+        vm.start(altChannels[0].key, RemoteId(com.yodesla.omniverse.feature.live.LiveViewModel.ALL))
+        advanceUntilIdle()
+        vm.zapNext()
+        advanceUntilIdle()
+        assertEquals(listOf("s2/alt1", "s/2"), openedAt)
+    }
+
+    @Test
+    fun channelMatchingPreservesRegionsAndTimeShifts() {
+        val vm = vm()
+        assertTrue(vm.sameChannelName("Ch 1 HD", "ch 1 FHD"))
+        assertFalse(vm.sameChannelName("Ch 1", "Ch 1 +1"))
+        assertFalse(vm.sameChannelName("US: Ch 1", "UK: Ch 1"))
     }
 
     // ---- Task 94: next-channel pre-buffering ----
@@ -362,7 +394,8 @@ class LivePlayerViewModelTest {
         override fun categories(sourceId: SourceId, kind: ContentKind, includeHidden: Boolean): Flow<List<Category>> = flowOf(emptyList())
         override fun channels(sourceId: SourceId, categoryId: RemoteId): PagingSource<Int, ChannelRow> = error("unused")
         override fun channelsAll(sourceId: SourceId, excludedCategories: Collection<String>): androidx.paging.PagingSource<Int, com.yodesla.omniverse.core.data.ChannelRow> = TODO()
-        override suspend fun channelListAll(sourceId: SourceId, excludedCategories: Collection<String>): List<com.yodesla.omniverse.core.data.ChannelRow> = emptyList()
+        override suspend fun channelListAll(sourceId: SourceId, excludedCategories: Collection<String>): List<com.yodesla.omniverse.core.data.ChannelRow> =
+            (channels + altChannels).filter { it.key.sourceId == sourceId && it.categoryId.value !in excludedCategories }
         override suspend fun channelOrderAll(sourceId: SourceId, excludedCategories: Collection<String>): List<com.yodesla.omniverse.core.model.ContentKey> = emptyList()
         override suspend fun channelList(sourceId: SourceId, categoryId: RemoteId): List<ChannelRow> = channels
         override suspend fun channelNeighbours(key: ContentKey, categoryId: RemoteId): Pair<ChannelRow?, ChannelRow?> {

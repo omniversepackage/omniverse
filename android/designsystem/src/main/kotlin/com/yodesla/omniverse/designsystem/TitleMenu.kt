@@ -1,6 +1,8 @@
 package com.yodesla.omniverse.designsystem
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -52,6 +54,7 @@ fun TitleMenu(title: String, subtitle: String?, posterUrl: String?, actions: Lis
     // The menu opens while OK is still held (hold-to-open). Ignore OK until it has been pressed DOWN
     // again inside the menu, so releasing the hold doesn't instantly pick the first action.
     val armed = remember(title) { androidx.compose.runtime.mutableStateOf(false) }
+    val artworkFailed = remember(posterUrl) { androidx.compose.runtime.mutableStateOf(false) }
     Box(
         Modifier.fillMaxSize().background(Color(0xCC03060C))
             .onPreviewKeyEvent { e ->
@@ -67,18 +70,19 @@ fun TitleMenu(title: String, subtitle: String?, posterUrl: String?, actions: Lis
         contentAlignment = Alignment.Center,
     ) {
         Row(
-            Modifier.widthIn(max = 820.dp).clip(RoundedCornerShape(22.dp)).background(c.elevated).padding(OmniSpacing.xl),
+            Modifier.widthIn(max = 820.dp).heightIn(max = 480.dp).clip(RoundedCornerShape(22.dp))
+                .background(c.elevated).verticalScroll(rememberScrollState()).padding(OmniSpacing.l),
             horizontalArrangement = Arrangement.spacedBy(OmniSpacing.xl),
         ) {
-            Box(Modifier.width(170.dp).height(255.dp).clip(RoundedCornerShape(14.dp)).background(c.surface)) {
-                if (!posterUrl.isNullOrBlank()) AsyncImage(model = posterUrl, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            if (!posterUrl.isNullOrBlank() && !artworkFailed.value) Box(Modifier.width(130.dp).height(195.dp).clip(RoundedCornerShape(14.dp)).background(c.surface)) {
+                if (!posterUrl.isNullOrBlank()) AsyncImage(model = posterUrl, onError = { artworkFailed.value = true }, contentDescription = null, contentScale = ContentScale.Fit, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt, modifier = Modifier.fillMaxSize())
             }
             Column(Modifier.widthIn(min = 320.dp, max = 460.dp), verticalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
                 Text(title, style = t.headline, color = c.textPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 subtitle?.let { Text(it, style = t.body, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                 actions.forEachIndexed { i, a ->
                     FocusCard(onClick = { onDismiss(); a.onClick() },
-                        modifier = Modifier.fillMaxWidth().height(52.dp).then(if (i == 0) Modifier.focusRequester(first) else Modifier)) {
+                        modifier = Modifier.fillMaxWidth().height(40.dp).then(if (i == 0) Modifier.focusRequester(first) else Modifier)) {
                         Box(Modifier.fillMaxSize().padding(horizontal = OmniSpacing.l), contentAlignment = Alignment.CenterStart) {
                             Text(a.label, style = t.body.copy(fontWeight = FontWeight.SemiBold), color = if (a.destructive) c.live else c.textPrimary)
                         }
@@ -118,13 +122,14 @@ fun CategoryMenu(title: String, actions: List<MenuAction>, onDismiss: () -> Unit
         contentAlignment = Alignment.CenterStart,
     ) {
         Column(
-            modifier.widthIn(max = 340.dp).clip(RoundedCornerShape(22.dp)).background(c.elevated).padding(OmniSpacing.l),
+            modifier.widthIn(max = 340.dp).heightIn(max = 480.dp).clip(RoundedCornerShape(22.dp))
+                .background(c.elevated).verticalScroll(rememberScrollState()).padding(OmniSpacing.focusEdge),
             verticalArrangement = Arrangement.spacedBy(OmniSpacing.s),
         ) {
             Text(title, style = t.title, color = c.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
             actions.forEachIndexed { i, a ->
                 FocusCard(onClick = { onDismiss(); a.onClick() },
-                    modifier = Modifier.fillMaxWidth().height(52.dp).then(if (i == 0) Modifier.focusRequester(first) else Modifier)) {
+                    modifier = Modifier.fillMaxWidth().height(40.dp).then(if (i == 0) Modifier.focusRequester(first) else Modifier)) {
                     Box(Modifier.fillMaxSize().padding(horizontal = OmniSpacing.l), contentAlignment = Alignment.CenterStart) {
                         Text(a.label, style = t.body.copy(fontWeight = FontWeight.SemiBold), color = if (a.destructive) c.live else c.textPrimary)
                     }

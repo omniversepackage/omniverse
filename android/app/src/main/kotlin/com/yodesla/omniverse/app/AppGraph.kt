@@ -206,6 +206,18 @@ class AppGraph(context: Context, val brand: BrandConfig) {
             io = io,
         )
     }
+    val discovery by lazy { com.yodesla.omniverse.core.data.metadata.DiscoveryRepository(
+        BuildConfig.TMDB_API_KEY.takeIf { it.isNotBlank() }?.let { com.yodesla.omniverse.core.data.metadata.Tmdb(http, it, io = io) },
+        userData, catalog, clock,
+        BuildConfig.TMDB_API_KEY.takeIf { it.isNotBlank() }?.let { com.yodesla.omniverse.core.data.metadata.NetflixCharts(http, com.yodesla.omniverse.core.data.metadata.Tmdb(http, it, io = io)) }) }
+
+    /** Task 142: Anime hub trending charts and channel art (TMDB; null key = feeds stay empty). */
+    val animeFeeds by lazy { com.yodesla.omniverse.core.data.metadata.AnimeHubFeeds(
+        BuildConfig.TMDB_API_KEY.takeIf { it.isNotBlank() }?.let { com.yodesla.omniverse.core.data.metadata.Tmdb(http, it, io = io) },
+        userData, clock) }
+
+    val autoRefresh by lazy { AutoRefreshCoordinator(this) }
+
     val parental: com.yodesla.omniverse.android.parental.ParentalControls by lazy {
         com.yodesla.omniverse.android.parental.ParentalControls(userData)
     }
@@ -461,12 +473,12 @@ class AppGraph(context: Context, val brand: BrandConfig) {
                 StartupTrace.mark("startup sync waiting $wait ms for Home rows")
                 delay(wait)
             }
-            syncAllStale()
+            autoRefresh.run(appStart = true)
         }
     }
 
     /** Suspending form for the background worker: returns when every stale source is done. */
-    suspend fun syncAllStale() {
+    suspend fun syncAllStale(forceAll: Boolean = false) {
         // A parser change needs fresh catalog rows even when their last sync is still recent.
         // Rev 3 retries the rev 2 Xtream series TMDB repair, which did not actually pass force
         // to the sync engine and incorrectly marked the refresh complete.
@@ -475,7 +487,7 @@ class AppGraph(context: Context, val brand: BrandConfig) {
         // already synced under rev 3.
         val refreshCatalog = catalogRevisionNeedsRefresh(userData.setting(CATALOG_REV_KEY).first())
         val catalogRefreshed = syncSourcesForCatalogRevision(
-            sources.sources().first().map { it.id }, refreshCatalog, sync::isStale, ::runSync,
+            sources.sources().first().map { it.id }, refreshCatalog || forceAll, sync::isStale, ::runSync,
         )
         if (refreshCatalog && catalogRefreshed) userData.putSetting(CATALOG_REV_KEY, CATALOG_REV)
     }

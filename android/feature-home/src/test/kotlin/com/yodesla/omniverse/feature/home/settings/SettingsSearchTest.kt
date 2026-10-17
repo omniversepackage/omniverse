@@ -128,8 +128,8 @@ class SettingsSearchTest {
         )
         assertEquals(
             listOf(
-                SettingsRowKeys.TITLE, SettingsRowKeys.EXPERIENCE, SettingsRowKeys.TEXT_SIZE,
-                SettingsRowKeys.SCREENSAVER, SettingsRowKeys.CUSTOMIZE_HOME, SettingsRowKeys.HIDDEN_CW,
+                SettingsRowKeys.TITLE, SettingsRowKeys.EXPERIENCE, SettingsRowKeys.HIDE_SPORTS_SCORES, SettingsRowKeys.TEXT_SIZE,
+                SettingsRowKeys.MOVIES_SHOWS_VIEW, SettingsRowKeys.LEFT_MENU, SettingsRowKeys.MENU_WARNING, SettingsRowKeys.SCREENSAVER, SettingsRowKeys.CUSTOMIZE_HOME, SettingsRowKeys.HIDDEN_CW,
                 SettingsRowKeys.END_SPACER,
             ),
             settingsPaneItemKeys(SettingsCategory.Display, hasSlot = true, hasHiddenCwRow = true),

@@ -5,10 +5,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.platform.LocalConfiguration
 import com.yodesla.omniverse.designsystem.LocalCompact
 import com.yodesla.omniverse.designsystem.OmniTheme
+import com.yodesla.omniverse.designsystem.OmniSpacing
 import com.yodesla.omniverse.designsystem.BottomNav
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,11 +19,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.background
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.focusGroup
+import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CalendarViewWeek
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.LiveTv
 import androidx.compose.material.icons.outlined.SportsSoccer
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.Science
 import androidx.compose.material.icons.outlined.Search
@@ -110,12 +114,15 @@ import com.yodesla.omniverse.android.parental.PinPad
 internal sealed interface Screen {
     /** Top-level sections live beside the nav rail. */
     sealed interface Section : Screen { val id: String }
+    data object ForYou : Section { override val id = "for-you" }
     data object Home : Section { override val id = "home" }
     /** [inGuide]: open straight into the full guide grid (Task 107: Back from a search-opened channel). */
     data class Live(val inGuide: Boolean = false) : Section { override val id = "live" }
     data object Sports : Section { override val id = "sports" }
     data object Movies : Section { override val id = "movies" }
     data object Shows : Section { override val id = "shows" }
+    /** Task 142: Explore › Anime — every anime and animated title plus anime/cartoon channels. */
+    data object Anime : Section { override val id = "anime" }
     /** [query]: a voice / global-search text to pre-fill the field (task 80); null = normal open. */
     data class Search(val query: String? = null) : Section { override val id = "search" }
     data object Settings : Section { override val id = "settings" }
@@ -140,7 +147,7 @@ internal sealed interface Screen {
 }
 
 private val sections: Map<String, Screen.Section> =
-    listOf(Screen.Home, Screen.Search(), Screen.Settings, Screen.Live(), Screen.Sports, Screen.Movies, Screen.Shows, Screen.DevGuide).associateBy { it.id }
+    listOf(Screen.Home, Screen.ForYou, Screen.Search(), Screen.Settings, Screen.Live(), Screen.Sports, Screen.Movies, Screen.Shows, Screen.Anime, Screen.DevGuide).associateBy { it.id }
 
 /**
  * Task 107 + 118: the stack rewrite behind "Back from a search result goes to" (Settings › Playback).
@@ -176,6 +183,7 @@ fun TvRoot(brand: BrandConfig, graph: AppGraph, mobile: Boolean = false) {
     // Detail/player routes remove the section from composition; retain its saveable browse state
     // until Back returns (category-panel visibility and scroll positions).
     val sectionState = rememberSaveableStateHolder()
+    val browseEntries = remember { androidx.compose.runtime.mutableStateMapOf<String, Int>() }
     var lastPlayed by remember { mutableStateOf<ContentKey?>(null) }
     // Task 107/118: "Back from a search result goes to" (Settings › Playback), per-profile. Since task
     // 118 it only decides the landing for a channel opened from Search; a title always returns to Search.
@@ -194,6 +202,7 @@ fun TvRoot(brand: BrandConfig, graph: AppGraph, mobile: Boolean = false) {
     LaunchedEffect(Unit) { withFrameNanos { graph.firstFrameDrawn() } }
     fun openSection(id: String) {
         val target = sections[id] ?: return
+        if (id == "movies" || id == "shows") browseEntries[id] = (browseEntries[id] ?: 0) + 1
         railOpen = false
         stack.clear()
         stack.add(Screen.Home)
@@ -437,14 +446,21 @@ fun TvRoot(brand: BrandConfig, graph: AppGraph, mobile: Boolean = false) {
         buildList {
             add(NavItem("search", "Search", Icons.Outlined.Search))
             add(NavItem("home", "Home", Icons.Outlined.Home))
+            // Kory 2026-10-17: For You is unfinished — hidden from the menu until it is done.
+            // add(NavItem("for-you", "For You", Icons.Outlined.Favorite))
             add(NavItem("live", "Live TV", Icons.Outlined.LiveTv))
             add(NavItem("sports", "Live Sports", Icons.Outlined.SportsSoccer))
             add(NavItem("movies", "Movies", Icons.Outlined.Movie))
             add(NavItem("shows", "Shows", Icons.Outlined.Tv))
+            add(NavItem("anime", "Anime", Icons.Outlined.AutoAwesome))
             if (BuildConfig.DEV_TOOLS && !mobile) add(NavItem("dev", "Guide preview", Icons.Outlined.Science))
             add(NavItem("settings", "Settings", Icons.Outlined.Settings))
         }
     }
+    // Kory: hold OK on a main category to hide it from the menu; Settings › Display brings it back.
+    val hiddenNavRaw by graph.userData.setting(HIDDEN_NAV_KEY).collectAsStateWithLifecycle(initialValue = null)
+    val shownNav = remember(navItems, hiddenNavRaw) { parseHiddenNav(hiddenNavRaw).let { hidden -> navItems.filter { it.id !in hidden } } }
+    var navMenu by remember { mutableStateOf<NavItem?>(null) }
 
     val top = stack.last()
     // Live keeps playing only fullscreen or as the mini player under the Live tab.
@@ -472,6 +488,11 @@ fun TvRoot(brand: BrandConfig, graph: AppGraph, mobile: Boolean = false) {
         fresh.prime(primed)
     }
     // Task 94: a failed pre-buffer is not shown to the viewer; a refusal disables pre-loading.
+    LaunchedEffect(liveEngine, liveActive) {
+        if (liveActive) liveEngine.state.collect { state ->
+            if (state is com.yodesla.omniverse.player.PlayerState.Failed) liveVm.onStreamFailed(state.kind)
+        }
+    }
     LaunchedEffect(spareEngine) {
         val e = spareEngine ?: return@LaunchedEffect
         e.state.collect { s ->
@@ -501,23 +522,25 @@ fun TvRoot(brand: BrandConfig, graph: AppGraph, mobile: Boolean = false) {
         } else kidsNotice = false
     }
     val miniPlayer: (@Composable (Modifier) -> Unit)? =
-        if (liveActive) { m -> com.yodesla.omniverse.feature.live.player.MiniLivePlayer(liveEngine, liveUi.banner, m) } else null
+        if (liveActive) { m -> com.yodesla.omniverse.feature.live.player.MiniLivePlayer(liveEngine, liveUi.banner, m, liveUi.channelKey) } else null
     BackHandler(enabled = stack.size > 1 || (!mobile && top is Screen.Section)) {
         if (!mobile && top is Screen.Section) railOpen = !railOpen else pop()
     }
     // While the switch-PIN pad is up, Back cancels the PIN instead of popping the screen behind it.
     BackHandler(enabled = pinForSwitch) { pinForSwitch = false; pendingSwitch = null; pendingAdmin = null; pendingAdminTitle = null; pinError = null }
+    ChannelFavoritesHost(graph) {
     CompositionLocalProvider(
+        com.yodesla.omniverse.feature.vod.LocalDiscovery provides graph.discovery,
         LocalVisualTier provides rememberVisualTier(),
         LocalCompact provides (mobile && LocalConfiguration.current.screenWidthDp < 600),
     ) {
         if (top is Screen.Section && mobile) {
             Column(Modifier.fillMaxSize().background(OmniTheme.colors.background).safeDrawingPadding()) {
                 Box(Modifier.weight(1f).fillMaxWidth()) {
-                    sectionState.SaveableStateProvider(top.id) { key(top) { SectionContent(top, graph, lastPlayed, ::openCard, ::push, ::addSource, miniPlayer = miniPlayer, appScope = appScope, onRequirePin = ::requestBackupAdmin, onSetPickerAtStart = { enabled, update -> requestProfileAdmin { update(enabled) } }, onCreateProfile = { requestProfileAdmin { profilesVm.openNew(); push(Screen.ProfileEdit(null)) } }) } }
+                    sectionState.SaveableStateProvider(top.id) { key(top) { SectionContent(top, graph, lastPlayed, ::openCard, ::push, ::addSource, browseEntry = browseEntries[top.id] ?: 0, miniPlayer = miniPlayer, appScope = appScope, onRequirePin = ::requestBackupAdmin, onSetPickerAtStart = { enabled, update -> requestProfileAdmin { update(enabled) } }, onCreateProfile = { requestProfileAdmin { profilesVm.openNew(); push(Screen.ProfileEdit(null)) } }) } }
                 }
                 // Search sits in the top-level list on TV (rail top); on a phone it's just another tab.
-                BottomNav(navItems, selectedId = top.id, onSelect = ::openSection)
+                BottomNav(shownNav, selectedId = top.id, onSelect = ::openSection)
             }
         } else if (top is Screen.Section) {
             // Browsing stays full-width. When navigation opens, reserve its width so the
@@ -539,9 +562,24 @@ fun TvRoot(brand: BrandConfig, graph: AppGraph, mobile: Boolean = false) {
                         }
                         .focusGroup(),
                 ) {
-                    sectionState.SaveableStateProvider(top.id) { key(top) { SectionContent(top, graph, lastPlayed, ::openCard, ::push, ::addSource, onOpenNavigation = { railOpen = true }, miniPlayer = miniPlayer, appScope = appScope, onSearch = { openSection("search") }, onManageProfiles = { requestProfileAdmin { push(Screen.ManageProfiles) } }, onRequirePin = ::requestBackupAdmin, onSetPickerAtStart = { enabled, update -> requestProfileAdmin { update(enabled) } }, onCreateProfile = { requestProfileAdmin { profilesVm.openNew(); push(Screen.ProfileEdit(null)) } }) } }
+                    sectionState.SaveableStateProvider(top.id) { key(top) { SectionContent(top, graph, lastPlayed, ::openCard, ::push, ::addSource, browseEntry = browseEntries[top.id] ?: 0, onOpenNavigation = { railOpen = true }, onOpenSection = ::openSection, miniPlayer = miniPlayer, appScope = appScope, onSearch = { openSection("search") }, onManageProfiles = { requestProfileAdmin { push(Screen.ManageProfiles) } }, onRequirePin = ::requestBackupAdmin, onSetPickerAtStart = { enabled, update -> requestProfileAdmin { update(enabled) } }, onCreateProfile = { requestProfileAdmin { profilesVm.openNew(); push(Screen.ProfileEdit(null)) } }) } }
                 }
-                if (railOpen) NavRail(navItems, selectedId = top.id, onSelect = ::openSection, selectedRequester = railFocus)
+                if (railOpen) NavRail(shownNav, selectedId = top.id, onSelect = ::openSection, selectedRequester = railFocus,
+                    onHold = { id -> navMenu = navItems.firstOrNull { it.id == id && id !in UNHIDEABLE_NAV } })
+                navMenu?.let { item ->
+                    com.yodesla.omniverse.designsystem.CategoryMenu(
+                        title = item.label,
+                        actions = listOf(
+                            com.yodesla.omniverse.designsystem.MenuAction("Hide from menu", onClick = {
+                                appScope.launch { graph.userData.putSetting(HIDDEN_NAV_KEY, (parseHiddenNav(hiddenNavRaw) + item.id).joinToString(",")) }
+                                if (top.id == item.id) openSection("home")
+                            }, destructive = true),
+                            com.yodesla.omniverse.designsystem.MenuAction("Cancel", onClick = {}),
+                        ),
+                        onDismiss = { navMenu = null; runCatching { railFocus.requestFocus() } },
+                        modifier = Modifier.padding(start = TvNavRailWidth + OmniSpacing.m),
+                    )
+                }
             }
             LaunchedEffect(railOpen, top) {
                 if (railOpen) railFocus.requestFocusWhenReady()
@@ -735,6 +773,8 @@ fun TvRoot(brand: BrandConfig, graph: AppGraph, mobile: Boolean = false) {
     }
 }
 
+}
+
 /** Recheck an open destination when the PIN session expires or the app returns from background. */
 @Composable
 private fun ParentalRouteGate(top: Screen, graph: AppGraph, onDenied: () -> Unit, content: @Composable () -> Unit) {
@@ -808,6 +848,7 @@ private fun SectionContent(
     push: (Screen) -> Unit,
     addSource: () -> Unit,
     onOpenNavigation: () -> Unit = {},
+    onOpenSection: (String) -> Unit = {},
     onSearch: () -> Unit = {},
     onManageProfiles: () -> Unit = {},
     /** Runs [action] immediately, or after the parental PIN when one is set (M4: backup restore). */
@@ -819,10 +860,11 @@ private fun SectionContent(
     miniPlayer: (@Composable (Modifier) -> Unit)? = null,
     /** Outlives this section (opening a player disposes it), so saves launched here finish. */
     appScope: kotlinx.coroutines.CoroutineScope,
+    browseEntry: Int = 0,
 ) {
     when (s) {
         Screen.Home -> {
-            val vm = viewModel(key = "home") { HomeViewModel(graph.catalog, graph.epg, graph.userData, graph.clock, visibility = graph.browseVisibility, upNext = com.yodesla.omniverse.core.data.UpNextResolver(graph.sources), tmdb = graph.tmdbEnricher, sourceAlert = graph.sourceHealth.alert(), myTeams = graph.myTeams) }
+            val vm = viewModel(key = "home") { HomeViewModel(graph.catalog, graph.epg, graph.userData, graph.clock, visibility = graph.browseVisibility, upNext = com.yodesla.omniverse.core.data.UpNextResolver(graph.sources), tmdb = graph.tmdbEnricher, sourceAlert = graph.sourceHealth.alert(), myTeams = graph.myTeams, discovery = graph.discovery) }
             val homeState by vm.state.collectAsStateWithLifecycle()
             // Task 101: cached rows on screen is the signal that lets the startup sync begin.
             LaunchedEffect(homeState) {
@@ -831,6 +873,17 @@ private fun SectionContent(
             val curProfile by graph.profiles.current().collectAsStateWithLifecycle(initialValue = null)
             // Task 84b: the Guest is "no profile" - Home shows no avatar chip in that state.
             HomeRoute(vm, onOpen = { card -> if (card.focusEpisode != null) push(Screen.Detail(card.open, focusEpisode = card.focusEpisode)) else openCard(card.open, card.categoryId) }, onOpenNavigation = onOpenNavigation, onPlay = { key, fromStart -> push(Screen.Detail(key, fromStart)) }, profile = curProfile?.takeIf { !it.isGuest }, onProfileClick = { push(Screen.WhosWatching) })
+        }
+        Screen.ForYou -> {
+            val profile by graph.profiles.current().collectAsStateWithLifecycle(initialValue = null)
+            val vm = viewModel(key = "for-you-${profile?.id}") {
+                com.yodesla.omniverse.feature.home.ForYouViewModel(graph.catalog, graph.userData, graph.search,
+                    graph.browseVisibility, graph.followedTeams, graph.myTeams, graph.searchExcludedCategoryKeys,
+                    allowNews = profile != null && profile?.isKids != true)
+            }
+            com.yodesla.omniverse.feature.home.ForYouRoute(vm, profile?.takeIf { !it.isGuest }?.name,
+                onOpen = { card -> openCard(card.open, card.categoryId) }, onMenu = onOpenNavigation,
+                onMovies = { onOpenSection("movies") }, onShows = { onOpenSection("shows") }, onSports = { onOpenSection("sports") }, allowNews = profile != null && profile?.isKids != true)
         }
         Screen.Sports -> {
             val vm = viewModel(key = "sports") {
@@ -878,13 +931,44 @@ private fun SectionContent(
                 LiveRoute(vm, onPlay = { k, cat -> switchTo("guide"); openCard(k, cat) }, onAddSource = addSource, playingKey = lastPlayed, onOpenGuide = { switchTo("guide") }, onOpenGuideForCategory = { switchTo("guide") }, onOpenNavigation = onOpenNavigation, miniPlayer = miniPlayer, onSearch = onSearch, session = graph.multiviewSession, onOpenMultiview = { push(Screen.Multiview) }, onMultiview = { keys -> graph.multiviewSession.setAll(keys); push(Screen.Multiview) }, onOpenLanguageFilter = { push(Screen.Settings) })
             }
         }
-        Screen.Movies -> {
-            val vm = viewModel(key = "browse-vod") { VodBrowseViewModel(ContentKind.VOD, graph.sources, graph.catalog, graph.userData, visibility = graph.browseVisibility, excludedCategoryKeys = graph.vodExcludedCategoryKeys, rottenTomatoes = graph.rottenTomatoes, tmdb = graph.tmdbEnricher, profiles = graph.profiles) }
-            VodBrowseRoute(vm, "Movies", onPlay = { key, fromStart -> push(Screen.Detail(key, fromStart)) }, onOpenNavigation = onOpenNavigation, onSearch = onSearch) { push(Screen.Detail(it)) }
+        Screen.Anime -> {
+            val vm = viewModel(key = "anime") {
+                com.yodesla.omniverse.feature.vod.AnimeHubViewModel(graph.catalog, graph.epg, graph.userData,
+                    visibility = graph.browseVisibility, excludedCategoryKeys = graph.searchExcludedCategoryKeys,
+                    tmdb = graph.tmdbEnricher, rottenTomatoes = graph.rottenTomatoes, feeds = graph.animeFeeds)
+            }
+            com.yodesla.omniverse.feature.vod.AnimeHubRoute(vm,
+                onOpen = { push(Screen.Detail(it)) },
+                onPlay = { key, fromStart -> push(Screen.Detail(key, fromStart)) },
+                onWatchChannel = { key, cat -> openCard(key, cat) },
+                onOpenNavigation = onOpenNavigation)
         }
-        Screen.Shows -> {
-            val vm = viewModel(key = "browse-series") { VodBrowseViewModel(ContentKind.SERIES, graph.sources, graph.catalog, graph.userData, visibility = graph.browseVisibility, excludedCategoryKeys = graph.vodExcludedCategoryKeys, rottenTomatoes = graph.rottenTomatoes, tmdb = graph.tmdbEnricher, profiles = graph.profiles) }
-            VodBrowseRoute(vm, "Shows", onPlay = { key, fromStart -> push(Screen.Detail(key, fromStart)) }, onOpenNavigation = onOpenNavigation, onSearch = onSearch) { push(Screen.Detail(it)) }
+        Screen.Movies, Screen.Shows -> {
+            val kind = if (s == Screen.Movies) ContentKind.VOD else ContentKind.SERIES
+            val title = if (s == Screen.Movies) "Movies" else "Shows"
+            val savedView by graph.userData.setting(com.yodesla.omniverse.core.data.MoviesShowsView.KEY).collectAsStateWithLifecycle(initialValue = null)
+            val horizontal = !LocalCompact.current && com.yodesla.omniverse.core.data.MoviesShowsView.parse(savedView) == com.yodesla.omniverse.core.data.MoviesShowsView.HORIZONTAL
+            // Separate browse state lets the viewer switch back to Classic without changing their old selection.
+            val browseKey = (if (kind == ContentKind.VOD) "browse-vod" else "browse-series") + if (horizontal) "-horizontal" else ""
+            val vm = viewModel(key = browseKey) { VodBrowseViewModel(kind, graph.sources, graph.catalog, graph.userData, visibility = graph.browseVisibility, excludedCategoryKeys = graph.vodExcludedCategoryKeys, rottenTomatoes = graph.rottenTomatoes, tmdb = graph.tmdbEnricher, profiles = graph.profiles) }
+            if (horizontal) {
+                LaunchedEffect(vm, browseEntry) { vm.enterHorizontalSection(browseEntry) }
+                val home = viewModel(key = if (kind == ContentKind.VOD) "movie-home" else "show-home") {
+                    HomeViewModel(graph.catalog, graph.epg, graph.userData, graph.clock, visibility = graph.browseVisibility,
+                        upNext = com.yodesla.omniverse.core.data.UpNextResolver(graph.sources), tmdb = graph.tmdbEnricher, contentKind = kind, discovery = graph.discovery)
+                }
+                val leftMenu by graph.userData.setting("left_opens_menu").collectAsStateWithLifecycle(initialValue = null)
+                val menuWarning by graph.userData.setting("warn_main_menu").collectAsStateWithLifecycle(initialValue = null)
+                val menuScope = rememberCoroutineScope()
+                HorizontalBrowseRoute(vm, home, title, onOpenNavigation, onSearch,
+                    leftMenuEnabled = leftMenu != "false", warnBeforeMenu = menuWarning != "false",
+                    onDisableWarning = { menuScope.launch { graph.userData.putSetting("warn_main_menu", "false") } },
+                    onOpenHomeCard = { card -> push(Screen.Detail(card.open, focusEpisode = card.focusEpisode)) },
+                    onPlay = { key, fromStart -> push(Screen.Detail(key, fromStart)) },
+                    onOpen = { push(Screen.Detail(it)) }, entry = browseEntry)
+            } else {
+                VodBrowseRoute(vm, title, onPlay = { key, fromStart -> push(Screen.Detail(key, fromStart)) }, onOpenNavigation = onOpenNavigation, onSearch = onSearch) { push(Screen.Detail(it)) }
+            }
         }
         is Screen.Search -> {
             val vm = viewModel(key = "search") { SearchViewModel(graph.search, graph.catalog, visibility = graph.browseVisibility,
@@ -892,7 +976,7 @@ private fun SectionContent(
                 historySource = graph.userData.setting(com.yodesla.omniverse.feature.home.SEARCH_HISTORY_KEY),
                 saveHistory = { graph.userData.putSetting(com.yodesla.omniverse.feature.home.SEARCH_HISTORY_KEY, it) },
                 reminders = com.yodesla.omniverse.core.data.reminders.ReminderStore(graph.userData, graph.clock), clock = graph.clock,
-                initialQuery = s.query) }
+                initialQuery = s.query, userData = graph.userData) }
             // The VM outlives the section (key "search"), so a voice query arriving on a re-entry
             // must be pushed in explicitly; initialQuery only covers the VM's first creation.
             LaunchedEffect(s.query) { s.query?.let(vm::onQuery) }
@@ -910,7 +994,14 @@ private fun SectionContent(
             Box(Modifier.fillMaxSize()) {
                 SettingsRoute(vm, graph.brand.appName, BuildConfig.VERSION_NAME, graph.brand.disclaimer, onAddSource = addSource, onOpenProfiles = onManageProfiles, onSetPickerAtStart = { enabled -> onSetPickerAtStart(enabled, vm::setPickerAtStart) }, guestMode = curProfile?.isGuest == true, onCreateProfile = onCreateProfile,
                     extraCategories = mapOf<SettingsCategory, SettingsSlot>(
-                        SettingsCategory.Display to { OmniActionRow("Customize Home", "Open", onClick = { customizeHome = true }) },
+                        SettingsCategory.Sources to { AutoRefreshSettings(graph, discovery = false) },
+                        SettingsCategory.Metadata to { AutoRefreshSettings(graph, discovery = true) },
+                        SettingsCategory.Display to {
+                            Column(verticalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
+                                OmniActionRow("Customize Home", "Open", onClick = { customizeHome = true })
+                                HiddenNavRows(graph)
+                            }
+                        },
                         SettingsCategory.AboutAndUpdates to {
                             // Manual update check (the app also checks on its own at most every 6 h).
                             val updateVm = viewModel(key = "update") { com.yodesla.omniverse.android.update.UpdateViewModel(graph.updateChecker, graph.apkInstaller) }
@@ -941,7 +1032,7 @@ private fun SectionContent(
                     ),
                     sourceExtras = { id -> SourceExtras(graph, id, onReenterLogin = { push(Screen.Onboarding(firstRun = false, editSourceId = id)) }) })
                 if (customizeHome) {
-                    val homeVm = viewModel(key = "home") { HomeViewModel(graph.catalog, graph.epg, graph.userData, graph.clock, visibility = graph.browseVisibility, upNext = com.yodesla.omniverse.core.data.UpNextResolver(graph.sources), tmdb = graph.tmdbEnricher, sourceAlert = graph.sourceHealth.alert(), myTeams = graph.myTeams) }
+                    val homeVm = viewModel(key = "home") { HomeViewModel(graph.catalog, graph.epg, graph.userData, graph.clock, visibility = graph.browseVisibility, upNext = com.yodesla.omniverse.core.data.UpNextResolver(graph.sources), tmdb = graph.tmdbEnricher, sourceAlert = graph.sourceHealth.alert(), myTeams = graph.myTeams, discovery = graph.discovery) }
                     val hs by homeVm.state.collectAsStateWithLifecycle()
                     com.yodesla.omniverse.feature.home.HomeCustomizePanel(homeVm, hs.panel, hs.compact, onDismiss = { customizeHome = false }, modifier = Modifier.fillMaxSize())
                 }
@@ -952,3 +1043,31 @@ private fun SectionContent(
 }
 
 private const val LIVE_VIEW_KEY = "live_view"
+
+/** Kory: main menu (Explore rail) categories the viewer hid with hold OK; Settings › Display shows them again. */
+internal const val HIDDEN_NAV_KEY = "hidden_nav_sections"
+
+/** Never hideable: Home is where hiding the open section lands, Settings is where items come back. */
+internal val UNHIDEABLE_NAV = setOf("home", "settings")
+
+internal fun parseHiddenNav(raw: String?): Set<String> =
+    raw.orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() && it !in UNHIDEABLE_NAV }.toSet()
+
+private val NavLabels = mapOf(
+    "search" to "Search", "for-you" to "For You", "live" to "Live TV", "sports" to "Live Sports",
+    "movies" to "Movies", "shows" to "Shows", "anime" to "Anime", "dev" to "Guide preview",
+)
+
+/** Settings › Display: one row per hidden main category, with Show to put it back in the menu. */
+@Composable
+private fun HiddenNavRows(graph: AppGraph) {
+    val raw by graph.userData.setting(HIDDEN_NAV_KEY).collectAsStateWithLifecycle(initialValue = null)
+    val hidden = parseHiddenNav(raw)
+    val scope = rememberCoroutineScope()
+    fun save(set: Set<String>) { scope.launch { graph.userData.putSetting(HIDDEN_NAV_KEY, set.joinToString(",")) } }
+    hidden.forEach { id ->
+        OmniActionRow("Hidden from menu: ${NavLabels[id] ?: id}", "Show", onClick = { save(hidden - id) },
+            secondary = "Hold OK on a menu item to hide it")
+    }
+    if (hidden.size > 1) OmniActionRow("Show all hidden menu items", "Show all", onClick = { save(emptySet()) })
+}

@@ -91,9 +91,9 @@ class DetailSpoilerTest {
         advanceUntilIdle()
         assertTrue(vm.state.value.revealedSpoilerIds.isEmpty())
         vm.revealEpisode(spEp2)
-        assertEquals(setOf("e2"), vm.state.value.revealedSpoilerIds)
+        assertEquals(setOf(episodeProgressId(spEp2)), vm.state.value.revealedSpoilerIds)
         vm.revealEpisode(spEp2)
-        assertEquals(setOf("e2"), vm.state.value.revealedSpoilerIds)
+        assertEquals(setOf(episodeProgressId(spEp2)), vm.state.value.revealedSpoilerIds)
     }
 
     @Test

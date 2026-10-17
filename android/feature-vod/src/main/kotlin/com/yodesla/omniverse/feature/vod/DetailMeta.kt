@@ -4,6 +4,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -37,11 +38,12 @@ internal fun DetailMetaRow(
 ) {
     val c = OmniTheme.colors
     val t = OmniTheme.type
-    val text = listOfNotNull(year?.toString(), fmtRuntime(runtimeSec), genre?.takeIf { it.isNotBlank() }, certification?.takeIf { it.isNotBlank() }).joinToString("  ·  ")
+    val genreSummary = genre?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }?.distinct()?.take(3)?.joinToString(", ")
+    val text = listOfNotNull(year?.toString(), fmtRuntime(runtimeSec), genreSummary?.takeIf { it.isNotBlank() }, certification?.takeIf { it.isNotBlank() }).joinToString("  ·  ")
     val scores = rt?.takeIf { !it.isEmpty }
     if (text.isEmpty() && rating == null && scores == null) return
-    Row(modifier, horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m), verticalAlignment = Alignment.CenterVertically) {
-        if (text.isNotEmpty()) Text(text, style = t.body, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    FlowRow(modifier, horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (text.isNotEmpty()) Text(text, style = t.caption, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
         rating?.let { RatingBadge(it) }
         scores?.let { RtBadges(it) }
     }

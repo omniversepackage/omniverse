@@ -1,5 +1,6 @@
 package com.yodesla.omniverse.designsystem
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -10,6 +11,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.tv.material3.Border
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.Text
@@ -30,13 +32,20 @@ fun OmniButton(
     modifier: Modifier = Modifier,
     primary: Boolean = false,
     destructive: Boolean = false,
+    compact: Boolean = false,
 ) {
     val c = OmniTheme.colors
     val labelStyle = OmniTheme.type.body.copy(shadow = null)
+    val shape = RoundedCornerShape(if (compact) 16.dp else 20.dp)
     Button(
         onClick = onClick,
-        modifier = modifier.height(52.dp).touchClick(onClick),
-        shape = ButtonDefaults.shape(RoundedCornerShape(26.dp)),
+        modifier = modifier.height(if (compact) 32.dp else 40.dp).touchClick(onClick),
+        shape = ButtonDefaults.shape(shape = shape),
+        border = ButtonDefaults.border(
+            border = Border.None,
+            focusedBorder = Border(BorderStroke(2.dp, c.focusBorder), 0.dp, shape),
+            pressedBorder = Border.None,
+        ),
         colors = ButtonDefaults.colors(
             containerColor = if (primary) c.accent.copy(alpha = 0.18f) else c.elevated,
             contentColor = if (destructive) c.live else c.textPrimary,
@@ -54,7 +63,7 @@ fun OmniButton(
             pressedContentColor = if (destructive) c.live else c.background,
         ),
         scale = ButtonDefaults.scale(focusedScale = 1.05f),
-        contentPadding = PaddingValues(horizontal = 28.dp),
+        contentPadding = PaddingValues(horizontal = if (compact) 14.dp else 20.dp),
     ) {
         // The button's content row doesn't fill the fixed height; centre the label explicitly.
         Box(Modifier.fillMaxHeight(), contentAlignment = Alignment.Center) {

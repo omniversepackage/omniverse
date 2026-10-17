@@ -39,6 +39,7 @@ import com.yodesla.omniverse.core.model.ContentKey
 import com.yodesla.omniverse.core.model.RemoteId
 import com.yodesla.omniverse.feature.live.ChannelMenuState
 import com.yodesla.omniverse.feature.live.channelMenuActions
+import com.yodesla.omniverse.feature.live.LiveProviderButton
 import com.yodesla.omniverse.designsystem.CategoryAtmosphere
 import com.yodesla.omniverse.designsystem.CategoryDestinationHeader
 import com.yodesla.omniverse.designsystem.categoryAccent
@@ -190,11 +191,14 @@ fun GuideRoute(
                     }
                 }
                 // Task 98 chips live in the header (Kory): saves a full row for channels.
-                Row(
+                LazyRow(
                     Modifier.padding(top = OmniSpacing.s),
+                    contentPadding = PaddingValues(vertical = OmniSpacing.s),
                     horizontalArrangement = Arrangement.spacedBy(OmniSpacing.s),
                 ) {
+                    item(key = "providers") { LiveProviderButton(viewModel.providerFilter) }
                     GuideFilter.entries.forEachIndexed { i, f ->
+                        item(key = f.name) {
                         GuideChip(
                             f.label, state.filter == f,
                             focusRequester = if (i == 0) chipFocus else null,
@@ -206,13 +210,14 @@ fun GuideRoute(
                                 GuideFocusTarget.None -> {}
                             }
                         }
+                        }
                     }
                 }
             }
             if (miniPlayer != null) {
                 Spacer(Modifier.width(OmniSpacing.l))
                 // Bigger preview, nudged toward the right edge (Kory).
-                miniPlayer(Modifier.width(460.dp).offset(x = OmniSpacing.tvSide - OmniSpacing.m))
+                miniPlayer(Modifier.width(360.dp).offset(x = OmniSpacing.tvSide - OmniSpacing.m))
             }
         }
         Spacer(Modifier.height(OmniSpacing.m))
@@ -261,6 +266,9 @@ fun GuideRoute(
             val (row, programme) = focusedCell ?: (0 to null)
             val key = viewModel.channelKeyAt(row)
             if (key != null) {
+                val sourceChoices by androidx.compose.runtime.produceState<List<Pair<String, com.yodesla.omniverse.core.data.ChannelRow>>>(emptyList(), key) {
+                    value = viewModel.sourceChoices(row)
+                }
                 val actions = channelMenuActions(
                     ChannelMenuState(
                         favorite = state.focusedFavorite,
@@ -278,7 +286,9 @@ fun GuideRoute(
                     title = state.focusedTitle ?: key.remoteId.value,
                     subtitle = state.focusedDetail,
                     posterUrl = state.focusedLogo,
-                    actions = actions,
+                    actions = actions + sourceChoices.map { (sourceName, channel) ->
+                        com.yodesla.omniverse.designsystem.MenuAction("Watch live via $sourceName · ${channel.name}", { menuOpen = false; viewModel.playSource(channel) })
+                    },
                     onDismiss = { menuOpen = false },
                 )
             }
@@ -338,7 +348,7 @@ private fun GuideDayStrip(
     modifier: Modifier = Modifier,
 ) {
     val firstDay = dayStarts.first()
-    LazyRow(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
+    LazyRow(modifier = modifier, contentPadding = PaddingValues(horizontal = OmniSpacing.m, vertical = OmniSpacing.m), horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
         itemsIndexed(dayStarts) { index, startMs ->
             GuideChip(dayLabel(startMs, firstDay, todayLabel, tomorrowLabel), index == selectedDay) { onSelectDay(index) }
         }
@@ -361,7 +371,15 @@ private fun GuideChip(text: String, selected: Boolean, focusRequester: FocusRequ
                     else -> c.surface.copy(alpha = 0.72f)
                 },
             )
-            .border(1.dp, if (selected) c.accent else c.textTertiary.copy(alpha = 0.35f), RoundedCornerShape(19.dp))
+            .border(
+                if (isFocused) 2.dp else 1.dp,
+                when {
+                    isFocused -> c.focusBorder
+                    selected -> c.accent
+                    else -> c.textTertiary.copy(alpha = 0.35f)
+                },
+                RoundedCornerShape(19.dp),
+            )
             .onFocusChanged { isFocused = it.isFocused }
             .focusable()
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)

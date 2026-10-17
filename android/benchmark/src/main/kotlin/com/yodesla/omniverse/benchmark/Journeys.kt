@@ -10,16 +10,16 @@ const val PACKAGE = "com.yodesla.omniverse.bench"
 fun MacrobenchmarkScope.startAndWaitForHome() {
     pressHome()
     startActivityAndWait()
-    device.wait(Until.hasObject(By.desc("Home")), 5_000)
+    check(device.wait(Until.hasObject(By.desc("Home")), 5_000)) { "Home navigation did not load" }
 }
 
-/** Rail → "Guide preview" (the dev guide with 800 synthetic channels; last rail item in dev builds). */
+/** Open the named dev guide; rail position varies with installed features. */
 fun MacrobenchmarkScope.openGuide() {
     device.pressDPadLeft()
-    device.waitForIdle()
-    repeat(6) { device.pressDPadDown() }
-    device.pressDPadCenter()
-    device.wait(Until.hasObject(By.textContains("Guide preview")), 5_000)
+    val guide = device.wait(Until.findObject(By.desc("Guide preview")), 5_000)
+        ?: error("Guide preview navigation item is unavailable")
+    guide.click()
+    check(device.wait(Until.hasObject(By.textContains("Guide preview")), 5_000)) { "Guide preview did not open" }
     device.pressDPadRight()
     device.waitForIdle()
 }

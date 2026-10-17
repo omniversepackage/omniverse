@@ -4,6 +4,7 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -245,7 +246,7 @@ internal fun CrunchyrollLayout(
  * picture can never poke out past the fades. Same crossfade the hero carousel already had.
  */
 @Composable
-private fun CrunchyrollHeroBackdrop(row: PosterRow?, cinematic: Boolean, modifier: Modifier) {
+internal fun CrunchyrollHeroBackdrop(row: PosterRow?, cinematic: Boolean, modifier: Modifier) {
     var zoom by remember { mutableStateOf(1f) }
     LaunchedEffect(row?.uid()) {
         zoom = 1f
@@ -283,7 +284,7 @@ private fun CrunchyrollHeroBackdrop(row: PosterRow?, cinematic: Boolean, modifie
                 .clipToBounds(),
         ) {
             AsyncImage(
-                model = art, contentDescription = null, contentScale = ContentScale.Crop, alignment = Alignment.TopCenter,
+                model = art, contentDescription = null, contentScale = ContentScale.Crop, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt, alignment = Alignment.TopCenter,
                 // Full width: the DstIn mask above does the left fade. The old 72%-wide image started at
                 // x = 28% where the mask was already ~30% opaque, which drew a hard vertical edge.
                 modifier = Modifier.fillMaxSize()
@@ -380,13 +381,13 @@ private fun CrunchyrollHero(
                     CrunchyrollPlayButton(stringResource(R.string.crunchyroll_anime_library), Modifier) { onAnimeLibrary() }
                 }
                 Text(
-                    displayTitle(r.name, r.year), maxLines = 2, overflow = TextOverflow.Ellipsis, color = c.textPrimary,
-                    style = TextStyle(fontFamily = t.family, fontWeight = FontWeight.Bold, fontSize = 48.sp, lineHeight = 52.sp, letterSpacing = (-1.0).sp),
+                    displayTitle(r.name, r.year), maxLines = 1, overflow = TextOverflow.Ellipsis, color = c.textPrimary,
+                    style = TextStyle(fontFamily = t.family, fontWeight = FontWeight.Bold, fontSize = 36.sp, lineHeight = 40.sp, letterSpacing = (-1.0).sp),
                 )
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
                     age?.let { CrunchyrollAgeBox(it) }
                     subDub?.let { Text(it.uppercase(), style = CrunchKicker(t), color = c.textSecondary, maxLines = 1) }
-                    if (genres.isNotEmpty()) Text(genres.joinToString(", "), style = t.body, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (genres.isNotEmpty()) Text(genres.joinToString(", "), modifier = Modifier.weight(1f, fill = false), style = t.body, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     r.year?.let { Text(it.toString(), style = t.body, color = c.textSecondary) }
                     // Task 121: the same tomato/popcorn badges the spotlight and Netflix billboard
                     // show, gated to the title they were looked up for (genres ellipsize to make room).
@@ -426,7 +427,7 @@ private fun CrunchyrollHero(
 }
 
 @Composable
-private fun CrunchyrollAgeBox(label: String) {
+internal fun CrunchyrollAgeBox(label: String) {
     val c = OmniTheme.colors
     Box(Modifier.background(c.elevated, CrunchShape).padding(horizontal = OmniSpacing.s, vertical = 2.dp)) {
         Text(label, style = CrunchKicker(OmniTheme.type).copy(fontSize = 12.sp), color = c.textSecondary, maxLines = 1)
@@ -434,7 +435,7 @@ private fun CrunchyrollAgeBox(label: String) {
 }
 
 @Composable
-private fun CrunchyrollCarouselDots(count: Int, active: Int, modifier: Modifier) {
+internal fun CrunchyrollCarouselDots(count: Int, active: Int, modifier: Modifier) {
     if (count < 2) return
     val c = OmniTheme.colors
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
@@ -453,11 +454,11 @@ private fun CrunchyrollCarouselDots(count: Int, active: Int, modifier: Modifier)
 
 /** Orange rectangular button (Crunchyroll's, not the app's pill) with the uppercase kicker type. */
 @Composable
-private fun CrunchyrollPlayButton(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+internal fun CrunchyrollPlayButton(label: String, modifier: Modifier = Modifier, height: androidx.compose.ui.unit.Dp = 52.dp, onClick: () -> Unit) {
     val c = OmniTheme.colors
     Button(
         onClick = onClick,
-        modifier = modifier.height(52.dp).touchClick(onClick),
+        modifier = modifier.height(height).touchClick(onClick),
         shape = ButtonDefaults.shape(CrunchShape),
         colors = ButtonDefaults.colors(
             containerColor = c.accent, contentColor = Color.Black,
@@ -475,12 +476,12 @@ private fun CrunchyrollPlayButton(label: String, modifier: Modifier = Modifier, 
 
 /** The square outlined bookmark: Add to My List (the same action the title menu uses). */
 @Composable
-private fun CrunchyrollBookmarkButton(inList: Boolean, description: String, onClick: () -> Unit) {
+internal fun CrunchyrollBookmarkButton(inList: Boolean, description: String, size: androidx.compose.ui.unit.Dp = 52.dp, onClick: () -> Unit) {
     val c = OmniTheme.colors
     var focused by remember { mutableStateOf(false) }
     Card(
         onClick = onClick,
-        modifier = Modifier.width(52.dp).height(52.dp).semantics { contentDescription = description }
+        modifier = Modifier.width(size).height(size).semantics { contentDescription = description }
             .onFocusChanged { focused = it.hasFocus }.touchClick(onClick),
         shape = CardDefaults.shape(shape = CrunchShape),
         scale = CardDefaults.scale(focusedScale = 1.03f),
@@ -489,14 +490,17 @@ private fun CrunchyrollBookmarkButton(inList: Boolean, description: String, onCl
             focusedContainerColor = c.accent, focusedContentColor = Color.Black,
             pressedContainerColor = c.elevated, pressedContentColor = c.textPrimary,
         ),
-        border = CardDefaults.border(border = Border.None, focusedBorder = Border.None, pressedBorder = Border.None),
+        border = CardDefaults.border(
+            border = Border.None,
+            focusedBorder = Border(BorderStroke(2.dp, OmniTheme.colors.focusBorder), 0.dp, CrunchShape),
+            pressedBorder = Border.None,
+        ),
         glow = CardDefaults.glow(focusedGlow = Glow(elevationColor = c.accent.copy(alpha = 0.35f), elevation = 6.dp)),
     ) {
         Box(
             Modifier.fillMaxSize().drawBehind {
-                // Crunchyroll's outline: grey at rest, accent when focused.
-                val w = if (focused) 3.dp.toPx() else 1.5.dp.toPx()
-                drawRect(color = if (focused) c.accent else c.textSecondary, style = Stroke(width = w))
+                // Crunchyroll's resting outline: grey at rest; the focus stroke is the card border.
+                if (!focused) drawRect(color = c.textSecondary, style = Stroke(width = 1.5.dp.toPx()))
             },
             contentAlignment = Alignment.Center,
         ) {
@@ -506,26 +510,30 @@ private fun CrunchyrollBookmarkButton(inList: Boolean, description: String, onCl
 }
 
 @Composable
-private fun CrunchyrollShelf(title: String, content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit) {
+internal fun CrunchyrollShelf(title: String, caption: String? = null, compact: Boolean = false, content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit) {
     val c = OmniTheme.colors
     Column {
-        Text(
-            title, color = c.textPrimary, maxLines = 1,
-            style = OmniTheme.type.title.copy(fontWeight = FontWeight.Bold, fontSize = 22.sp, lineHeight = 26.sp),
-            modifier = Modifier.padding(bottom = OmniSpacing.s),
-        )
+        Row(Modifier.padding(start = OmniSpacing.focusEdge, bottom = if (compact) 0.dp else OmniSpacing.s), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
+            Text(
+                title, color = c.textPrimary, maxLines = 1,
+                style = OmniTheme.type.title.copy(fontWeight = FontWeight.Bold, fontSize = if (compact) 18.sp else 22.sp, lineHeight = if (compact) 22.sp else 26.sp),
+            )
+            // Task 142: where a ranked shelf's data comes from (e.g. "TMDB trending · Animation").
+            caption?.let { Text(it, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis, style = OmniTheme.type.body.copy(fontSize = 13.sp)) }
+        }
         // Task 84l: in the single-scroll page a focused shelf settles 35% down the screen, so the
         // row and its title / Sub|Dub captions are fully visible (bottom padding is 64 dp).
         // Kory (2026-10-03): no sliver of a card at the right edge. Cards are sized from the row's real
         // width so a whole number fits exactly (posters ~150 dp, landscape ~280 dp).
         BoxWithConstraints(Modifier.fillMaxWidth()) {
-            val gap = OmniSpacing.m
-            val poster = fitWidth(maxWidth, CrunchPosterWidth, gap)
-            val landscape = fitWidth(maxWidth, CrunchLandscapeWidth, gap)
+            val gap = if (compact) 12.dp else OmniSpacing.m
+            // Task 142: compact shelves (the Anime hub) fit hero + two rows on one 540 dp screen.
+            val poster = fitWidth(maxWidth - OmniSpacing.focusEdge * 2, if (compact) CrunchCompactPoster else CrunchPosterWidth, gap)
+            val landscape = fitWidth(maxWidth - OmniSpacing.focusEdge * 2, if (compact) CrunchCompactLandscape else CrunchLandscapeWidth, gap)
             androidx.compose.runtime.CompositionLocalProvider(LocalCrunchCardWidths provides (poster to landscape)) {
                 FocusPivot(parentFraction = 0.35f, leading = 0.dp) {
                     LazyRow(
-                        contentPadding = PaddingValues(bottom = OmniSpacing.s),
+                        contentPadding = PaddingValues(horizontal = OmniSpacing.focusEdge, vertical = if (compact) OmniSpacing.s else OmniSpacing.focusEdge),
                         horizontalArrangement = Arrangement.spacedBy(gap),
                         content = content,
                     )
@@ -537,7 +545,7 @@ private fun CrunchyrollShelf(title: String, content: androidx.compose.foundation
 
 /** Square 2:3 poster card: 3 dp orange border and 1.05 scale on focus, title and audio line below. */
 @Composable
-private fun CrunchyrollPosterCard(
+internal fun CrunchyrollPosterCard(
     row: PosterRow,
     titleNames: suspend (PosterRow) -> List<String>,
     modifier: Modifier,
@@ -556,10 +564,10 @@ private fun CrunchyrollPosterCard(
                         color = c.textPrimary, maxLines = 4, overflow = TextOverflow.Ellipsis)
                 }
             } else {
-                AsyncImage(model = row.posterUrl, contentDescription = row.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                AsyncImage(model = row.posterUrl, contentDescription = row.name, contentScale = ContentScale.Crop, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt, modifier = Modifier.fillMaxSize())
             }
         }
-        Spacer(Modifier.height(OmniSpacing.xs))
+        Spacer(Modifier.height(OmniSpacing.m))
         Text(displayTitle(row.name, row.year), style = OmniTheme.type.body.copy(fontWeight = FontWeight.SemiBold),
             color = c.textPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis)
         subDub?.let {
@@ -570,7 +578,7 @@ private fun CrunchyrollPosterCard(
 
 /** Continue Watching: 16:9 episode-style card with the orange bar along its bottom edge. */
 @Composable
-private fun CrunchyrollContinueCard(
+internal fun CrunchyrollContinueCard(
     row: PosterRow,
     card: ContinuePosterUi?,
     modifier: Modifier,
@@ -592,7 +600,7 @@ private fun CrunchyrollContinueCard(
             modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)) {
             when (art) {
                 is CrunchArt.WithUrl -> AsyncImage(
-                    model = art.url, contentDescription = row.name, contentScale = ContentScale.Crop,
+                    model = art.url, contentDescription = row.name, contentScale = ContentScale.Crop, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt,
                     modifier = Modifier.fillMaxSize(),
                 )
                 CrunchArt.None -> Box(Modifier.fillMaxSize().background(c.elevated), contentAlignment = Alignment.Center) {
@@ -601,7 +609,7 @@ private fun CrunchyrollContinueCard(
             }
             if (art.needsTitleOverlay() && !row.logoUrl.isNullOrBlank()) {
                 AsyncImage(
-                    model = row.logoUrl, contentDescription = null, contentScale = ContentScale.Fit,
+                    model = row.logoUrl, contentDescription = null, contentScale = ContentScale.Fit, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt,
                     alignment = Alignment.BottomStart,
                     modifier = Modifier.align(Alignment.BottomStart).padding(start = OmniSpacing.s, bottom = OmniSpacing.xs)
                         .heightIn(max = 44.dp).widthIn(max = 150.dp),
@@ -613,7 +621,7 @@ private fun CrunchyrollContinueCard(
                 Box(Modifier.fillMaxWidth((card?.progress ?: 0f).coerceIn(0.001f, 1f)).fillMaxHeight().background(c.accent))
             }
         }
-        Spacer(Modifier.height(OmniSpacing.xs))
+        Spacer(Modifier.height(OmniSpacing.m))
         Text(displayTitle(row.name, row.year), style = OmniTheme.type.body.copy(fontWeight = FontWeight.SemiBold),
             color = c.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(
@@ -625,7 +633,7 @@ private fun CrunchyrollContinueCard(
 
 /** The shared focus treatment: sharp 3 dp corners, 3 dp accent border on focus, scale 1.05. */
 @Composable
-private fun CrunchyrollCard(
+internal fun CrunchyrollCard(
     modifier: Modifier,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
@@ -633,32 +641,29 @@ private fun CrunchyrollCard(
     content: @Composable BoxScope.() -> Unit,
 ) {
     val c = OmniTheme.colors
-    var focused by remember { mutableStateOf(false) }
     Card(
         onClick = onClick,
         onLongClick = onLongClick,
-        modifier = modifier.onFocusChanged { state ->
-            focused = state.hasFocus
-            if (state.isFocused) onFocus()
-        }.touchClick(onClick, onLongClick),
+        modifier = modifier.onFocusChanged { state -> if (state.isFocused) onFocus() }.touchClick(onClick, onLongClick),
         shape = CardDefaults.shape(shape = CrunchShape),
         scale = CardDefaults.scale(focusedScale = 1.05f),
         colors = CardDefaults.colors(
             containerColor = c.surface, contentColor = c.textPrimary,
             focusedContainerColor = c.elevated, pressedContainerColor = c.elevated,
         ),
-        border = CardDefaults.border(border = Border.None, focusedBorder = Border.None, pressedBorder = Border.None),
+        border = CardDefaults.border(
+            border = Border.None,
+            focusedBorder = Border(BorderStroke(2.dp, OmniTheme.colors.focusBorder), 0.dp, CrunchShape),
+            pressedBorder = Border.None,
+        ),
         glow = CardDefaults.glow(focusedGlow = Glow(elevationColor = c.accent.copy(alpha = 0.35f), elevation = 8.dp)),
     ) {
-        Box(
-            Modifier.drawBehind { if (focused) drawRect(color = c.accent, style = Stroke(width = 3.dp.toPx())) },
-            content = content,
-        )
+        Box(Modifier, content = content)
     }
 }
 
 /** UPPERCASE kicker: Crunchyroll's buttons and row labels, +0.5sp tracking. */
-private fun CrunchKicker(t: OmniType) =
+internal fun CrunchKicker(t: OmniType) =
     TextStyle(fontFamily = t.family, fontWeight = FontWeight.Bold, fontSize = 13.sp, lineHeight = 16.sp, letterSpacing = 0.5.sp)
 
 /**
@@ -666,7 +671,7 @@ private fun CrunchKicker(t: OmniType) =
  * cancels the pending lookup, exactly like the spotlight's score lookup).
  */
 @Composable
-private fun rememberSubDubLabel(row: PosterRow, titleNames: suspend (PosterRow) -> List<String>): String? {
+internal fun rememberSubDubLabel(row: PosterRow, titleNames: suspend (PosterRow) -> List<String>): String? {
     val label by produceState<String?>(null, row.uid()) {
         value = null
         delay(180)
@@ -678,13 +683,15 @@ private fun rememberSubDubLabel(row: PosterRow, titleNames: suspend (PosterRow) 
 /** The hero's LazyColumn item key (task 84l: the backdrop fade tracks this item's scroll). */
 private const val CrunchHeroKey = "hero"
 
-private val CrunchShape = RoundedCornerShape(3.dp)
-private val CrunchSide = OmniSpacing.tvSide
-private val CrunchPosterWidth = 150.dp
-private val CrunchLandscapeWidth = 280.dp
+internal val CrunchShape = RoundedCornerShape(3.dp)
+internal val CrunchSide = OmniSpacing.tvSide
+internal val CrunchPosterWidth = 150.dp
+internal val CrunchLandscapeWidth = 280.dp
+internal val CrunchCompactPoster = 92.dp
+internal val CrunchCompactLandscape = 150.dp
 
 /** Card widths for the current shelf (poster, landscape), sized so whole cards fill the row. */
-private val LocalCrunchCardWidths = androidx.compose.runtime.staticCompositionLocalOf { CrunchPosterWidth to CrunchLandscapeWidth }
+internal val LocalCrunchCardWidths = androidx.compose.runtime.staticCompositionLocalOf { CrunchPosterWidth to CrunchLandscapeWidth }
 
 /** Width for cards near [target] wide so an exact whole number of them (with [gap]s) fills [row]. */
 internal fun fitWidth(row: androidx.compose.ui.unit.Dp, target: androidx.compose.ui.unit.Dp, gap: androidx.compose.ui.unit.Dp): androidx.compose.ui.unit.Dp {

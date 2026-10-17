@@ -1,4 +1,8 @@
 package com.yodesla.omniverse.feature.live.player
+import com.yodesla.omniverse.designsystem.channelFavoriteMenu
+import com.yodesla.omniverse.designsystem.ChannelFavoriteButton
+import com.yodesla.omniverse.designsystem.FavoriteChannel
+
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.collectAsState
@@ -21,11 +25,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.setValue
@@ -52,6 +59,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
 import com.yodesla.omniverse.core.data.KidsTimeController
@@ -65,6 +73,7 @@ import com.yodesla.omniverse.core.model.RemoteId
 import com.yodesla.omniverse.designsystem.OmniButton
 import com.yodesla.omniverse.designsystem.OmniSpacing
 import com.yodesla.omniverse.designsystem.OmniTheme
+import com.yodesla.omniverse.designsystem.requestFocusWhenReady
 import com.yodesla.omniverse.feature.live.R
 import com.yodesla.omniverse.player.EngineSurface
 import com.yodesla.omniverse.player.FailureKind
@@ -116,6 +125,7 @@ fun LivePlayerRoute(
     val matchFrameRate by viewModel.matchFrameRate.collectAsStateWithLifecycle(initialValue = null)
     val frameRateMode = remember(matchFrameRate) { FrameRateMatchMode.of(matchFrameRate) }
     var showDiagnostics by remember { mutableStateOf(false) }
+    var showSources by remember { mutableStateOf(false) }
     val view = LocalView.current
     val context = LocalContext.current
     val focus = remember { FocusRequester() }
@@ -129,7 +139,6 @@ fun LivePlayerRoute(
     LaunchedEffect(playerState) {
         val s = playerState
         if (s is PlayerState.Playing) viewModel.onPlaying()
-        if (s is PlayerState.Failed) viewModel.onStreamFailed(s.kind)
     }
     LaunchedEffect(Unit) { focus.requestFocus() }
     LaunchedEffect(Unit) {
@@ -225,8 +234,13 @@ fun LivePlayerRoute(
     }
     if (sleepMenu) {
         val endRemaining = ui.banner?.nowEndMs?.let { it - System.currentTimeMillis() }?.takeIf { it > 0 }
-        Dialog(onDismissRequest = { sleepMenu = false }) {
-            Column(Modifier.width(440.dp).clip(RoundedCornerShape(16.dp)).background(OmniTheme.colors.background)
+        Dialog(
+            onDismissRequest = { sleepMenu = false },
+            // A fixed 440 dp column inside the platform-default dialog width was clipped on the
+            // Shield; let the window size to the content and cap the content instead.
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Column(Modifier.widthIn(max = 440.dp).clip(RoundedCornerShape(16.dp)).background(OmniTheme.colors.background)
                 .padding(OmniSpacing.xl), verticalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
                 Text("Sleep timer", style = OmniTheme.type.title, color = OmniTheme.colors.textPrimary)
                 Text("Playback stops and you leave the player when it fires.", style = OmniTheme.type.caption, color = OmniTheme.colors.textSecondary)
@@ -240,7 +254,29 @@ fun LivePlayerRoute(
             }
         }
     }
-    BackHandler { if (sleepMenu) sleepMenu = false else if (showDiagnostics) showDiagnostics = false else if (ui.bannerVisible) viewModel.hideBanner() else onExit() }
+    if (showSources) Dialog(onDismissRequest = { showSources = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        val firstSource = remember { FocusRequester() }
+        var armed by remember { mutableStateOf(false) }
+        Column(Modifier.widthIn(max = 580.dp).heightIn(max = 440.dp).background(OmniTheme.colors.background, RoundedCornerShape(16.dp))
+            .verticalScroll(rememberScrollState()).padding(OmniSpacing.xl).onPreviewKeyEvent { e ->
+                if (e.key != Key.DirectionCenter && e.key != Key.Enter) false else {
+                    if (e.type == KeyEventType.KeyDown && e.nativeKeyEvent.repeatCount == 0) armed = true
+                    !armed
+                }
+            }, verticalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
+            Text("Channel options", style = OmniTheme.type.title, color = OmniTheme.colors.textPrimary)
+            ui.channelKey?.let { key ->
+                ChannelFavoriteButton(FavoriteChannel(key.sourceId.value, key.remoteId.value, ui.banner?.name ?: "Channel"), Modifier.focusRequester(firstSource))
+            }
+            ui.channelSources.forEach { choice ->
+                OmniButton("${choice.sourceName} · ${choice.name}", { showSources = false; viewModel.switchChannel(choice.key) },
+                    Modifier)
+            }
+            OmniButton("Close", { showSources = false })
+        }
+        LaunchedEffect(ui.channelKey) { if (ui.channelKey != null) firstSource.requestFocusWhenReady() }
+    }
+    BackHandler { if (showSources) showSources = false else if (sleepMenu) sleepMenu = false else if (showDiagnostics) showDiagnostics = false else if (ui.bannerVisible) viewModel.hideBanner() else onExit() }
 
     Box(
         Modifier
@@ -253,7 +289,8 @@ fun LivePlayerRoute(
                 when (e.key) {
                     Key.DirectionUp, Key.ChannelUp -> { viewModel.zapNext(); true }
                     Key.DirectionDown, Key.ChannelDown -> { viewModel.zapPrevious(); true }
-                    Key.DirectionCenter, Key.Enter -> { if (sleepWarn > 0) { sleepTimer.cancel(); sleepWarn = 0; true } else { viewModel.showBanner(); true } }
+                    Key.DirectionCenter, Key.Enter -> { if (e.nativeKeyEvent.repeatCount > 0) { showSources = true; true } else if (sleepWarn > 0) { sleepTimer.cancel(); sleepWarn = 0; true } else { viewModel.showBanner(); true } }
+                    Key.Menu -> { showSources = true; true }
                     // Play/Pause is otherwise unused on live TV: it opens the sleep timer (Task 77).
                     Key.MediaPlayPause -> { sleepMenu = true; true }
                     Key.Info -> { showDiagnostics = !showDiagnostics; true }
@@ -269,6 +306,11 @@ fun LivePlayerRoute(
         EngineSubtitles(engine, Modifier.fillMaxSize(), style = subStyleSpec)
 
         StatusLayer(playerState, ui.error, ui.switchTo, onRetry = { viewModel.retry() }, onSwitch = { viewModel.switchChannel(it) }, modifier = Modifier.align(Alignment.Center))
+        if (ui.bannerVisible) {
+            Text(ui.sourceNotice ?: "Hold OK or press Menu · Favorites & channel sources", style = OmniTheme.type.body, color = Color.White,
+                modifier = Modifier.align(Alignment.TopStart).padding(OmniSpacing.tvSide)
+                    .background(Color.Black.copy(alpha = 0.8f), RoundedCornerShape(10.dp)).padding(OmniSpacing.m))
+        }
         // Task 81: while the engine's retry policy is reconnecting, keep the picture and show a
         // small chip — only a give-up earns the full-screen card.
         val loading = playerState as? PlayerState.Loading
@@ -282,7 +324,8 @@ fun LivePlayerRoute(
         }
         if (showDiagnostics) {
             Column(Modifier.align(Alignment.TopEnd).padding(24.dp).width(380.dp)
-                .clip(RoundedCornerShape(12.dp)).background(Color.Black.copy(alpha = 0.86f)).padding(20.dp)) {
+                .clip(RoundedCornerShape(12.dp)).background(Color.Black.copy(alpha = 0.86f))
+                .heightIn(max = 420.dp).verticalScroll(rememberScrollState()).padding(20.dp)) {
                 Text("PLAYBACK INFO  ·  BACK TO CLOSE", style = OmniTheme.type.overline, color = OmniTheme.colors.accent)
                 Spacer(Modifier.height(12.dp))
                 diagnostics.lines().forEach { Text(it, style = OmniTheme.type.body, color = Color.White) }

@@ -67,7 +67,7 @@ class SearchFiltersViewModelTest {
         assertTrue(vm.state.value.searched) // never a false "nothing found" for a filtered blank query
         assertEquals(listOf("a1", "b1"), resultIds(vm))
         // The chips arrive at the repository as one AND-ed filter set with inclusive decade bounds.
-        assertEquals(SearchFilters(movies = true, yearFrom = 1980, yearTo = 1989, anime = true), search.lastFilters)
+        assertEquals(SearchFilters(movies = true, decades = listOf(1980), anime = true), search.lastFilters)
         assertEquals("", search.lastQuery)
         // Same card-id scheme as typed results, so focusCardId survives a path switch.
         assertEquals(listOf("VOD-s-a1", "VOD-s-b1"), vm.state.value.rows.first().cards.map { it.id })
@@ -122,14 +122,16 @@ class SearchFiltersViewModelTest {
     }
 
     @Test
-    fun tappingTheActiveDecadeClearsItAndAnotherMoves() = runTest(dispatcher) {
+    fun decadeChipsCanBeCombinedAndToggledIndividually() = runTest(dispatcher) {
         val vm = SearchViewModel(FakeFilteredSearch(), FilterFakeCatalog(), ShowEverything)
         vm.toggleDecade(1980)
-        assertEquals(Pair(1980, 1989), vm.state.value.filters.let { it.yearFrom to it.yearTo })
+        assertEquals(listOf(1980), vm.state.value.filters.decades)
         vm.toggleDecade(1990)
-        assertEquals(Pair(1990, 1999), vm.state.value.filters.let { it.yearFrom to it.yearTo })
+        assertEquals(listOf(1980, 1990), vm.state.value.filters.decades)
+        vm.toggleDecade(1980)
+        assertEquals(listOf(1990), vm.state.value.filters.decades)
         vm.toggleDecade(1990)
-        assertEquals(null to null, vm.state.value.filters.let { it.yearFrom to it.yearTo })
+        assertEquals(emptyList(), vm.state.value.filters.decades)
     }
 
     @Test

@@ -1,6 +1,7 @@
 package com.yodesla.omniverse.player
 
 import android.content.Context
+import android.os.Handler
 import android.os.SystemClock
 import androidx.annotation.OptIn
 import androidx.media3.common.C
@@ -19,6 +20,10 @@ import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.Renderer
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
+import androidx.media3.exoplayer.video.MediaCodecVideoRenderer
+import androidx.media3.exoplayer.video.VideoRendererEventListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
@@ -105,6 +110,29 @@ class Media3ExoEngine(
     val player: ExoPlayer = ExoPlayer.Builder(
         context,
         object : DefaultRenderersFactory(context) {
+            override fun buildVideoRenderers(
+                context: Context,
+                extensionRendererMode: Int,
+                mediaCodecSelector: MediaCodecSelector,
+                enableDecoderFallback: Boolean,
+                eventHandler: Handler,
+                eventListener: VideoRendererEventListener,
+                allowedVideoJoiningTimeMs: Long,
+                out: ArrayList<Renderer>,
+            ) {
+                super.buildVideoRenderers(
+                    context, extensionRendererMode, mediaCodecSelector, enableDecoderFallback,
+                    eventHandler, eventListener, allowedVideoJoiningTimeMs, out,
+                )
+                val index = out.indexOfFirst { it is MediaCodecVideoRenderer }
+                if (index >= 0) {
+                    out[index] = DolbyVisionProfile7Renderer(
+                        context, mediaCodecSelector, allowedVideoJoiningTimeMs, enableDecoderFallback,
+                        eventHandler, eventListener, MAX_DROPPED_VIDEO_FRAME_COUNT_TO_NOTIFY,
+                    )
+                }
+            }
+
             override fun buildAudioSink(
                 context: Context,
                 enableFloatOutput: Boolean,

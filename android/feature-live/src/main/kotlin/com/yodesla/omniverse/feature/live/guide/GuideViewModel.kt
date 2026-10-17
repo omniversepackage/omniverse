@@ -1,4 +1,8 @@
 package com.yodesla.omniverse.feature.live.guide
+import com.yodesla.omniverse.feature.live.UnifiedLiveCatalog
+import com.yodesla.omniverse.feature.live.liveScopedId
+import com.yodesla.omniverse.feature.live.isLiveCapable
+import com.yodesla.omniverse.feature.live.LiveProviderFilter
 
 import com.yodesla.omniverse.core.data.reminders.Reminder
 import com.yodesla.omniverse.core.data.reminders.ReminderStore
@@ -38,6 +42,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.collectLatest
 import com.yodesla.omniverse.core.data.ShowEverything
 import com.yodesla.omniverse.core.data.Visibility
 import com.yodesla.omniverse.core.data.guide.GuideFilter
@@ -108,8 +113,14 @@ class GuideViewModel(
 
     private val _state = MutableStateFlow(GuideUiState())
     val state: StateFlow<GuideUiState> = _state.asStateFlow()
+    private val unified = UnifiedLiveCatalog(sources, catalog)
+    internal val providerFilter = LiveProviderFilter(sources, userData)
+    private val browseFavoritesVisibility = favoritesVisibility.combine(providerFilter.visibility) { a, b ->
+        { kind: String, source: String, category: String -> a(kind, source, category) && b(kind, source, category) }
+    }
     private val events = Channel<GuideEvent>(Channel.BUFFERED)
     val eventFlow: Flow<GuideEvent> = events.receiveAsFlow()
+    private var focusedKey: ContentKey? = null
     private var channels: List<ChannelRow> = emptyList()
     private var favorites by mutableStateOf<Set<ContentKey>>(emptySet())
     private var categoryJob: Job? = null
@@ -139,7 +150,8 @@ class GuideViewModel(
      * in them re-filters the grid, exactly like a parental unlock does.
      */
     private val categoryVisibility: Flow<Visibility> =
-        visibility.combine(userData?.hiddenCategoryKeys() ?: flowOf(emptySet())) { v, h -> { k, s, c -> v(k, s, c) && "$k|$s|$c" !in h } }
+        visibility.combine(userData?.hiddenCategoryKeys() ?: flowOf(emptySet())) { v, h -> { k: String, s: String, c: String -> v(k, s, c) && "$k|$s|$c" !in h } }
+            .combine(providerFilter.visibility) { a, b -> { k, s, c -> a(k, s, c) && b(k, s, c) } }
     private val reminders = userData?.let { ReminderStore(it, clock) }
     @Volatile private var reminderIds: Set<String> = emptySet()
 
@@ -150,7 +162,7 @@ class GuideViewModel(
     }
 
     init {
-        viewModelScope.launch { favoritesVisibility.collect { currentFavoritesVisibility = it } }
+        viewModelScope.launch { browseFavoritesVisibility.collect { currentFavoritesVisibility = it } }
         reminders?.reminders?.let { flow ->
             viewModelScope.launch {
                 flow.collect { list ->
@@ -160,15 +172,20 @@ class GuideViewModel(
             }
         }
         viewModelScope.launch {
-            val src = sources.sources().first().firstLiveCapable() ?: run {
-                _state.update { it.copy(loading = false) }
-                return@launch
+            sources.sources().collectLatest { saved ->
+            val src = saved.firstLiveCapable() ?: run {
+                categoryJob?.cancel()
+                channels = emptyList()
+                _state.update { it.copy(loading = false, sourceId = null, categories = emptyList(), grid = null) }
+                return@collectLatest
             }
             _state.update { it.copy(sourceId = src.id) }
             // Re-filters when parental locks change (e.g. unlocked in Settings).
-            combine(catalog.categories(src.id, ContentKind.LIVE), categoryVisibility, favoritesFlow, recentsFlow, savedOrderFlow) { all, vis, favs, recents, saved ->
-                val real = all.filter { vis("LIVE", src.id.value, it.remoteId.value) }.map { GuideCategory(it.remoteId.value, it.name) }
-                val locked = all.filterNot { vis("LIVE", src.id.value, it.remoteId.value) }.map { it.remoteId.value }.toSet()
+            combine(unified.categories(), categoryVisibility, favoritesFlow, recentsFlow, savedOrderFlow) { all, vis, favs, recents, saved ->
+                val real = all.filter { vis("LIVE", it.source.id.value, it.category.remoteId.value) }.map { GuideCategory(it.id, it.label) }
+                val locked = (all.filterNot { vis("LIVE", it.source.id.value, it.category.remoteId.value) }.map { it.id } +
+                    providerFilter.hiddenIds.first().map { "__provider:$it" }).toSet()
+                categoryNames = all.associate { liveScopedId(it.source.id, it.category.remoteId.value) to it.category.name }
                 // Favorites + All channels are always offered (Favorites explains itself when empty).
                 val pinned = listOfNotNull(
                     GuideCategory(FAVORITES, "★ Favorites"),
@@ -194,8 +211,7 @@ class GuideViewModel(
                 lastRememberedFilter = rememberedFilter
                 currentVisibility = vis
                 favorites = favs
-                categoryNames = cats.associate { it.id to it.name }
-                _state.update { it.copy(categories = cats, filter = if (filterChanged) rememberedFilter else it.filter) }
+                _state.update { it.copy(focusedFavorite = focusedKey in favs, categories = cats, filter = if (filterChanged) rememberedFilter else it.filter) }
                 val current = _state.value.selectedCategoryId
                 val selected = current?.takeIf { id -> cats.any { it.id == id } }
                     ?: requestedCategory?.takeIf { id -> cats.any { it.id == id } }
@@ -208,6 +224,7 @@ class GuideViewModel(
                     (favoritesChanged && (selected == FAVORITES || _state.value.filter == GuideFilter.FAVORITES))) {
                     selectCategory(selected, force = true)
                 }
+            }
             }
         }
     }
@@ -227,10 +244,10 @@ class GuideViewModel(
             val list = if (id == FAVORITES) {
                 favoritesFlow.first().mapNotNull { k -> catalog.channel(k)?.takeIf { favVis("LIVE", it.key.sourceId.value, it.categoryId.value) } }
             } else if (id == ALL) {
-                catalog.channelListAll(src, lockedCategories)
+                unified.rows(ALL, src, vis, providerFilter.hiddenIds.first())
             } else if (id == RECENT) {
                 recentsFlow.first().mapNotNull { k -> catalog.channel(k)?.takeIf { favVis("LIVE", it.key.sourceId.value, it.categoryId.value) } }
-            } else catalog.channelList(src, RemoteId(id)).filter { vis("LIVE", it.key.sourceId.value, it.categoryId.value) }
+            } else unified.rows(id, src, vis, providerFilter.hiddenIds.first())
             // Task 98: the header chip filters within the category; the grid only ever sees the rows that pass.
             val shown = applyFilter(list)
             channels = shown
@@ -238,7 +255,7 @@ class GuideViewModel(
                 // One scan per source per visit: the guide's extent does not change when the viewer
                 // switches category, and the query reads the whole programme table.
                 maxEndSource = src
-                maxEndMs = epg.maxProgrammeEnd(src)
+                maxEndMs = sources.sources().first().filter { it.isLiveCapable() }.maxOfOrNull { epg.maxProgrammeEnd(it.id) } ?: 0L
             }
             val now = clock.nowMs()
             // A new category starts on "now" (that is where the grid begins); the strip follows the
@@ -261,11 +278,12 @@ class GuideViewModel(
         val filter = _state.value.filter
         if (filter == GuideFilter.ALL) return list
         val names = categoryNames
-        return list.filter { GuideFilterClassifier.matches(filter, it.name, names[it.categoryId.value], it.key in favorites) }
+        return list.filter { GuideFilterClassifier.matches(filter, it.name, names[liveScopedId(it.key.sourceId, it.categoryId.value)], it.key in favorites) }
     }
 
     fun onFocused(row: Int, programme: GridProgramme?) {
         val ch = channels.getOrNull(row) ?: return
+        focusedKey = ch.key
         val title = programme?.title ?: "No information"
         val detail = buildString {
             append(ch.number?.let { "$it  " } ?: "").append(ch.name)
@@ -286,6 +304,24 @@ class GuideViewModel(
                 focusedFavorite = ch.key in favorites,
                 toast = null,
             )
+        }
+    }
+
+    suspend fun sourceChoices(row: Int): List<Pair<String, ChannelRow>> {
+        val channel = channels.getOrNull(row) ?: return emptyList()
+        val names = sources.sources().first().associate { it.id to it.name }
+        val hidden = userData?.hiddenCategoryKeys()?.first().orEmpty()
+        val choices = listOf(channel) + unified.alternatives(channel) { kind, source, category ->
+            currentFavoritesVisibility(kind, source, category) && "$kind|$source|$category" !in hidden
+        }
+        return if (choices.size < 2) emptyList() else choices.map { (names[it.key.sourceId] ?: it.key.sourceId.value) to it }
+    }
+
+    fun playSource(channel: ChannelRow) {
+        viewModelScope.launch {
+            if (!currentFavoritesVisibility("LIVE", channel.key.sourceId.value, channel.categoryId.value)) return@launch
+            if ("LIVE|${channel.key.sourceId.value}|${channel.categoryId.value}" in userData?.hiddenCategoryKeys()?.first().orEmpty()) return@launch
+            events.trySend(GuideEvent.PlayChannel(channel.key, RemoteId(_state.value.selectedCategoryId ?: ALL)))
         }
     }
 
@@ -368,7 +404,7 @@ class GuideViewModel(
 
     private inner class GridData(private val list: List<ChannelRow>) : EpgGridData {
         override val channelCount = list.size
-        override fun channel(index: Int): GridChannel = list[index].let { GridChannel(it.key.remoteId.value, it.number, it.name, it.logoUrl, it.key in favorites) }
+        override fun channel(index: Int): GridChannel = list[index].let { GridChannel(liveScopedId(it.key.sourceId, it.key.remoteId.value), it.number, it.name, it.logoUrl, it.key in favorites) }
         override suspend fun programmes(index: Int, fromMs: Long, toMs: Long): List<GridProgramme> {
             val ch = list.getOrNull(index) ?: return emptyList()
             val key = ch.epgKey ?: return emptyList()

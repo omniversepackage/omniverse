@@ -280,6 +280,10 @@ fun EpgGrid(
                         val y = headerPx + (i - frac) * rowPx
                         if (row == selRow && focused) {
                             drawRect(c.elevated.copy(alpha = 0.86f), Offset(0f, y), Size(size.width, rowPx))
+                            drawRect(
+                                c.focusBorder, Offset(1f, y + 1f), Size((size.width - 2f).coerceAtLeast(0f), (rowPx - 2f).coerceAtLeast(0f)),
+                                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx()),
+                            )
                         }
                         val ch = data.channel(row)
                         val favoriteWidth = if (ch.favorite) favoriteLayout.size.width + padPx else 0f
@@ -429,7 +433,7 @@ fun EpgGrid(
                                 if (isSel) {
                                     // Soft glow, then a crisp outline.
                                     drawRoundRect(c.accent.copy(alpha = 0.18f), Offset(x0 - 3f, y - 3f), Size((x1 - x0 + 6f).coerceAtLeast(0f), rowPx + 6f), CornerRadius(16f), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 6f))
-                                    drawRoundRect(c.accent, Offset(x0 + 2f, y + 2f), Size((x1 - x0 - 4f).coerceAtLeast(0f), rowPx - 4f), CornerRadius(12f), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f))
+                                    drawRoundRect(c.focusBorder, Offset(x0 + 2f, y + 2f), Size((x1 - x0 - 4f).coerceAtLeast(0f), rowPx - 4f), CornerRadius(12f), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx()))
                                 }
                                 if (markVersion >= 0 && isMarked(row, p.startMs) && x1 - x0 > 24f) {
                                     // Reminder set: small accent dot in the cell's top-right corner.

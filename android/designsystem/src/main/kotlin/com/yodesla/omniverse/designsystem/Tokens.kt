@@ -29,22 +29,24 @@ data class OmniColors(
     val textSecondary: Color = Color(0xFFBBC4D1),
     /** Still >= 4.5:1 on background. */
     val textTertiary: Color = Color(0xFF9EAABC),
-    /** Brand accent (champagne; from BrandConfig). Sparingly: focus glow, progress, now-marker. */
-    val accent: Color = Color(0xFFD9B97A),
+    /** Brand accent (vivid gold since the 2026-10-11 vibrancy pass). Focus glow, progress, now-marker. */
+    val accent: Color = Color(0xFFFFC14D),
     val live: Color = Color(0xFFE5484D),
     val scrim: Color = Color(0xE6070B14),
     /** Frosted-glass fill and hairline borders for chrome that floats over artwork. */
     val glass: Color = Color(0x14FFFFFF),
     val hairline: Color = Color(0x0FFFFFFF),
+    /** Thin stroke around the focused tile (Kory, 2026-10-11): white here, the service colour inside a service section. */
+    val focusBorder: Color = Color.White,
     /** HaloWars2.com-inspired layered midnight glass (no runtime background blur on TV). */
     val glassTop: Color = Color(0xCC122032),
     val glassBottom: Color = Color(0x94101A2A),
-    val glassFocusTop: Color = Color(0xE6215F84),
+    val glassFocusTop: Color = Color(0xE62A8BD0),
     val glassFocusBottom: Color = Color(0xC2101E31),
     val glassEdge: Color = Color(0x2EFFFFFF),
     val glassGlint: Color = Color(0x2EFFFFFF),
-    val glassBlueSheen: Color = Color(0x183AC4F4),
-    val glassWineSheen: Color = Color(0x207A243E),
+    val glassBlueSheen: Color = Color(0x303AC4F4),
+    val glassWineSheen: Color = Color(0x38A8264E),
 )
 
 /** Instrument Serif (SIL OFL 1.1, InstrumentSerif-OFL.txt): titles and headings only. */
@@ -114,9 +116,9 @@ data class OmniType(
 
 /** Scales a style's font size, line height and letter spacing; leaves an unspecified line height alone. */
 private fun TextStyle.scaled(scale: Float): TextStyle = copy(
-    fontSize = fontSize * scale,
+    fontSize = if (fontSize == TextUnit.Unspecified) TextUnit.Unspecified else fontSize * scale,
     lineHeight = if (lineHeight == TextUnit.Unspecified) TextUnit.Unspecified else lineHeight * scale,
-    letterSpacing = letterSpacing * scale,
+    letterSpacing = if (letterSpacing == TextUnit.Unspecified) TextUnit.Unspecified else letterSpacing * scale,
 )
 
 object OmniSpacing {
@@ -126,9 +128,13 @@ object OmniSpacing {
     val xs = 4.dp
     val s = 8.dp
     val m = 16.dp
-    val l = 24.dp
-    val xl = 32.dp
-    val xxl = 48.dp
+    val l = 20.dp
+    val xl = 24.dp
+    val xxl = 36.dp
+    /** Space inside scrolling viewports for a focused card's scale, border and soft halo. */
+    val focusEdge = 24.dp
+    /** Minimum visible halo beyond the scaled bounds when positioning a focused item. */
+    val focusHalo = 24.dp
     val cardCorner = 10.dp
     /** Buttons and pills. */
     val pill = 26.dp

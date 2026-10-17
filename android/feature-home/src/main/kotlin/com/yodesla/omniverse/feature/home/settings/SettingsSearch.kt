@@ -39,9 +39,12 @@ val settingsSearchIndex: List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry(SettingsCategory.Playback, SettingsRowKeys.SPOILER_FREE, "Hide spoilers for unwatched episodes", listOf("spoiler", "spoilers", "hide", "episode", "episodes", "description", "thumbnail")),
     SettingsSearchEntry(SettingsCategory.Playback, SettingsRowKeys.SPOILER_FREE_HIDE_TITLES, "Also hide episode titles", listOf("spoiler", "spoilers", "titles", "episode", "episodes", "hide")),
     SettingsSearchEntry(SettingsCategory.Playback, SettingsRowKeys.BACK_FROM_SEARCH, "Back from a search result goes to", listOf("back", "search", "searching", "result", "results", "guide", "details", "detail", "navigation", "recent", "history")),
+    SettingsSearchEntry(SettingsCategory.Display, SettingsRowKeys.LEFT_MENU, "Left opens main menu", listOf("left", "menu", "navigation", "exit")),
+    SettingsSearchEntry(SettingsCategory.Display, SettingsRowKeys.MENU_WARNING, "Confirm before opening main menu", listOf("warning", "confirm", "menu", "accidental")),
     // Display
     SettingsSearchEntry(SettingsCategory.Display, SettingsRowKeys.EXPERIENCE, "Experience", listOf("experience", "simple", "full", "mode", "interface")),
     SettingsSearchEntry(SettingsCategory.Display, SettingsRowKeys.TEXT_SIZE, "Text size", listOf("text", "size", "font", "fonts", "zoom", "big", "large", "bigger", "accessibility")),
+    SettingsSearchEntry(SettingsCategory.Display, SettingsRowKeys.MOVIES_SHOWS_VIEW, "Movies & Shows view", listOf("movies", "movie", "shows", "show", "view", "layout", "horizontal", "classic", "sidebar", "categories", "browse", "grid")),
     SettingsSearchEntry(SettingsCategory.Display, SettingsRowKeys.SCREENSAVER, "Screensaver", listOf("screensaver", "screen", "saver", "idle", "burn", "artwork", "clock")),
     SettingsSearchEntry(SettingsCategory.Display, SettingsRowKeys.CUSTOMIZE_HOME, "Customize Home", listOf("home", "rows", "customize", "layout", "reorder", "posters", "order")),
     SettingsSearchEntry(SettingsCategory.Display, SettingsRowKeys.HIDDEN_CW, "Hidden from Continue Watching", listOf("continue", "watching", "hidden", "hide", "restore", "dismissed")),
@@ -50,6 +53,8 @@ val settingsSearchIndex: List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry(SettingsCategory.ProfilesAndKids, SettingsRowKeys.CREATE_PROFILE, "Create a profile", listOf("profile", "profiles", "create", "new", "add", "guest")),
     SettingsSearchEntry(SettingsCategory.ProfilesAndKids, SettingsRowKeys.PICKER, "Ask who's watching at startup", listOf("profile", "profiles", "startup", "start", "who", "watching", "picker", "switch")),
     SettingsSearchEntry(SettingsCategory.ProfilesAndKids, SettingsRowKeys.PARENTAL, "Parental controls", listOf("pin", "password", "passcode", "parental", "parent", "kids", "child", "children", "lock", "locked", "mature", "adult", "content", "rating")),
+    SettingsSearchEntry(SettingsCategory.Sources, "auto-sources", "Automatic source updates", listOf("automatic", "schedule", "hour", "daily", "time", "refresh", "startup", "sources", "iptv")),
+    SettingsSearchEntry(SettingsCategory.Metadata, "auto-discovery", "Discovery & popularity updates", listOf("automatic", "schedule", "hour", "daily", "time", "refresh", "startup", "trending", "netflix", "discovery", "popular")),
     // Metadata
     SettingsSearchEntry(SettingsCategory.Metadata, SettingsRowKeys.WIKIDATA, "Fill missing plot and cast from Wikidata", listOf("metadata", "plot", "cast", "wikidata", "wikipedia", "tmdb", "details")),
     SettingsSearchEntry(SettingsCategory.Metadata, SettingsRowKeys.RT, "Rotten Tomatoes scores", listOf("rotten", "tomatoes", "scores", "rating", "ratings", "critics", "audience")),

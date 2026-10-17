@@ -32,6 +32,20 @@ class CatalogRepositoryImpl(
     private fun art(rows: List<PosterRow>): List<PosterRow> = tmdbArt?.fillAll(rows) ?: rows
 
     /** Task 87b: cache-only re-fill for rows already on screen (browse pages). */
+    override suspend fun animatedTitles(kind: ContentKind, excludedCategoryKeys: Set<String>): List<com.yodesla.omniverse.core.data.AnimatedTitle> = withContext(io) {
+        fun cand(src: String, remote: String, name: String, poster: String?, cat: String, rating: Double?, year: Long?, tmdb: String?, genre: String?, group: String?, catName: String?, srcKind: String, srcSort: Long, sort: Long) =
+            com.yodesla.omniverse.core.data.AnimatedCandidate(
+                PosterRow(ContentKey(SourceId(src), kind, RemoteId(remote)), name, poster, year?.toInt(), rating?.toFloat(), categoryId = RemoteId(cat), tmdbId = tmdb),
+                catName, genre, group, srcKind == "PLEX", srcSort, sort,
+            )
+        val rows = if (kind == ContentKind.VOD) db.readQueries.animatedVod().executeAsList().map { r ->
+            cand(r.source_id, r.remote_id, r.name, r.poster_url, r.primary_category_id, r.rating, r.year, r.tmdb_id, r.genre, r.group_key, r.category_name, r.source_kind, r.source_sort, r.sort_index)
+        } else db.readQueries.animatedSeries().executeAsList().map { r ->
+            cand(r.source_id, r.remote_id, r.name, r.poster_url, r.primary_category_id, r.rating, r.year, r.tmdb_id, r.genre, r.group_key, r.category_name, r.source_kind, r.source_sort, r.sort_index)
+        }
+        com.yodesla.omniverse.core.data.AnimeHubPool.build(rows, excludedCategoryKeys)
+    }
+
     override suspend fun refillArt(rows: List<PosterRow>): List<PosterRow> =
         if (tmdbArt == null) rows else withContext(io) { tmdbArt.fillAll(rows) }
 

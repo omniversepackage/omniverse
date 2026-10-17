@@ -448,10 +448,11 @@ class UserDataRepositoryImpl(
 
     /** Move pre-profile viewer settings to the default profile once; safe and idempotent. */
     suspend fun migrateLegacyProfileSettings() = withContext(io) {
+        val activeProfile = profileId()
         val legacy = q.backupSettings().executeAsList().filter { isProfileSetting(it.key) }
         db.transaction {
             legacy.forEach { row ->
-                val scoped = profileSettingKey(row.key, DEFAULT_PROFILE)
+                val scoped = profileSettingKey(row.key, if (row.key == "movies_shows_view") activeProfile else DEFAULT_PROFILE)
                 if (base.getSetting(scoped).executeAsOneOrNull() == null) base.putSetting(scoped, row.value_)
                 q.deleteSettingByKey(row.key)
             }
@@ -640,7 +641,7 @@ class UserDataRepositoryImpl(
         fun isProfileSetting(key: String) = key == "search_history" || key.startsWith("category_order_") ||
             key.startsWith("episode_snapshot_") || key.startsWith("new_episodes_") || key.startsWith("tracks_") ||
             key.startsWith("edition_pick_") ||
-            key == "home_layout" || key == "home_density" || key == "text_size" ||
+            key == "live_hidden_providers" || key == "movies_shows_view" || key == "left_opens_menu" || key == "warn_main_menu" || key == "for_you_news" || key == "home_layout" || key == "home_density" || key == "text_size" ||
             key.startsWith("category_lang_") || key.startsWith("browse_filter_") ||
             key.startsWith("subtitle_style_") || key == "preload_next_channel" ||
             key == "guide_filter" || key == "match_frame_rate" || key == "crash_notice" ||

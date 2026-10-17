@@ -212,6 +212,8 @@ data class VodBrowseState(
      * category panel is hidden. Kept here (not in composable state) so it survives a title-detail
      * round-trip exactly like [selected]/[animeLibrary], so Back reopens the same open destination. */
     val destinationOpen: Boolean = false,
+    /** The optional horizontal view starts at its kind-scoped Home and retains its destination across details. */
+    val horizontalHome: Boolean = true,
 )
 
 private data class BrowseInputs(
@@ -544,8 +546,22 @@ class VodBrowseViewModel(
         library.value = null
         // Task 116: entering a category hides the panel; the flag lives here so Back from a title
         // detail returns to this same open destination rather than the rail.
-        _state.update { it.copy(selected = id, selection = parsed, branded = branded, animeLibrary = false, libraryOpen = false, destinationOpen = vodPanelHidden(it.destinationOpen, VodBrowsePanelAction.EnterDestination)) }
+        _state.update { it.copy(selected = id, selection = parsed, branded = branded, animeLibrary = false, libraryOpen = false, horizontalHome = false, destinationOpen = vodPanelHidden(it.destinationOpen, VodBrowsePanelAction.EnterDestination)) }
         selection.value = parsed
+    }
+
+    fun showHorizontalHome() {
+        library.value = null
+        _state.update { it.copy(horizontalHome = true, animeLibrary = false, libraryOpen = false, menuCategoryId = null) }
+    }
+
+    private var horizontalEntry = -1
+
+    /** A main-navigation click starts at Home; returning from detail retains the same entry. */
+    fun enterHorizontalSection(entry: Int) {
+        if (entry == horizontalEntry) return
+        horizontalEntry = entry
+        showHorizontalHome()
     }
 
     /**
@@ -716,20 +732,24 @@ class VodBrowseViewModel(
 @Composable
 fun VodBrowseRoute(viewModel: VodBrowseViewModel, title: String, onOpenNavigation: () -> Unit = {}, onSearch: (() -> Unit)? = null,
                    /** Hold-OK menu: play from the saved position (false) or from the start (true). */
-                   onPlay: (ContentKey, Boolean) -> Unit = { _, _ -> }, onOpen: (ContentKey) -> Unit) {
+                   onPlay: (ContentKey, Boolean) -> Unit = { _, _ -> },
+                   showCategoryRail: Boolean = true, onOpen: (ContentKey) -> Unit) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val undo by viewModel.undo.collectAsStateWithLifecycle()
     val items = viewModel.items.collectAsLazyPagingItems()
     val c = OmniTheme.colors
     val firstPoster = remember { FocusRequester() }
     val firstContinue = remember { FocusRequester() }
+    var lastGridPoster by rememberSaveable(state.selected, state.libraryOpen) { mutableStateOf(-1) }
+    val restoreGridPoster = remember(state.selected, state.libraryOpen) { lastGridPoster }
+    val restoredPoster = remember { FocusRequester() }
     // This must be registered before the compact-layout return too: Back from a Library
     // returns to its branded destination on both TV and phone.
     androidx.activity.compose.BackHandler(enabled = state.libraryOpen) { viewModel.closeLibrary() }
     var focusedOnce by rememberSaveable { mutableStateOf(false) }
     // Continue Watching is the first destination when present; otherwise land on the grid.
     LaunchedEffect(items.itemCount > 0, state.continueWatching.isNotEmpty()) {
-        if (!focusedOnce && (items.itemCount > 0 || state.continueWatching.isNotEmpty())) {
+        if (!focusedOnce && (showCategoryRail || restoreGridPoster < 0) && (items.itemCount > 0 || state.continueWatching.isNotEmpty())) {
             focusedOnce = runCatching {
                 if (state.continueWatching.isNotEmpty()) firstContinue.requestFocus() else firstPoster.requestFocus()
             }.isSuccess
@@ -756,7 +776,7 @@ fun VodBrowseRoute(viewModel: VodBrowseViewModel, title: String, onOpenNavigatio
     // Left at the content's far-left edge, brings it back (Kory, 2026-10-01). Task 116: the flag lives
     // in the ViewModel (state.destinationOpen), not composable state, so it survives a title-detail
     // round-trip and Back reopens the same destination with the panel still hidden.
-    val railHidden = state.destinationOpen
+    val railHidden = !showCategoryRail || state.destinationOpen
     // Task 84i: the glass filter panel (Movies/Shows only, never on branded service pages).
     var showFilters by remember { mutableStateOf(false) }
     val selectedCat = remember { FocusRequester() }
@@ -766,7 +786,7 @@ fun VodBrowseRoute(viewModel: VodBrowseViewModel, title: String, onOpenNavigatio
     var movingCat by remember { mutableStateOf<String?>(null) }
     // The release of the hold that picked the category up must not drop it again.
     var dropArmed by remember { mutableStateOf(false) }
-    androidx.activity.compose.BackHandler(enabled = railHidden && !state.libraryOpen) { viewModel.showPanel() }
+    androidx.activity.compose.BackHandler(enabled = showCategoryRail && railHidden && !state.libraryOpen) { viewModel.showPanel() }
     // Task 107: the rail's own scroll state, so reopening it can land on the selected category
     // instead of its top (the chip must also be composed for selectedCat to focus it).
     val railState = rememberLazyListState()
@@ -816,6 +836,11 @@ fun VodBrowseRoute(viewModel: VodBrowseViewModel, title: String, onOpenNavigatio
                 }
                 // Task 96: "Surprise me" in the Movies/Shows header.
                 OmniButton("Surprise me", { viewModel.surpriseMe() }, Modifier.padding(start = OmniSpacing.l))
+                if (!showCategoryRail) {
+                    OmniButton("Sort: ${browseSortLabel(state.sort)}", { viewModel.toggleSort() }, Modifier.padding(start = OmniSpacing.m))
+                    val n = browseFilterChips(state.filter).size
+                    OmniButton(if (n > 0) "Filter · $n" else "Filter", { showFilters = true }, Modifier.padding(start = OmniSpacing.m))
+                }
             }
         }
         if (state.noSources) {
@@ -856,7 +881,7 @@ fun VodBrowseRoute(viewModel: VodBrowseViewModel, title: String, onOpenNavigatio
                             }
                         } else if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionLeft) { onOpenNavigation(); true } else false
                     },
-                    contentPadding = PaddingValues(start = OmniSpacing.tvSide, end = OmniSpacing.m, bottom = OmniSpacing.xxl),
+                    contentPadding = PaddingValues(start = OmniSpacing.tvSide, top = OmniSpacing.focusEdge, end = OmniSpacing.focusEdge, bottom = OmniSpacing.xxl),
                     verticalArrangement = Arrangement.spacedBy(OmniSpacing.s),
                 ) {
                     if (onSearch != null) item(key = "__search") {
@@ -901,7 +926,7 @@ fun VodBrowseRoute(viewModel: VodBrowseViewModel, title: String, onOpenNavigatio
             val brand = com.yodesla.omniverse.designsystem.categoryBrand(selectedName)
             Box(Modifier.fillMaxSize().onPreviewKeyEvent { e ->
                 // At the far-left edge there is nothing further left in the content: show the list again.
-                if (railHidden && !state.libraryOpen && e.type == KeyEventType.KeyDown && e.key == Key.DirectionLeft) {
+                if (showCategoryRail && railHidden && !state.libraryOpen && e.type == KeyEventType.KeyDown && e.key == Key.DirectionLeft) {
                     if (!focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Left)) viewModel.showPanel()
                     true // handled either way: we already moved focus, or revealed the list
                 } else false
@@ -944,11 +969,19 @@ fun VodBrowseRoute(viewModel: VodBrowseViewModel, title: String, onOpenNavigatio
                 )
                 FocusPivot(parentFraction = 0.25f, leading = 0.dp) {
                     val gridState = rememberLazyGridState()
+                    LaunchedEffect(showCategoryRail, items.itemCount > restoreGridPoster) {
+                        if (!showCategoryRail && restoreGridPoster >= 0 && items.itemCount > restoreGridPoster) {
+                            androidx.compose.runtime.withFrameNanos { }
+                            val headerCount = (if (state.continueWatching.isNotEmpty()) 1 else 0) + (if (browseFilterChips(state.filter).isNotEmpty()) 1 else 0)
+                            gridState.scrollToItem(restoreGridPoster + headerCount)
+                            restoredPoster.requestFocusWhenReady()
+                        }
+                    }
                     LazyVerticalGrid(
                         columns = GridCells.Adaptive(minSize = 128.dp),
                         state = gridState,
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(start = OmniSpacing.s, end = OmniSpacing.tvSide, top = OmniSpacing.s, bottom = OmniSpacing.xxl),
+                        contentPadding = PaddingValues(start = if (showCategoryRail) OmniSpacing.focusEdge else OmniSpacing.tvSide, end = OmniSpacing.tvSide, top = OmniSpacing.focusEdge, bottom = OmniSpacing.xxl),
                         horizontalArrangement = Arrangement.spacedBy(OmniSpacing.l),
                         verticalArrangement = Arrangement.spacedBy(OmniSpacing.l),
                     ) {
@@ -960,7 +993,7 @@ fun VodBrowseRoute(viewModel: VodBrowseViewModel, title: String, onOpenNavigatio
                         // Task 84i: active filters read as removable chips above the grid.
                         val chips = browseFilterChips(state.filter)
                         if (chips.isNotEmpty()) item(key = "__chips", span = { GridItemSpan(maxLineSpan) }) {
-                            LazyRow(horizontalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
+                            LazyRow(contentPadding = PaddingValues(horizontal = OmniSpacing.focusEdge, vertical = OmniSpacing.s), horizontalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
                                 items(chips, key = { it.first }) { (label, without) ->
                                     OmniButton(label, { viewModel.setFilter(without) })
                                 }
@@ -971,8 +1004,12 @@ fun VodBrowseRoute(viewModel: VodBrowseViewModel, title: String, onOpenNavigatio
                             val p = items[i] ?: return@items
                             PosterCard(
                                 title = displayTitle(p.name, p.year),
-                                modifier = (if (i == 0) Modifier.focusRequester(firstPoster) else Modifier)
-                                    .onFocusChanged { if (it.isFocused) gridFocus = PosterFocus(i / columns, i % columns) },
+                                modifier = (if (!showCategoryRail && i == restoreGridPoster) Modifier.focusRequester(restoredPoster)
+                                    else if (i == 0) Modifier.focusRequester(firstPoster) else Modifier)
+                                    .onFocusChanged { if (it.isFocused) {
+                                        gridFocus = PosterFocus(i / columns, i % columns)
+                                        if (!showCategoryRail) lastGridPoster = i
+                                    } },
                                 posterUrl = p.posterUrl,
                                 subtitle = listOfNotNull(p.year?.toString(), p.rating?.let { "%.1f/10".format(it) }).joinToString("  ·  ").ifEmpty { null },
                                 onClick = { onOpen(p.key) },
@@ -1019,7 +1056,7 @@ fun VodBrowseRoute(viewModel: VodBrowseViewModel, title: String, onOpenNavigatio
     }
     // Task 84m: hold-OK on a category — Move / Hide category / Cancel, anchored next to the rail.
     val menuCat = state.menuCategoryId?.let { id -> state.categories.firstOrNull { it.id == id } }
-    if (menuCat != null) {
+    if (showCategoryRail && menuCat != null) {
         com.yodesla.omniverse.designsystem.CategoryMenu(
             title = menuCat.name,
             actions = listOf(
@@ -1040,7 +1077,7 @@ fun VodBrowseRoute(viewModel: VodBrowseViewModel, title: String, onOpenNavigatio
         )
     }
     // Task 84m: "Category hidden · Undo" toast; focus stays on the chip that took its place.
-    state.hiddenNotice?.let { n ->
+    state.hiddenNotice?.takeIf { showCategoryRail }?.let { n ->
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomStart) {
             com.yodesla.omniverse.designsystem.UndoNotice(
                 message = "Category hidden",
@@ -1053,7 +1090,7 @@ fun VodBrowseRoute(viewModel: VodBrowseViewModel, title: String, onOpenNavigatio
     }
     // Task 84m: after a hide the focused chip is gone; land on the one that took its place.
     LaunchedEffect(state.hiddenNotice?.categoryId) {
-        if (state.hiddenNotice != null) runCatching { selectedCat.requestFocusWhenReady() }
+        if (showCategoryRail && state.hiddenNotice != null) runCatching { selectedCat.requestFocusWhenReady() }
     }
     // Task 84i: the glass filter panel; edits a draft and applies it on "Done".
     if (showFilters) {
@@ -1144,7 +1181,7 @@ private fun VodBrowseCompact(
         }
         LazyRow(
             Modifier.fillMaxWidth(),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = OmniSpacing.s),
+            contentPadding = PaddingValues(horizontal = OmniSpacing.focusEdge, vertical = OmniSpacing.focusEdge),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(state.categories, key = { it.id ?: "__all" }) { cat ->
@@ -1159,7 +1196,7 @@ private fun VodBrowseCompact(
         LazyVerticalGrid(
             columns = GridCells.Adaptive(minSize = 110.dp),
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(12.dp),
+            contentPadding = PaddingValues(OmniSpacing.focusEdge),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -1231,7 +1268,7 @@ private fun PickForMeCard(
         ) {
             Box(Modifier.width(170.dp).height(255.dp).clip(RoundedCornerShape(14.dp)).background(c.surface)) {
                 p?.posterUrl?.takeIf { it.isNotBlank() }?.let {
-                    AsyncImage(model = it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                    AsyncImage(model = it, contentDescription = null, contentScale = ContentScale.Crop, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt, modifier = Modifier.fillMaxSize())
                 }
             }
             Column(Modifier.widthIn(min = 320.dp, max = 460.dp), verticalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
@@ -1275,8 +1312,8 @@ private fun FilterPanel(
     val year = remember { java.util.Calendar.getInstance().get(java.util.Calendar.YEAR) }
     // Task 84k: TV users close panels with Back, so Back applies the draft exactly like "Done".
     Dialog(onDismissRequest = { onApply(draft); onDismiss() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Column(Modifier.width(680.dp).heightIn(max = 840.dp).background(c.background, RoundedCornerShape(18.dp))
-            .verticalScroll(rememberScrollState()).padding(OmniSpacing.xl),
+        Column(Modifier.width(680.dp).heightIn(max = 480.dp).background(c.background, RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(18.dp)).verticalScroll(rememberScrollState()).padding(OmniSpacing.xl),
             verticalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
             Text("Filter", style = OmniTheme.type.title, color = c.textPrimary)
             FilterPillRow("Watched", listOf(
@@ -1356,8 +1393,7 @@ private fun FilterPillRow(label: String, options: List<Pair<String, Boolean>>, o
         // centred focus used to cut its left end off ("is year" for "This year").
         FocusPivot(parentFraction = 0f, childFraction = 0f, leading = OmniSpacing.m) {
             LazyRow(
-                Modifier.height(44.dp),
-                contentPadding = PaddingValues(start = OmniSpacing.m, end = OmniSpacing.m),
+                contentPadding = PaddingValues(start = OmniSpacing.m, end = OmniSpacing.m, top = OmniSpacing.s, bottom = OmniSpacing.s),
                 horizontalArrangement = Arrangement.spacedBy(OmniSpacing.s),
             ) {
                 itemsIndexed(options) { i, (text, selected) -> OmniButton(text, { onSelect(i) }, primary = selected) }
@@ -1378,10 +1414,10 @@ private fun ContinueWatchingRow(
     Column(Modifier.fillMaxWidth().padding(bottom = OmniSpacing.m)) {
         Text(
             "Continue watching", style = OmniTheme.type.title, color = c.textPrimary,
-            modifier = Modifier.padding(start = OmniSpacing.s, bottom = OmniSpacing.s),
+            modifier = Modifier.padding(start = OmniSpacing.focusEdge, bottom = OmniSpacing.s),
         )
         LazyRow(
-            contentPadding = PaddingValues(start = OmniSpacing.s, end = OmniSpacing.tvSide),
+            contentPadding = PaddingValues(start = OmniSpacing.focusEdge, end = OmniSpacing.tvSide, top = OmniSpacing.focusEdge, bottom = OmniSpacing.focusEdge),
             horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m),
         ) {
             items(cards, key = { "${it.poster.key.sourceId.value}:${it.poster.key.remoteId.value}" }) { card ->
@@ -1396,7 +1432,7 @@ private fun ContinueWatchingRow(
                         if (!poster.posterUrl.isNullOrBlank()) {
                             AsyncImage(
                                 model = poster.posterUrl, contentDescription = null,
-                                contentScale = ContentScale.Crop,
+                                contentScale = ContentScale.Crop, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt,
                                 modifier = Modifier.width(56.dp).fillMaxHeight().clip(RoundedCornerShape(8.dp)),
                             )
                         } else {

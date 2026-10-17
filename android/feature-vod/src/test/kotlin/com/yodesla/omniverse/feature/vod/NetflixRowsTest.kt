@@ -30,7 +30,7 @@ class NetflixRowsTest {
         val pool = (1..35).map { row(it, year = 2000, rating = 8f) }
         val rows = netflixRows(listOf(cw(1)), listOf(row(31)), pool, netflixPlan, "Kory")
         assertEquals(
-            listOf("cw", "top10", "mylist", "rated", "fresh", "vault", "more-0", "more-1"),
+            listOf("cw", "collection", "mylist", "rated", "fresh", "vault", "more-0", "more-1"),
             rows.map {
                 when (it) {
                     is NetflixRow.ContinueWatching -> "cw"
@@ -41,11 +41,22 @@ class NetflixRowsTest {
             },
         )
         assertEquals("Continue Watching for Kory", (rows.first() as NetflixRow.ContinueWatching).title)
-        assertEquals("Top 10 Movies in this collection", (rows[1] as NetflixRow.Top10).title)
+        assertEquals("From your collection", (rows[1] as NetflixRow.Shelf).title)
         assertEquals("My List", (rows[2] as NetflixRow.MyList).title)
         assertEquals("Critically acclaimed", (rows[3] as NetflixRow.Shelf).title)
         assertEquals("Browse all", (rows[6] as NetflixRow.Shelf).title)
         assertEquals("Browse all · 2", (rows[7] as NetflixRow.Shelf).title)
+    }
+
+    @Test
+    fun officialChartKeepsPublishedRanksAndNeverRanksProviderOrder() {
+        val ranked = row(17).copy(tmdbId = "17")
+        val rows = netflixRows(emptyList(), emptyList(), listOf(row(1)), netflixPlan, null,
+            official = OfficialNetflix(listOf(ranked), mapOf("17" to 7), "2026-10-11"))
+        val chart = rows.filterIsInstance<NetflixRow.Top10>().single()
+        assertEquals(7, chart.ranks["17"])
+        assertTrue(chart.title.contains("2026-10-11"))
+        assertTrue(netflixRows(emptyList(), emptyList(), listOf(row(1)), netflixPlan, null).none { it is NetflixRow.Top10 })
     }
 
     @Test
@@ -59,7 +70,7 @@ class NetflixRowsTest {
         val pool = (1..12).map { row(it, year = 2015, rating = if (it <= 3) 9f else 5f) }
         val rows = netflixRows(emptyList(), emptyList(), pool, netflixPlan, null)
         // 3 highly rated (row dropped), 12 new (kept), none old (dropped), 2 left over for Browse all.
-        assertEquals(listOf("top10", "fresh", "more-0"), rows.map { (it as? NetflixRow.Shelf)?.key ?: "top10" })
+        assertEquals(listOf("collection", "fresh", "more-0"), rows.map { (it as? NetflixRow.Shelf)?.key ?: "top10" })
     }
 
     @Test
@@ -69,10 +80,10 @@ class NetflixRowsTest {
     }
 
     @Test
-    fun topTenIsTheFirstTenOfTheCollection() {
+    fun providerOrderIsAnUnrankedCollectionShelf() {
         val pool = (1..15).map { row(it) }
         val rows = netflixRows(emptyList(), emptyList(), pool, netflixPlan, null)
-        val top = assertIs<NetflixRow.Top10>(rows.first())
+        val top = assertIs<NetflixRow.Shelf>(rows.first())
         assertEquals(10, top.rows.size)
         assertEquals("r1", top.rows.first().key.remoteId.value)
     }

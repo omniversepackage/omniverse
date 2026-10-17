@@ -35,6 +35,7 @@ import com.yodesla.omniverse.feature.home.settings.searchSettings
 import com.yodesla.omniverse.feature.home.settings.settingsCategories
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -45,6 +46,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -174,6 +176,10 @@ data class SettingsState(
     val hiddenCategories: List<HiddenCategoryUi> = emptyList(),
     /** Task 103: keep live and final scores off Sports cards until the viewer reveals them (per profile). */
     val hideSportsScores: Boolean = false,
+    /** Task 203: how Movies & Shows are laid out ("classic" sidebar / "horizontal" category rows). */
+    val leftOpensMenu: Boolean = true,
+    val warnBeforeMainMenu: Boolean = true,
+    val moviesShowsView: String = com.yodesla.omniverse.core.data.MoviesShowsView.CLASSIC,
 )
 
 /** Task 84h: one row of the "Choose…" dialog — a language group present in this profile's sources. */
@@ -286,6 +292,12 @@ class SettingsViewModel(
         // Task 103: the score switch the Sports page reads (same key, same profile).
         userData.setting(com.yodesla.omniverse.core.data.sports.FollowedTeams.HIDE_SCORES_KEY).onEach { value ->
             _state.update { it.copy(hideSportsScores = value == "true" || value == "1") }
+        }.launchIn(viewModelScope)
+        userData.setting("left_opens_menu").onEach { v -> _state.update { it.copy(leftOpensMenu = v != "false") } }.launchIn(viewModelScope)
+        userData.setting("warn_main_menu").onEach { v -> _state.update { it.copy(warnBeforeMainMenu = v != "false") } }.launchIn(viewModelScope)
+        // Task 203: the Movies & Shows layout (Settings › Display), default Classic.
+        userData.setting(com.yodesla.omniverse.core.data.MoviesShowsView.KEY).onEach { value ->
+            _state.update { it.copy(moviesShowsView = com.yodesla.omniverse.core.data.MoviesShowsView.parse(value)) }
         }.launchIn(viewModelScope)
         // Task 84h: the category-language filter (Settings > Sources).
         userData.setting(com.yodesla.omniverse.core.data.categories.CATEGORY_LANG_FILTER_KEY).onEach { value ->
@@ -508,6 +520,13 @@ class SettingsViewModel(
         userData.putSetting(com.yodesla.omniverse.core.data.sports.FollowedTeams.HIDE_SCORES_KEY, enabled.toString())
     }
 
+    /** Task 203: per-profile Movies & Shows layout; only the two known values are ever written. */
+    fun setLeftOpensMenu(enabled: Boolean) = viewModelScope.launch { userData.putSetting("left_opens_menu", enabled.toString()) }
+    fun setWarnBeforeMenu(enabled: Boolean) = viewModelScope.launch { userData.putSetting("warn_main_menu", enabled.toString()) }
+    fun setMoviesShowsView(value: String) = viewModelScope.launch {
+        if (value in moviesShowsViews) userData.putSetting(com.yodesla.omniverse.core.data.MoviesShowsView.KEY, value)
+    }
+
     fun setMetadataLookup(enabled: Boolean) = viewModelScope.launch {
         userData.putSetting(com.yodesla.omniverse.core.data.metadata.MetadataEnricher.SETTING_KEY, enabled.toString())
     }
@@ -578,6 +597,10 @@ class SettingsViewModel(
             com.yodesla.omniverse.designsystem.TEXT_SIZE_LARGE,
             com.yodesla.omniverse.designsystem.TEXT_SIZE_XLARGE,
         )
+        private val moviesShowsViews = setOf(
+            com.yodesla.omniverse.core.data.MoviesShowsView.CLASSIC,
+            com.yodesla.omniverse.core.data.MoviesShowsView.HORIZONTAL,
+        )
     }
 }
 
@@ -637,7 +660,14 @@ fun SettingsRoute(
     LaunchedEffect(categories) {
         if (categories.none { it == selected }) { selected = categories.first(); enteredPane = false }
     }
-    LaunchedEffect(Unit) { railFr.requestFocusWhenReady() }
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    LaunchedEffect(Unit) {
+        // Let the shell's generic first-child focus finish before restoring the Settings rail.
+        // Otherwise its search field captures the remote and opens the keyboard on entry.
+        androidx.compose.runtime.withFrameNanos { }
+        railFr.requestFocusWhenReady()
+        if (!compact) keyboard?.hide()
+    }
     LaunchedEffect(enteredPane, selected) {
         // Task 99: while a search jump to this category is pending, the pane owns focus instead.
         if (enteredPane && pendingJump?.first != selected) registry.focusReady(selected)
@@ -675,7 +705,7 @@ fun SettingsRoute(
                 } else {
                     LazyColumn(
                         Modifier.weight(1f).fillMaxWidth(),
-                        contentPadding = PaddingValues(horizontal = OmniSpacing.tvSide, vertical = OmniSpacing.s),
+                        contentPadding = PaddingValues(horizontal = OmniSpacing.tvSide, vertical = OmniSpacing.focusEdge),
                         verticalArrangement = Arrangement.spacedBy(OmniSpacing.s),
                     ) {
                         items(hits, key = { it.category to it.rowKey }) { hit ->
@@ -703,7 +733,7 @@ fun SettingsRoute(
                 }
             } else {
                 Row(Modifier.weight(1f).fillMaxWidth()) {
-                    SettingsRail(categories, selected, railFr, Modifier.width(320.dp).fillMaxHeight(), onHighlight = { selected = it }) { cat ->
+                    SettingsRail(categories, selected, railFr, Modifier.width(272.dp).fillMaxHeight(), onHighlight = { selected = it }) { cat ->
                         selected = cat; enteredPane = true
                     }
                     Box(
@@ -816,10 +846,11 @@ private fun SettingsRail(
             val isSel = cat == selected
             var focused by remember { mutableStateOf(false) }
             Box(
-                Modifier.fillMaxWidth().height(48.dp)
+                Modifier.fillMaxWidth().height(42.dp)
                     .then(if (isSel) Modifier.focusRequester(railFr).bringIntoViewRequester(selBringIntoView) else Modifier)
                     .onFocusChanged { focused = it.isFocused; if (it.isFocused) onHighlight(cat) }
                     .then(if (focused || isSel) Modifier.glassSurface(corner = 26.dp, focused = focused, shadow = false) else Modifier)
+                    .then(if (focused) Modifier.border(2.dp, c.focusBorder, RoundedCornerShape(26.dp)) else Modifier)
                     .clickableTv { onPick(cat) },
                 contentAlignment = Alignment.CenterStart,
             ) {
@@ -873,7 +904,8 @@ private fun HiddenCwDialog(
                 Text("Nothing hidden. Dismissed titles will appear here.", style = OmniTheme.type.body, color = c.textSecondary)
             } else {
                 LazyColumn(
-                    Modifier.fillMaxWidth().height(420.dp),
+                    Modifier.fillMaxWidth().heightIn(max = 300.dp),
+                    contentPadding = PaddingValues(OmniSpacing.focusEdge),
                     verticalArrangement = Arrangement.spacedBy(OmniSpacing.s),
                 ) {
                     itemsIndexed(hidden) { i, row ->
@@ -889,7 +921,7 @@ private fun HiddenCwDialog(
                                 if (!row.posterUrl.isNullOrBlank()) {
                                     AsyncImage(
                                         model = row.posterUrl, contentDescription = null,
-                                        contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt, modifier = Modifier.fillMaxSize(),
                                     )
                                 }
                             }

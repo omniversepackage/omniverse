@@ -138,6 +138,17 @@ recomputeSeriesGroups {
     UPDATE series SET group_key = 'm:' || match_key WHERE group_key IS NULL AND match_key IS NOT NULL AND match_key <> '';
 
     UPDATE series SET group_key = 'r:' || source_id || '|' || remote_id WHERE group_key IS NULL;
+
+    -- A provider can attach the wrong/different TMDB id to the same show. When two sources have
+    -- the same normalized title AND year, keep one show listing even if their ids disagree.
+    -- This is series-only: a same-name/same-year movie can still be a distinct cut or release.
+    UPDATE series SET group_key = 'm:' || match_key
+    WHERE removed_ms IS NULL AND match_key IN (
+        SELECT match_key FROM series
+        WHERE removed_ms IS NULL AND match_key IS NOT NULL AND match_key <> ''
+        GROUP BY match_key
+        HAVING count(DISTINCT source_id) > 1 AND count(DISTINCT group_key) > 1
+    );
 }
 
 

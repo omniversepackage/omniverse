@@ -1,6 +1,12 @@
 package com.yodesla.omniverse.designsystem
 
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
@@ -49,6 +55,8 @@ fun NavRail(
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
     selectedRequester: FocusRequester = remember { FocusRequester() },
+    /** Hold OK on an item (Kory: hide main categories); null = no hold action. */
+    onHold: ((String) -> Unit)? = null,
 ) {
     val c = OmniTheme.colors
     CosmicBackdrop(modifier.width(TvNavRailWidth).fillMaxHeight()) {
@@ -66,13 +74,26 @@ fun NavRail(
         for (item in items) {
             val selected = item.id == selectedId
             var focused by remember { mutableStateOf(false) }
+            // Hold OK: fire once on the first key repeat, then swallow the repeats and the release so the
+            // hold never also opens the section.
+            var held by remember { mutableStateOf(false) }
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(48.dp)
+                    .height(42.dp)
                     .then(if (selected) Modifier.focusRequester(selectedRequester) else Modifier)
                     .onFocusChanged { focused = it.isFocused }
+                    .onPreviewKeyEvent { e ->
+                        val ok = e.key == Key.DirectionCenter || e.key == Key.Enter || e.key == Key.NumPadEnter
+                        when {
+                            !ok || onHold == null -> false
+                            e.type == KeyEventType.KeyDown && e.nativeKeyEvent.repeatCount > 0 -> { if (!held) { held = true; onHold(item.id) }; true }
+                            e.type == KeyEventType.KeyUp && held -> { held = false; true }
+                            else -> false
+                        }
+                    }
                     .then(if (focused || selected) Modifier.glassSurface(corner = 26.dp, focused = focused, shadow = false) else Modifier)
+                    .then(if (focused) Modifier.border(2.dp, c.focusBorder, RoundedCornerShape(26.dp)) else Modifier)
                     .clickableTv { onSelect(item.id) },
                 contentAlignment = Alignment.CenterStart,
             ) {

@@ -5,7 +5,10 @@ import com.yodesla.omniverse.core.data.CatalogRepository
 import com.yodesla.omniverse.core.data.ChannelRow
 import com.yodesla.omniverse.core.data.PosterRow
 import com.yodesla.omniverse.core.data.SearchHit
+import com.yodesla.omniverse.core.data.SearchFilteredPage
+import com.yodesla.omniverse.core.data.SearchFilters
 import com.yodesla.omniverse.core.data.SearchRepository
+import com.yodesla.omniverse.core.data.SearchSort
 import com.yodesla.omniverse.core.data.ShowEverything
 import com.yodesla.omniverse.core.data.Visibility
 import com.yodesla.omniverse.core.model.Category
@@ -19,12 +22,16 @@ import kotlin.test.Ignore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
@@ -55,8 +62,43 @@ class SearchViewModelTest {
     @BeforeTest fun setUp() = Dispatchers.setMain(dispatcher)
     @AfterTest fun tearDown() = Dispatchers.resetMain()
 
+    @Test fun channelAndProgrammeResultsToggleTheUnderlyingChannelFavorite() = runTest(dispatcher) {
+        val key = ContentKey(src, ContentKind.LIVE, RemoteId("tv1"))
+        val channel = ChannelRow(key, 1, "News", null, "news", 0, RemoteId("live"))
+        val user = SearchFavoriteUser()
+        val vm = SearchViewModel(FakeSearch(), FakeCatalog(channel), userData = user)
+        vm.toggleChannelFavorite(HomeCard("channel", key, "News", null, null, isChannel = true))
+        advanceUntilIdle()
+        assertEquals(setOf(key), vm.state.value.favoriteChannels)
+        vm.toggleChannelFavorite(HomeCard("programme", key, "Evening bulletin", "News", null, isChannel = true))
+        advanceUntilIdle()
+        assertEquals(emptySet(), vm.state.value.favoriteChannels)
+    }
+
+    @Test fun aNewlyLockedChannelCannotBeFavoritedFromOldSearchResults() = runTest(dispatcher) {
+        val key = ContentKey(src, ContentKind.LIVE, RemoteId("tv1"))
+        val channel = ChannelRow(key, 1, "News", null, "news", 0, RemoteId("live"))
+        val vm = SearchViewModel(FakeSearch(), FakeCatalog(channel), visibility = flowOf { _, _, _ -> false }, userData = SearchFavoriteUser())
+        vm.toggleChannelFavorite(HomeCard("channel", key, "News", null, null, isChannel = true))
+        advanceUntilIdle()
+        assertEquals(emptySet(), vm.state.value.favoriteChannels)
+    }
+
     private fun resultIds(vm: SearchViewModel): List<String> =
         vm.state.value.rows.flatMap { row -> row.cards.map { it.open.remoteId.value } }
+
+    @Test
+    fun titlesAppearWhileGuideLookupIsStillPending() = runTest(dispatcher) {
+        val guideGate = CompletableDeferred<Unit>()
+        val vm = SearchViewModel(FakeSearch(guideGate), FakeCatalog(), ShowEverything)
+        vm.onQuery("movie")
+        advanceTimeBy(201)
+        runCurrent()
+        assertEquals(listOf("a1", "b1"), resultIds(vm))
+        guideGate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(listOf("a1", "b1"), resultIds(vm))
+    }
 
     @Test
     fun showEverythingListsHitsFromBothCategories() = runTest(dispatcher) {
@@ -64,6 +106,17 @@ class SearchViewModelTest {
         vm.onQuery("m")
         advanceUntilIdle()
         assertEquals(listOf("a1", "b1"), resultIds(vm))
+    }
+
+    @Test
+    fun typedSearchUsesGroupedTitleResults() = runTest(dispatcher) {
+        val search = FakeSearch()
+        val vm = SearchViewModel(search, FakeCatalog(), ShowEverything)
+        vm.onQuery("movie")
+        advanceUntilIdle()
+        assertEquals(listOf("a1", "b1"), resultIds(vm))
+        assertEquals("movie", search.filteredQuery)
+        assertEquals(SearchFilters.None, search.filteredFilters)
     }
 
     @Test
@@ -138,12 +191,23 @@ class SearchViewModelTest {
     }
 }
 
-private class FakeSearch : SearchRepository {
+private class FakeSearch(private val guideGate: CompletableDeferred<Unit>? = null) : SearchRepository {
+    var filteredQuery: String? = null
+    var filteredFilters: SearchFilters? = null
     override suspend fun search(query: String, limitPerKind: Int): Map<ContentKind, List<SearchHit>> =
         mapOf(ContentKind.VOD to listOf(SearchHit(keyA, "Movie A"), SearchHit(keyB, "Movie B")))
+    override suspend fun searchProgrammes(query: String, nowMs: Long, windowMs: Long, limit: Int): List<com.yodesla.omniverse.core.data.ProgrammeHit> {
+        guideGate?.await()
+        return emptyList()
+    }
+    override suspend fun searchFiltered(query: String, filters: SearchFilters, excludedCategoryKeys: Collection<String>, limitPerKind: Int, sort: SearchSort): Map<ContentKind, SearchFilteredPage> {
+        filteredQuery = query
+        filteredFilters = filters
+        return mapOf(ContentKind.VOD to SearchFilteredPage(listOf(posterA, posterB)))
+    }
 }
 
-private class FakeCatalog : CatalogRepository {
+private class FakeCatalog(private val live: ChannelRow? = null) : CatalogRepository {
     override fun categories(sourceId: SourceId, kind: ContentKind, includeHidden: Boolean): Flow<List<Category>> = TODO()
     override fun channels(sourceId: SourceId, categoryId: RemoteId): PagingSource<Int, ChannelRow> = TODO()
     override fun channelsAll(sourceId: SourceId, excludedCategories: Collection<String>): androidx.paging.PagingSource<Int, com.yodesla.omniverse.core.data.ChannelRow> = TODO()
@@ -152,7 +216,7 @@ private class FakeCatalog : CatalogRepository {
     override suspend fun channelList(sourceId: SourceId, categoryId: RemoteId): List<ChannelRow> = TODO()
     override suspend fun channelNeighbours(key: ContentKey, categoryId: RemoteId): Pair<ChannelRow?, ChannelRow?> = TODO()
     override suspend fun channelOrder(sourceId: SourceId, categoryId: RemoteId): List<ContentKey> = TODO()
-    override suspend fun channel(key: ContentKey): ChannelRow? = TODO()
+    override suspend fun channel(key: ContentKey): ChannelRow? = live?.takeIf { it.key == key }
     override fun vod(sourceId: SourceId, categoryId: RemoteId?): PagingSource<Int, PosterRow> = TODO()
     override fun series(sourceId: SourceId, categoryId: RemoteId?): PagingSource<Int, PosterRow> = TODO()
     override fun vodAll(excludedCategoryKeys: Collection<String>): PagingSource<Int, PosterRow> = TODO()
@@ -165,4 +229,19 @@ private class FakeCatalog : CatalogRepository {
             else -> null
         }
     override fun counts(sourceId: SourceId): Flow<Map<ContentKind, Long>> = TODO()
+}
+
+private class SearchFavoriteUser : com.yodesla.omniverse.core.data.UserDataRepository {
+    private val saved = MutableStateFlow<List<ContentKey>>(emptyList())
+    override fun favorites(kind: ContentKind?): Flow<List<ContentKey>> = saved.map { keys -> keys.filter { kind == null || it.kind == kind } }
+    override fun isFavorite(key: ContentKey): Flow<Boolean> = saved.map { key in it }
+    override suspend fun setFavorite(key: ContentKey, favorite: Boolean) { saved.value = if (favorite) (saved.value + key).distinct() else saved.value - key }
+    override suspend fun saveProgress(key: ContentKey, parentId: RemoteId?, positionMs: Long, durationMs: Long?) = Unit
+    override fun continueWatching(limit: Int): Flow<List<com.yodesla.omniverse.core.data.Progress>> = flowOf(emptyList())
+    override suspend fun progress(key: ContentKey): com.yodesla.omniverse.core.data.Progress? = null
+    override suspend fun recordChannelWatched(key: ContentKey) = Unit
+    override fun recentChannels(limit: Int): Flow<List<ContentKey>> = flowOf(emptyList())
+    override suspend fun setHidden(key: ContentKey, hidden: Boolean) = Unit
+    override fun setting(key: String): Flow<String?> = flowOf(null)
+    override suspend fun putSetting(key: String, value: String) = Unit
 }

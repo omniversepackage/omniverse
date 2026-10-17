@@ -67,6 +67,20 @@ class SourceRepositoryImpl(
         lock.withLock { cache.remove(config.id) }
     }
 
+    /** Rename the saved source without changing its connection or credentials. */
+    suspend fun rename(id: SourceId, displayName: String): Boolean {
+        val name = displayName.trim()
+        if (name.isEmpty()) return false
+        val current = config(id) ?: return false
+        val renamed = when (current) {
+            is SourceConfig.Xtream -> SourceConfig.Xtream(id, name, current.server, current.username, current.password, current.liveFormat, current.epgUrlOverride)
+            is SourceConfig.M3u -> SourceConfig.M3u(id, name, current.playlistUrl, current.epgUrl, current.userAgent)
+            is SourceConfig.Plex -> SourceConfig.Plex(id, name, current.server, current.token, current.machineId, current.clientId)
+        }
+        update(renamed)
+        return true
+    }
+
     override suspend fun remove(id: SourceId) {
         withContext(io) { db.storeQueries.deleteSourceAndCatalog(id.value) }
         lock.withLock { cache.remove(id) }

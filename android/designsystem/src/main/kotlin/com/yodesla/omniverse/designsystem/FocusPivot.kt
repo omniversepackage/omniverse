@@ -27,13 +27,23 @@ fun FocusPivot(
     content: @Composable () -> Unit,
 ) {
     val leadingPx = with(LocalDensity.current) { leading.toPx() }
-    val spec = remember(parentFraction, childFraction, leadingPx) {
+    val haloPx = with(LocalDensity.current) { OmniSpacing.focusHalo.toPx() }
+    val spec = remember(parentFraction, childFraction, leadingPx, haloPx) {
         object : BringIntoViewSpec {
             override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float {
                 val target = parentFraction * containerSize + leadingPx - childFraction * size
-                return offset - target
+                return focusSafeScrollDistance(offset, size, containerSize, target, haloPx)
             }
         }
     }
     CompositionLocalProvider(LocalBringIntoViewSpec provides spec, content = content)
+}
+
+/** Keep the transformed card inside the viewport without changing its focus scale or pivot policy. */
+internal fun focusSafeScrollDistance(offset: Float, size: Float, containerSize: Float, target: Float, halo: Float): Float {
+    val outset = size * (OmniMotion.FOCUS_SCALE - 1f) / 2f + halo
+    val lastSafeStart = containerSize - size - outset
+    val safeTarget = if (lastSafeStart >= outset) target.coerceIn(outset, lastSafeStart)
+        else (containerSize - size) / 2f
+    return offset - safeTarget
 }

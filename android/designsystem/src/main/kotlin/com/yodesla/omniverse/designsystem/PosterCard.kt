@@ -53,7 +53,7 @@ fun PosterCard(
                     SubcomposeAsyncImage(
                         model = model,
                         contentDescription = title,
-                        contentScale = ContentScale.Crop,
+                        contentScale = ContentScale.Crop, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt,
                         loading = { PosterPlaceholder(title) },
                         error = { TypographicPoster(title) },
                         modifier = Modifier.fillMaxSize(),
@@ -64,9 +64,10 @@ fun PosterCard(
                 ProgressLine(progress, Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(OmniSpacing.s))
             }
         }
-        Spacer(Modifier.height(OmniSpacing.s))
+        // The poster grows around its center on focus; its transformed bottom must clear the title.
+        Spacer(Modifier.height(OmniSpacing.m))
         Text(title, style = OmniTheme.type.body.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold), color = c.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        if (subtitle != null) Text(subtitle, style = OmniTheme.type.caption, color = c.textTertiary, maxLines = 1)
+        if (subtitle != null) Text(subtitle, style = OmniTheme.type.caption, color = c.textTertiary, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

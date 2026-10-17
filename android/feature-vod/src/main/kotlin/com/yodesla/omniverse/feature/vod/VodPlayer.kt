@@ -171,6 +171,7 @@ fun VodPlayerRoute(
     onRequestKidsPin: () -> Unit = {},
 ) {
     val context = LocalContext.current
+    val channelMenu = com.yodesla.omniverse.designsystem.channelFavoriteMenu(item.key.sourceId.value, item.key.remoteId.value, item.title)
     val engine = remember { Media3ExoEngine(context, userAgent) }
     val state by engine.state.collectAsStateWithLifecycle()
     val diagnostics by engine.diagnostics.collectAsStateWithLifecycle()
@@ -757,7 +758,7 @@ fun VodPlayerRoute(
     if (showSkipEditor) {
         LaunchedEffect(Unit) { skipEditorFirstFocus.requestFocusWhenReady() }
         Dialog(onDismissRequest = { showSkipEditor = false }) {
-            Column(Modifier.width(480.dp).heightIn(max = 640.dp).clip(RoundedCornerShape(16.dp))
+            Column(Modifier.width(480.dp).heightIn(max = 480.dp).clip(RoundedCornerShape(16.dp))
                 .background(OmniTheme.colors.background).verticalScroll(rememberScrollState()).padding(OmniSpacing.xl)) {
                 Text("Skip points for this video", style = OmniTheme.type.title, color = OmniTheme.colors.textPrimary)
                 val onlineStatus = when {
@@ -867,6 +868,7 @@ fun VodPlayerRoute(
                 val repeat = e.nativeKeyEvent.repeatCount
                 val step = if (repeat > 6) 30_000L else 10_000L
                 when (e.key) {
+                    Key.Menu -> if (item.key.kind == com.yodesla.omniverse.core.model.ContentKind.LIVE) { channelMenu(); true } else false
                     Key.Info -> { showDiagnostics = !showDiagnostics; true }
                     Key.MediaNext -> {
                         if (kids.blocked != null) true
@@ -908,8 +910,8 @@ fun VodPlayerRoute(
                     EngineSurface(engine, Modifier.fillMaxSize(), contentScale = PictureMode.of(pictureMode).scale, frameRateMode = frameRateMode)
         EngineSubtitles(engine, Modifier.fillMaxSize(), style = subStyleSpec, offsetMs = subtitleDelayMs)
         if (showDiagnostics) {
-            Column(Modifier.align(Alignment.TopEnd).padding(24.dp).width(380.dp)
-                .clip(RoundedCornerShape(12.dp)).background(Color.Black.copy(alpha = 0.86f)).padding(20.dp)) {
+            Column(Modifier.align(Alignment.TopEnd).padding(24.dp).width(380.dp).heightIn(max = 420.dp)
+                .clip(RoundedCornerShape(12.dp)).background(Color.Black.copy(alpha = 0.86f)).verticalScroll(rememberScrollState()).padding(20.dp)) {
                 Text("PLAYBACK INFO  ·  BACK TO CLOSE", style = OmniTheme.type.overline, color = OmniTheme.colors.accent)
                 Spacer(Modifier.height(12.dp))
                 diagnostics.lines().forEach { Text(it, style = OmniTheme.type.body, color = Color.White) }
@@ -949,7 +951,7 @@ fun VodPlayerRoute(
                 }
             } else if (fallbackPanel) {
                 Dialog(onDismissRequest = { fallbackPanel = false; fallbackCancelled = true }) {
-                    Column(Modifier.width(560.dp).heightIn(max = 640.dp).clip(RoundedCornerShape(16.dp))
+                    Column(Modifier.width(560.dp).heightIn(max = 480.dp).clip(RoundedCornerShape(16.dp))
                         .background(OmniTheme.colors.background).verticalScroll(rememberScrollState()).padding(OmniSpacing.xl),
                         verticalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
                         Text(stringResource(R.string.vod_choose_copy_title), style = OmniTheme.type.title, color = OmniTheme.colors.textPrimary)
@@ -1028,6 +1030,10 @@ fun VodPlayerRoute(
                             { skipTo(marker); overlay = false },
                             Modifier.focusRequester(skipFocus).onFocusChanged { skipButtonFocused = it.hasFocus },
                         )
+                        Spacer(Modifier.width(OmniSpacing.m))
+                    }
+                    if (item.key.kind == com.yodesla.omniverse.core.model.ContentKind.LIVE) {
+                        OmniButton("Channel favorites", channelMenu, Modifier.onFocusChanged { pictureButtonFocused = it.hasFocus })
                         Spacer(Modifier.width(OmniSpacing.m))
                     }
                     OmniButton("Picture: ${PictureMode.of(pictureMode).label}", {

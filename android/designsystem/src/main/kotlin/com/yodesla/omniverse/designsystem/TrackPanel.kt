@@ -3,6 +3,7 @@ package com.yodesla.omniverse.designsystem
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
@@ -92,7 +93,7 @@ private fun TrackColumn(title: String, options: List<TrackOption>, focus: FocusR
     Column(Modifier.width(320.dp)) {
         Text(title, style = OmniTheme.type.title, color = c.accent, modifier = Modifier.padding(bottom = OmniSpacing.m))
         val focusIndex = options.indexOfFirst { it.selected }.coerceAtLeast(0)
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
+        LazyColumn(contentPadding = PaddingValues(OmniSpacing.s), verticalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
             items(options.size) { i ->
                 val o = options[i]
                 OmniButton(

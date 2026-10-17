@@ -1,4 +1,8 @@
 package com.yodesla.omniverse.feature.live.player
+import com.yodesla.omniverse.designsystem.channelFavoriteMenu
+import com.yodesla.omniverse.designsystem.ChannelFavoriteButton
+import com.yodesla.omniverse.designsystem.FavoriteChannel
+
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -27,11 +31,11 @@ import com.yodesla.omniverse.player.Media3ExoEngine
 
 /**
  * The live channel keeps playing in a small 16:9 box while the user browses the Guide or the
- * channel list (Back from fullscreen). Not focusable: focus stays in the grid/list; picking any
+ * channel list (Back from fullscreen). The favorite button is focusable without taking focus on entry; picking any
  * channel (including this one) goes fullscreen on the same engine, so there's no reload.
  */
 @Composable
-fun MiniLivePlayer(engine: Media3ExoEngine, channel: BannerUi?, modifier: Modifier = Modifier) {
+fun MiniLivePlayer(engine: Media3ExoEngine, channel: BannerUi?, modifier: Modifier = Modifier, channelKey: com.yodesla.omniverse.core.model.ContentKey? = null) {
     val c = OmniTheme.colors
     val shape = RoundedCornerShape(12.dp)
     Box(
@@ -50,6 +54,9 @@ fun MiniLivePlayer(engine: Media3ExoEngine, channel: BannerUi?, modifier: Modifi
         ) {
             Box(Modifier.size(6.dp).clip(CircleShape).background(c.live))
             Text("LIVE", style = OmniTheme.type.overline, color = Color.White)
+        }
+        channelKey?.let { key ->
+            ChannelFavoriteButton(FavoriteChannel(key.sourceId.value, key.remoteId.value, channel?.name ?: "Channel"), Modifier.align(Alignment.TopEnd).padding(12.dp), compact = true)
         }
         channel?.let { b ->
             Text(

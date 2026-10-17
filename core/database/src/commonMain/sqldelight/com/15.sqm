@@ -1,0 +1,9 @@
+-- v15 -> v16: regroup existing series whose exact normalized title and year agree across sources
+-- even when providers supplied conflicting TMDB ids. New syncs run the same pass in Store.sq.
+UPDATE series SET group_key = 'm:' || match_key
+WHERE removed_ms IS NULL AND match_key IN (
+    SELECT match_key FROM series
+    WHERE removed_ms IS NULL AND match_key IS NOT NULL AND match_key <> ''
+    GROUP BY match_key
+    HAVING count(DISTINCT source_id) > 1 AND count(DISTINCT group_key) > 1
+);

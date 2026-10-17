@@ -400,13 +400,13 @@ class BackupCodec(
             "rt_scores", "sports_online", "live_view", "pref_audio_language", "pref_subtitles",
             // L1 made these profile-scoped; the bare names stay listed so a backup written by an
             // older build still imports (the next launch migrates them to the default profile).
-            "home_layout", "home_density",
+            "home_layout", "home_density", AutoRefreshPolicy.SOURCES, AutoRefreshPolicy.DISCOVERY,
         )
         private val safeSettingPrefixes = listOf(
             "category_order_", "search_history::", "cw_dismissed_", "picture_mode_",
             "home_layout::", "home_density::", "kids_",
             // Task 103: followed teams and the score switch travel with the profile that owns them.
-            "sports_followed_teams::", "sports_hide_scores::",
+            "sports_followed_teams::", "sports_hide_scores::", "movies_shows_view::", "left_opens_menu::", "warn_main_menu::", "for_you_news::", "live_hidden_providers::",
         )
         private val sensitiveUrlParts = listOf("x-plex-token=", "token=", "auth=", "password=", "apikey=", "api_key=")
         private val REQUIRED_SECTIONS = setOf(

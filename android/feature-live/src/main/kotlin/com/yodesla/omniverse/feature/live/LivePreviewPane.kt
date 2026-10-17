@@ -67,8 +67,6 @@ internal fun LivePreviewPane(
                 Box(Modifier.size(7.dp).clip(CircleShape).background(c.live))
                 Spacer(Modifier.width(8.dp))
                 Text("LIVE TV", style = t.overline, color = c.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.weight(1f))
-                Text("ON THIS CHANNEL", style = t.overline, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             if (channel != null) {
                 if (video == null) {

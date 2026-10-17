@@ -73,6 +73,10 @@ object SettingsRowKeys {
     const val CUSTOMIZE_HOME = "customize_home"
     const val HIDE_SPORTS_SCORES = "hide_sports_scores"
     const val SCREENSAVER = "screensaver"
+    // Task 203: Movies & Shows layout picker (Settings › Display, TV-only).
+    const val LEFT_MENU = "left_menu"
+    const val MENU_WARNING = "menu_warning"
+    const val MOVIES_SHOWS_VIEW = "movies_shows_view"
     const val MANAGE = "manage_profiles"
     const val GUEST_NOTE = "guest_note"
     const val CREATE_PROFILE = "create_profile"
@@ -138,6 +142,8 @@ fun settingsRows(
         add(SettingsRowKeys.EXPERIENCE)
         add(SettingsRowKeys.HIDE_SPORTS_SCORES)
         if (hasCustomizeHome) add(SettingsRowKeys.CUSTOMIZE_HOME)
+        // Task 203: TV-only, like the screen-saver picker — the phone build browses one pane already.
+        if (!compact) { add(SettingsRowKeys.MOVIES_SHOWS_VIEW); add(SettingsRowKeys.LEFT_MENU); add(SettingsRowKeys.MENU_WARNING) }
         // TV-only: the phone build has no Android TV screen-saver picker to point at.
         if (!compact) add(SettingsRowKeys.SCREENSAVER)
     }
@@ -181,6 +187,7 @@ fun settingsPaneItemKeys(
     add(SettingsRowKeys.TITLE)
     when (category) {
         SettingsCategory.Sources -> {
+            if (hasSlot) add("auto-sources")
             sourceIds.forEach { add(SettingsRowKeys.SOURCE_PREFIX + it) }
             add(SettingsRowKeys.CATEGORY_LANG)
             add(SettingsRowKeys.CATEGORY_LANG_UNTAGGED)
@@ -206,7 +213,10 @@ fun settingsPaneItemKeys(
         }
         SettingsCategory.Display -> {
             add(SettingsRowKeys.EXPERIENCE)
+            add(SettingsRowKeys.HIDE_SPORTS_SCORES)
             add(SettingsRowKeys.TEXT_SIZE)
+            // Task 203: renders between Text size and the screen-saver row in the pane.
+            if (!compact) { add(SettingsRowKeys.MOVIES_SHOWS_VIEW); add(SettingsRowKeys.LEFT_MENU); add(SettingsRowKeys.MENU_WARNING) }
             if (!compact) add(SettingsRowKeys.SCREENSAVER)
             if (hasSlot) add(SettingsRowKeys.CUSTOMIZE_HOME)
             if (hasHiddenCwRow) add(SettingsRowKeys.HIDDEN_CW)
@@ -222,6 +232,7 @@ fun settingsPaneItemKeys(
             if (hasSlot) add(SettingsRowKeys.PARENTAL)
         }
         SettingsCategory.Metadata -> {
+            if (hasSlot) add("auto-discovery")
             add(SettingsRowKeys.WIKIDATA)
             add(SettingsRowKeys.RT)
         }

@@ -46,9 +46,6 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.composed
-import androidx.compose.foundation.relocation.bringIntoViewResponder
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -443,6 +440,22 @@ class AnimeHubViewModel(
         row.categoryId?.let { runCatching { catalog.categoryName(row.key.sourceId, row.key.kind, it) }.getOrNull() },
     )
 
+    /**
+     * The highlighted title in full for the pinned banner: its TMDB logo, backdrop, certification and
+     * plot (fetched now when not cached yet), keeping the provider genre when TMDB has none.
+     */
+    suspend fun detailed(row: PosterRow): PosterRow {
+        val id = row.tmdbId
+        val t = tmdb
+        if (t != null && id != null) {
+            val k = if (row.key.kind == ContentKind.SERIES) WikidataMetadata.Kind.SERIES else WikidataMetadata.Kind.MOVIE
+            runCatching { t.prefetch(k, listOf(id)) }
+        }
+        val full = runCatching { catalog.poster(row.key) }.getOrNull() ?: row
+        val filled = runCatching { catalog.refillArt(listOf(full)).firstOrNull() }.getOrNull() ?: full
+        return filled.copy(genre = filled.genre ?: row.genre, rating = filled.rating ?: row.rating, year = filled.year ?: row.year)
+    }
+
     suspend fun rtScores(row: PosterRow): RtScores? = rottenTomatoes?.scores(
         if (row.key.kind == ContentKind.SERIES) WikidataMetadata.Kind.SERIES else WikidataMetadata.Kind.MOVIE, row.tmdbId)
 
@@ -505,28 +518,34 @@ fun AnimeHubRoute(
     }
 }
 
-/** The top bar: the ANIME wordmark, the four tabs and an optional page action (Browse all / ◂ Home). */
+/**
+ * The top bar: the ANIME wordmark, the four tabs and an optional page action (Browse all / ◂ Home).
+ * [compact] (Kory: the menu bar shrinks while you scroll down through the rows) animates it to a slim strip.
+ */
 @Composable
 private fun AnimeTabs(
     current: AnimeTab, onSelect: (AnimeTab) -> Unit, tabFocus: FocusRequester, leftEdge: (Int) -> Modifier,
+    compact: Boolean = false,
     trailing: (@Composable () -> Unit)? = null,
 ) {
     val c = OmniTheme.colors
+    val chipHeight by androidx.compose.animation.core.animateDpAsState(if (compact) 22.dp else 34.dp, tween(180), label = "tabsHeight")
     Row(
-        Modifier.fillMaxWidth().padding(top = OmniSpacing.s, bottom = 0.dp),
+        Modifier.fillMaxWidth().padding(top = if (compact) 2.dp else OmniSpacing.s, bottom = 0.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(OmniSpacing.s),
+        horizontalArrangement = Arrangement.spacedBy(if (compact) 4.dp else OmniSpacing.s),
     ) {
         Text(
             "ANIME", color = c.accent, maxLines = 1,
-            style = TextStyle(fontFamily = OmniTheme.type.family, fontWeight = FontWeight.Black, fontSize = 22.sp, letterSpacing = 3.sp),
-            modifier = Modifier.padding(start = OmniSpacing.focusEdge, end = OmniSpacing.m),
+            style = TextStyle(fontFamily = OmniTheme.type.family, fontWeight = FontWeight.Black, fontSize = if (compact) 13.sp else 22.sp, letterSpacing = if (compact) 2.sp else 3.sp),
+            modifier = Modifier.padding(start = OmniSpacing.focusEdge, end = if (compact) OmniSpacing.s else OmniSpacing.m),
         )
         AnimeTab.entries.forEachIndexed { i, tab ->
-            AnimeChip(tab.label, tab == current, (if (tab == current) Modifier.focusRequester(tabFocus) else Modifier).then(leftEdge(i)), height = 34.dp) { onSelect(tab) }
+            AnimeChip(tab.label, tab == current, (if (tab == current) Modifier.focusRequester(tabFocus) else Modifier).then(leftEdge(i)),
+                height = chipHeight, fontSize = if (compact) 10.sp else 13.sp) { onSelect(tab) }
         }
         if (trailing != null) {
-            Spacer(Modifier.width(OmniSpacing.l))
+            Spacer(Modifier.width(if (compact) OmniSpacing.s else OmniSpacing.l))
             trailing()
         }
     }
@@ -534,11 +553,14 @@ private fun AnimeTabs(
 
 /** A Crunchyroll-style chip: accent fill when selected, focus border from the shared card. */
 @Composable
-private fun AnimeChip(label: String, selected: Boolean, modifier: Modifier = Modifier, height: androidx.compose.ui.unit.Dp = 36.dp, onClick: () -> Unit) {
+private fun AnimeChip(
+    label: String, selected: Boolean, modifier: Modifier = Modifier,
+    height: androidx.compose.ui.unit.Dp = 36.dp, fontSize: androidx.compose.ui.unit.TextUnit = 13.sp, onClick: () -> Unit,
+) {
     val c = OmniTheme.colors
     CrunchyrollCard(modifier.height(height), onClick = onClick, onLongClick = {}, onFocus = {}) {
-        Box(Modifier.fillMaxHeight().background(if (selected) c.accent else Color.Transparent).padding(horizontal = OmniSpacing.m), contentAlignment = Alignment.Center) {
-            Text(label.uppercase(), maxLines = 1, color = if (selected) Color.Black else c.textSecondary, style = CrunchKicker(OmniTheme.type).copy(fontSize = 13.sp))
+        Box(Modifier.fillMaxHeight().background(if (selected) c.accent else Color.Transparent).padding(horizontal = if (fontSize < 12.sp) OmniSpacing.s else OmniSpacing.m), contentAlignment = Alignment.Center) {
+            Text(label.uppercase(), maxLines = 1, color = if (selected) Color.Black else c.textSecondary, style = CrunchKicker(OmniTheme.type).copy(fontSize = fontSize))
         }
     }
 }
@@ -555,10 +577,19 @@ private fun <T> ChipRow(label: String, options: List<T>, selected: T, name: (T) 
     }
 }
 
+/** The pinned header's banner height: the same in both modes, so nothing jumps when the tabs shrink. */
+private val BannerHeight = 172.dp
+
+/** What the pinned banner shows while the viewer is in the rows: the highlighted title or channel. */
+private data class Pick(val row: PosterRow? = null, val channel: HubChannel? = null, val kicker: String, val shelfKey: String)
+
 /**
  * A hub home page. [kind] null = the main Home (mixed kinds, live channel rows); SERIES / VOD = that
- * tab's own home, with a "Browse all" action to the filterable grid. Compact by design (Kory): the
- * tabs, the billboard, Continue Watching and the first full trending row share one 540 dp screen.
+ * tab's own home, with a "Browse all" action to the filterable grid.
+ *
+ * Kory: the tabs + banner are PINNED above the rows. On the buttons the tabs are full size and the
+ * banner is the featured carousel; once focus moves down into the rows the tab bar shrinks to a slim
+ * strip and the banner becomes the highlighted title's full banner (art, logo, rating, synopsis).
  */
 @Composable
 private fun AnimeHome(
@@ -577,76 +608,100 @@ private fun AnimeHome(
     onOpenNavigation: () -> Unit,
 ) {
     var heroIndex by remember(kind) { mutableIntStateOf(0) }
-    var heroFocused by remember { mutableStateOf(false) }
-    var focusedPoster by remember(kind) { mutableStateOf<PosterRow?>(null) }
+    var inRows by remember(kind) { mutableStateOf(false) }
+    var pick by remember(kind) { mutableStateOf<Pick?>(null) }
+    var heroTick by remember { mutableIntStateOf(0) }
+    val onPick: (Pick) -> Unit = { pick = it; inRows = true }
     val hero = featured.getOrNull(heroIndex.coerceIn(0, (featured.size - 1).coerceAtLeast(0)))
-    val backdrop = crunchyrollBackdropRow(hero, focusedPoster?.takeIf { !crunchyrollKeyArt(it).isNullOrBlank() }, heroFocused)
     val cinematic = LocalVisualTier.current == VisualTier.CINEMATIC
     val listState = rememberLazyListState()
     // Switching to the Series / Movies home lands on its tab chip (the page below is new).
     LaunchedEffect(kind) { if (kind != null) runCatching { tabFocus.requestFocus() } }
-    val scrollProgress by remember { derivedStateOf {
-        val heroInfo = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == "hero" }
-        when {
-            heroInfo == null -> 1f
-            heroInfo.offset >= 0 -> 0f
-            else -> (-heroInfo.offset.toFloat() / heroInfo.size.coerceAtLeast(1)).coerceIn(0f, 1f)
-        }
-    } }
-    val backdropAlpha by animateFloatAsState(1f - 0.55f * scrollProgress, tween(200), label = "animeScrollFade")
+    // Up from the first row returns to the Play button once the buttons are composed again.
+    LaunchedEffect(heroTick) { if (heroTick > 0) { delay(60); runCatching { firstFocus.requestFocus() } } }
+    // The highlighted title's full detail (logo, backdrop, plot, genres): basic row at once, enriched after a beat.
+    val artVersion by vm.artVersion.collectAsStateWithLifecycle(initialValue = 0L)
+    val pickedRow = pick?.row
+    val shown by produceState<PosterRow?>(pickedRow, pickedRow?.uid(), artVersion) {
+        value = pickedRow
+        if (pickedRow != null) { delay(150); value = vm.detailed(pickedRow) }
+    }
+    val channelPick = if (inRows) pick?.channel else null
+    // Backdrop art only (a poster stretched across the banner looks wrong); channels use their TMDB key art.
+    val backdrop: PosterRow? = when {
+        !inRows -> hero
+        channelPick != null -> PosterRow(channelPick.row.key, channelPick.row.name, null, null, null, backdropUrl = channelPick.art?.backdropUrl)
+        else -> shown?.copy(posterUrl = null)
+    }
     val names: suspend (PosterRow) -> List<String> = vm::titleNames
     val noun = if (kind == ContentKind.VOD) "movies" else "series"
     Box(Modifier.fillMaxSize()) {
-        CrunchyrollHeroBackdrop(backdrop, cinematic, Modifier.align(Alignment.TopEnd).fillMaxWidth().fillMaxHeight(0.72f).alpha(backdropAlpha))
-        FocusPivot(parentFraction = 0f, leading = 48.dp) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(start = CrunchSide, end = CrunchSide, bottom = 48.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                item(key = "hero") {
-                    // Tabs + billboard are ONE item that brings itself into view whole (no tab ↔ hero bounce).
-                    Column(Modifier.onFocusChanged { heroFocused = it.hasFocus }.wholeBlockIntoView()) {
-                        AnimeTabs(state.tab, vm::selectTab, tabFocus, leftEdge, trailing = if (kind == null) null else {
-                            { AnimeChip("Browse all $noun & filters ▸", false, height = 34.dp) { vm.openGrid() } }
-                        })
-                        AnimeHero(
-                            row = hero, kicker = hero?.let { state.heroKickers[it.uid()] },
-                            card = continueWatching.firstOrNull { it.poster.uid() == hero?.uid() },
-                            featuredCount = featured.size, index = heroIndex, vm = vm,
-                            onHeroPage = { d -> if (featured.size > 1) heroIndex = crunchyrollHeroStep(heroIndex, featured.size, d) },
-                            onPlay = onPlay, onOpen = onOpen, firstFocus = firstFocus, onOpenNavigation = onOpenNavigation,
-                            loaded = state.loaded,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
+        CrunchyrollHeroBackdrop(backdrop, cinematic, Modifier.align(Alignment.TopEnd).fillMaxWidth().height(BannerHeight + 70.dp))
+        Column(Modifier.fillMaxSize().padding(horizontal = CrunchSide)) {
+            // PINNED: never scrolls with the rows.
+            Column(Modifier.onFocusChanged { if (it.hasFocus) inRows = false }) {
+                AnimeTabs(state.tab, vm::selectTab, tabFocus, leftEdge, compact = inRows, trailing = if (kind == null) null else {
+                    { AnimeChip("Browse all $noun & filters ▸", false, height = if (inRows) 22.dp else 34.dp, fontSize = if (inRows) 10.sp else 13.sp) { vm.openGrid() } }
+                })
+                if (channelPick != null) {
+                    ChannelBanner(channelPick, pick?.kicker.orEmpty(), Modifier.fillMaxWidth().height(BannerHeight))
+                } else {
+                    AnimeHero(
+                        row = if (inRows) shown else hero,
+                        kicker = if (inRows) pick?.kicker else hero?.let { state.heroKickers[it.uid()] },
+                        card = if (inRows) null else continueWatching.firstOrNull { it.poster.uid() == hero?.uid() },
+                        interactive = !inRows,
+                        featuredCount = featured.size, index = heroIndex, vm = vm,
+                        onHeroPage = { d -> if (featured.size > 1) heroIndex = crunchyrollHeroStep(heroIndex, featured.size, d) },
+                        onPlay = onPlay, onOpen = onOpen, firstFocus = firstFocus, onOpenNavigation = onOpenNavigation,
+                        loaded = state.loaded,
+                        modifier = Modifier.fillMaxWidth().height(BannerHeight),
+                    )
                 }
-                if (continueWatching.isNotEmpty()) item(key = "cw") {
-                    CrunchyrollShelf("Continue Watching", compact = true) {
-                        itemsIndexed(continueWatching, key = { _, c -> "cw-" + c.poster.uid() }) { i, card ->
-                            CompactContinueCard(card, leftEdge(i), onFocus = { focusedPoster = card.poster }) { onOpen(card.poster.key) }
+            }
+            Box(
+                Modifier.weight(1f).fillMaxWidth().onPreviewKeyEvent { e ->
+                    // Up from the FIRST row goes back to the Play buttons (they are not composed while the banner previews).
+                    if (inRows && e.type == KeyEventType.KeyDown && e.key == Key.DirectionUp) {
+                        val firstKey = listState.layoutInfo.visibleItemsInfo.firstOrNull()?.takeIf { it.index == 0 }?.key
+                        if (firstKey != null && pick?.shelfKey == firstKey) { inRows = false; heroTick++; true } else false
+                    } else false
+                },
+            ) {
+                FocusPivot(parentFraction = 0f, leading = 40.dp) {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(bottom = 48.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        if (continueWatching.isNotEmpty()) item(key = "cw") {
+                            CrunchyrollShelf("Continue Watching", compact = true) {
+                                itemsIndexed(continueWatching, key = { _, c -> "cw-" + c.poster.uid() }) { i, card ->
+                                    CompactContinueCard(card, leftEdge(i), onFocus = { onPick(Pick(row = card.poster, kicker = "CONTINUE WATCHING", shelfKey = "cw")) }) { onOpen(card.poster.key) }
+                                }
+                            }
+                        }
+                        if (kind == null) {
+                            // Trending, anime channels, the anime shelves, cartoon channels, then the cartoon shelves.
+                            val toonKeys = setOf("cartoon-series", "animated-movies", "new-animated", "new-cartoons")
+                            shelves.filter { it.key.startsWith("trend") }.forEach { shelf -> posterShelf(shelf, names, leftEdge, onPick, onOpen) }
+                            if (state.animeChannels.isNotEmpty()) item(key = "anime-channels") {
+                                ChannelShelf("Anime channels · Live", "anime-channels", state.animeChannels, leftEdge, onPick, onWatchChannel)
+                            }
+                            shelves.filter { !it.key.startsWith("trend") && it.key !in toonKeys }.forEach { shelf -> posterShelf(shelf, names, leftEdge, onPick, onOpen) }
+                            if (state.cartoonChannels.isNotEmpty()) item(key = "cartoon-channels") {
+                                ChannelShelf("Cartoon channels · Live", "cartoon-channels", state.cartoonChannels, leftEdge, onPick, onWatchChannel)
+                            }
+                            shelves.filter { it.key in toonKeys }.forEach { shelf -> posterShelf(shelf, names, leftEdge, onPick, onOpen) }
+                        } else {
+                            shelves.forEach { shelf -> posterShelf(shelf, names, leftEdge, onPick, onOpen) }
+                        }
+                        if (state.loaded && shelves.isEmpty() && (kind != null || state.channels.isEmpty())) item(key = "empty") {
+                            Text("No anime or animated $noun found in your sources yet.", style = OmniTheme.type.body, color = OmniTheme.colors.textSecondary,
+                                modifier = Modifier.padding(start = OmniSpacing.focusEdge))
                         }
                     }
-                }
-                if (kind == null) {
-                    // Trending, anime channels, the anime shelves, cartoon channels, then the cartoon shelves.
-                    val toonKeys = setOf("cartoon-series", "animated-movies", "new-animated", "new-cartoons")
-                    shelves.filter { it.key.startsWith("trend") }.forEach { shelf -> posterShelf(shelf, names, leftEdge, { focusedPoster = it }, onOpen) }
-                    if (state.animeChannels.isNotEmpty()) item(key = "anime-channels") {
-                        ChannelShelf("Anime channels · Live", state.animeChannels, leftEdge, onWatchChannel)
-                    }
-                    shelves.filter { !it.key.startsWith("trend") && it.key !in toonKeys }.forEach { shelf -> posterShelf(shelf, names, leftEdge, { focusedPoster = it }, onOpen) }
-                    if (state.cartoonChannels.isNotEmpty()) item(key = "cartoon-channels") {
-                        ChannelShelf("Cartoon channels · Live", state.cartoonChannels, leftEdge, onWatchChannel)
-                    }
-                    shelves.filter { it.key in toonKeys }.forEach { shelf -> posterShelf(shelf, names, leftEdge, { focusedPoster = it }, onOpen) }
-                } else {
-                    shelves.forEach { shelf -> posterShelf(shelf, names, leftEdge, { focusedPoster = it }, onOpen) }
-                }
-                if (state.loaded && shelves.isEmpty() && (kind != null || state.channels.isEmpty())) item(key = "empty") {
-                    Text("No anime or animated $noun found in your sources yet.", style = OmniTheme.type.body, color = OmniTheme.colors.textSecondary,
-                        modifier = Modifier.padding(start = OmniSpacing.focusEdge))
                 }
             }
         }
@@ -685,37 +740,20 @@ private fun CompactContinueCard(card: ContinuePosterUi, modifier: Modifier, onFo
     }
 }
 
-/**
- * Task 142 (Kory: "it stutters and jumps back up"): focus anywhere in the tabs + billboard block asks
- * the list to show the WHOLE block, not just the focused button. The row pivot otherwise scrolled the
- * Start-watching row to the top, cutting off the tabs and title, and the hero's scroll-to-top then
- * fought it.
- */
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
-private fun Modifier.wholeBlockIntoView(): Modifier = composed {
-    var size by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
-    val responder = remember {
-        object : androidx.compose.foundation.relocation.BringIntoViewResponder {
-            override fun calculateRectForParent(localRect: androidx.compose.ui.geometry.Rect) =
-                androidx.compose.ui.geometry.Rect(0f, 0f, size.width.toFloat(), size.height.toFloat())
-            override suspend fun bringChildIntoView(localRect: () -> androidx.compose.ui.geometry.Rect?) = Unit
-        }
-    }
-    Modifier.onSizeChanged { size = it }.bringIntoViewResponder(responder)
-}
-
 private fun LazyListScope.posterShelf(
     shelf: AnimeShelf,
     names: suspend (PosterRow) -> List<String>,
     leftEdge: (Int) -> Modifier,
-    onFocus: (PosterRow) -> Unit,
+    onPick: (Pick) -> Unit,
     onOpen: (ContentKey) -> Unit,
 ) {
     item(key = shelf.key) {
         CrunchyrollShelf(shelf.title, shelf.caption, compact = true) {
             itemsIndexed(shelf.rows, key = { _, r -> shelf.key + "-" + r.uid() }) { i, row ->
                 // Kory: number what the library actually has 1, 2, 3… (chart order kept, no gaps for missing titles).
-                RankedPoster(row, if (shelf.ranks.isNotEmpty()) i + 1 else null, names, leftEdge(i), { onFocus(row) }) { onOpen(row.key) }
+                val ranked = shelf.ranks.isNotEmpty()
+                val kicker = if (ranked) "#${i + 1} ${shelf.title.uppercase()}" else shelf.title.uppercase()
+                RankedPoster(row, if (ranked) i + 1 else null, names, leftEdge(i), { onPick(Pick(row = row, kicker = kicker, shelfKey = shelf.key)) }) { onOpen(row.key) }
             }
         }
     }
@@ -738,12 +776,17 @@ private fun RankedPoster(row: PosterRow, rank: Int?, names: suspend (PosterRow) 
     }
 }
 
-/** The billboard, compact: kicker, logo/title, one meta line, a two-line synopsis, the buttons and dots. */
+/**
+ * The billboard, compact: kicker, logo/title, one meta line, a one-line synopsis, then either the
+ * buttons and carousel dots ([interactive], the featured title) or a hint (previewing a highlighted
+ * row title). Same fixed height either way.
+ */
 @Composable
 private fun AnimeHero(
     row: PosterRow?,
     kicker: String?,
     card: ContinuePosterUi?,
+    interactive: Boolean,
     featuredCount: Int,
     index: Int,
     vm: AnimeHubViewModel,
@@ -775,6 +818,7 @@ private fun AnimeHero(
         )
         val r = row
         if (r == null) {
+            if (!interactive) return@Box
             // Still loading (or nothing rated yet): keep one focus target so the page is reachable.
             Column(Modifier.padding(start = OmniSpacing.focusEdge, top = OmniSpacing.l, bottom = OmniSpacing.l), verticalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
                 Text(if (loaded) "Everything animated, in one place" else "Gathering every anime and cartoon…",
@@ -810,6 +854,12 @@ private fun AnimeHero(
                 crunchyrollHeroScores(r.key, rt?.first, rt?.second)?.let { RtBadges(it) }
             }
             r.plot?.let { Text(it, style = t.body.copy(fontSize = 13.sp, lineHeight = 17.sp), color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            if (!interactive) {
+                Box(Modifier.height(40.dp), contentAlignment = Alignment.CenterStart) {
+                    Text("OK opens details   ·   Up from the first row returns to Play / My List", style = CrunchKicker(t).copy(fontSize = 11.sp, letterSpacing = 0.8.sp), color = c.textSecondary.copy(alpha = 0.8f), maxLines = 1)
+                }
+                return@Column
+            }
             var playFocused by remember { mutableStateOf(false) }
             var bookmarkFocused by remember { mutableStateOf(false) }
             Row(
@@ -842,12 +892,53 @@ private fun AnimeHero(
     }
 }
 
-/** A live channel row on Home: premium 16:9 tiles. */
+/** The pinned banner while a live channel tile is highlighted: its logo, name and what is on now. */
 @Composable
-private fun ChannelShelf(title: String, channels: List<HubChannel>, leftEdge: (Int) -> Modifier, onWatch: (ContentKey, RemoteId) -> Unit) {
+private fun ChannelBanner(ch: HubChannel, kicker: String, modifier: Modifier) {
+    val c = OmniTheme.colors
+    val t = OmniTheme.type
+    Box(modifier, contentAlignment = Alignment.CenterStart) {
+        Box(
+            Modifier.matchParentSize()
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithContent {
+                    drawRect(Brush.horizontalGradient(0f to Color.Black, 0.45f to Color.Black.copy(alpha = 0.85f), 0.75f to Color.Transparent))
+                    drawContent()
+                    drawRect(Brush.verticalGradient(0f to Color.Transparent, 0.18f to Color.Black, 0.6f to Color.Black, 1f to Color.Transparent), blendMode = BlendMode.DstIn)
+                },
+        )
+        val logo = ch.art?.logoUrl ?: ch.row.logoUrl
+        var logoFailed by remember(logo) { mutableStateOf(false) }
+        Column(Modifier.padding(start = OmniSpacing.focusEdge, top = OmniSpacing.s, bottom = OmniSpacing.xs).widthIn(max = 780.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
+                Box(Modifier.background(Color(0xFFE50914), RoundedCornerShape(3.dp)).padding(horizontal = 6.dp, vertical = 1.dp)) {
+                    Text("● LIVE", style = CrunchKicker(t).copy(fontSize = 11.sp), color = Color.White)
+                }
+                Text(kicker, style = CrunchKicker(t).copy(fontSize = 12.sp, letterSpacing = 2.sp), color = c.accent, maxLines = 1)
+            }
+            if (!logo.isNullOrBlank() && !logoFailed) {
+                AsyncImage(model = logo, contentDescription = ch.row.name, contentScale = ContentScale.Fit, alignment = Alignment.CenterStart, onError = { logoFailed = true },
+                    modifier = Modifier.height(44.dp).widthIn(max = 300.dp))
+            } else {
+                Text(AnimeHubFeeds.channelCoreName(ch.row.name).ifBlank { ch.row.name }, maxLines = 1, overflow = TextOverflow.Ellipsis, color = c.textPrimary,
+                    style = TextStyle(fontFamily = t.family, fontWeight = FontWeight.Bold, fontSize = 30.sp, lineHeight = 34.sp, letterSpacing = (-0.8).sp))
+            }
+            Text(ch.row.name, style = t.body.copy(fontSize = 14.sp), color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(ch.nowTitle?.let { "On now: $it" } ?: "No guide data for this channel", style = t.body.copy(fontSize = 13.sp, lineHeight = 17.sp), color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Box(Modifier.height(40.dp), contentAlignment = Alignment.CenterStart) {
+                Text("OK watches live   ·   Up from the first row returns to Play / My List", style = CrunchKicker(t).copy(fontSize = 11.sp, letterSpacing = 0.8.sp), color = c.textSecondary.copy(alpha = 0.8f), maxLines = 1)
+            }
+        }
+    }
+}
+
+/** A live channel row on Home: premium 16:9 tiles; focus previews the channel in the pinned banner. */
+@Composable
+private fun ChannelShelf(title: String, shelfKey: String, channels: List<HubChannel>, leftEdge: (Int) -> Modifier, onPick: (Pick) -> Unit, onWatch: (ContentKey, RemoteId) -> Unit) {
     CrunchyrollShelf(title, "Logos & art: TMDB · Now playing: your guide", compact = true) {
         itemsIndexed(channels, key = { _, ch -> "ch-" + ch.row.uidKey() }) { i, ch ->
-            ChannelTile(ch, leftEdge(i).width(LocalCrunchCardWidths.current.second * 1.25f)) { onWatch(ch.row.key, ch.row.categoryId) }
+            ChannelTile(ch, leftEdge(i).width(LocalCrunchCardWidths.current.second * 1.25f),
+                onFocus = { onPick(Pick(channel = ch, kicker = title.uppercase(), shelfKey = shelfKey)) }) { onWatch(ch.row.key, ch.row.categoryId) }
         }
     }
 }
@@ -865,12 +956,12 @@ private val ChannelGradients = listOf(
  * provider's), a LIVE pill, and the guide's current programme with a progress bar along the bottom.
  */
 @Composable
-private fun ChannelTile(ch: HubChannel, modifier: Modifier, onClick: () -> Unit) {
+private fun ChannelTile(ch: HubChannel, modifier: Modifier, onFocus: () -> Unit = {}, onClick: () -> Unit) {
     val c = OmniTheme.colors
     val art = ch.art
     val gradient = ChannelGradients[Math.floorMod(channelNameKey(ch.row.name).hashCode(), ChannelGradients.size)]
     Column(modifier) {
-        CrunchyrollCard(Modifier.fillMaxWidth().aspectRatio(16f / 9f), onClick = onClick, onLongClick = {}, onFocus = {}) {
+        CrunchyrollCard(Modifier.fillMaxWidth().aspectRatio(16f / 9f), onClick = onClick, onLongClick = {}, onFocus = onFocus) {
             Box(Modifier.fillMaxSize().background(Brush.linearGradient(gradient)))
             val backdrop = art?.backdropUrl
             if (!backdrop.isNullOrBlank()) {

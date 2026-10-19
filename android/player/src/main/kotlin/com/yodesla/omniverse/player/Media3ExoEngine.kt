@@ -189,6 +189,37 @@ class Media3ExoEngine(
         frameRateDrivenBySurface = mode == FrameRateMatchMode.ALWAYS
     }
 
+    /*
+     * HDR / Dolby Vision content makes the Shield renegotiate HDMI: the HDMI audio output drops and
+     * reconnects. The AudioTrack stayed attached to the old (now standby) output, so the picture played
+     * with no sound until restart (Kory, 2026-10-19: shows silent, movies fine). When an HDMI output
+     * comes back mid-playback, a seek to the current position flushes the audio sink, which releases
+     * the stale AudioTrack and builds a new one on the live route.
+     * NOT setPreferredAudioDevice: pinning a device broke TrueHD / E-AC3 passthrough ("AudioTrack
+     * write failed: -6", titles would not start at all).
+     */
+    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+    // Registration immediately reports every existing device as "added"; only later events matter.
+    private var audioDevicesPrimed = false
+    private val audioDeviceCallback = object : android.media.AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out android.media.AudioDeviceInfo>) {
+            if (!audioDevicesPrimed) { audioDevicesPrimed = true; return }
+            val hdmiBack = addedDevices.any {
+                it.isSink && (it.type == android.media.AudioDeviceInfo.TYPE_HDMI || it.type == android.media.AudioDeviceInfo.TYPE_HDMI_ARC)
+            }
+            if (hdmiBack) rebuildAudioOutput()
+        }
+    }
+
+    private fun rebuildAudioOutput() {
+        val s = player.playbackState
+        if (s == Player.STATE_READY || s == Player.STATE_BUFFERING) runCatching { player.seekTo(player.currentPosition) }
+    }
+
+    init {
+        audioManager.registerAudioDeviceCallback(audioDeviceCallback, android.os.Handler(player.applicationLooper))
+    }
+
     init {
         player.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) = publish()
@@ -319,6 +350,7 @@ class Media3ExoEngine(
     override fun release() {
         stop()
         scope.cancel()
+        runCatching { audioManager.unregisterAudioDeviceCallback(audioDeviceCallback) }
         player.release()
     }
 

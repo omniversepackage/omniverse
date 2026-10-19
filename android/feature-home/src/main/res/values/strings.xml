@@ -38,10 +38,10 @@
     <string name="text_size_large">Large</string>
     <string name="text_size_xlarge">Extra large</string>
     <string name="text_size_note">Bigger text for viewers sitting farther from the TV. Applies to menus, lists and titles; posters and layout keep their proportions. Applies per profile and takes effect immediately.</string>
-    <string name="movies_shows_view_label">Movies &amp; Shows view</string>
+    <string name="movies_shows_view_label">Category layout</string>
     <string name="movies_shows_view_classic">Classic sidebar</string>
     <string name="movies_shows_view_horizontal">Horizontal categories</string>
-    <string name="movies_shows_view_note">Only changes Movies and Shows. Horizontal categories adds separate home pages and a scrolling top bar.</string>
+    <string name="movies_shows_view_note">Movies, Shows and Live TV. Horizontal categories puts the category list in a scrolling bar along the top (Movies and Shows also get their own home pages).</string>
     <string name="settings_hide_sports_scores_label">Hide sports scores</string>
     <string name="settings_hide_sports_scores_disclosure">Live and final scores on Sports cards show as \"Score hidden\" until you press OK on a card, which reveals that game\'s score for the rest of your visit. Hold OK on any game to follow a team: its games then lead the Sports page and Home. Applies per profile.</string>
     <string name="phone_remote_section">Phone remote</string>

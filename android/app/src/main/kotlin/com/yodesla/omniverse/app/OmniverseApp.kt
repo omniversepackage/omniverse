@@ -34,6 +34,12 @@ class OmniverseApp : Application() {
             // Android TV home screen "Play Next" row mirrors Continue Watching.
             WatchNextPublisher(this@OmniverseApp, graph).start(graph.appScope)
         }
+        // Guide titles for "On TV" search (~15 s on a cold Shield), loaded after Home has settled so
+        // the first search is fast; the search screen refreshes it once it is 15 min old.
+        graph.appScope.launch {
+            kotlinx.coroutines.delay(20_000)
+            try { graph.search.warmGuideSearch(System.currentTimeMillis()) } catch (c: kotlinx.coroutines.CancellationException) { throw c } catch (_: Exception) {}
+        }
         StartupTrace.mark("Application.onCreate returned")
     }
 }

@@ -1,4 +1,5 @@
 package com.yodesla.omniverse.feature.live.guide
+import com.yodesla.omniverse.feature.live.BIG_LIST
 import com.yodesla.omniverse.feature.live.UnifiedLiveCatalog
 import com.yodesla.omniverse.feature.live.liveScopedId
 import com.yodesla.omniverse.feature.live.isLiveCapable
@@ -249,18 +250,18 @@ class GuideViewModel(
                 recentsFlow.first().mapNotNull { k -> catalog.channel(k)?.takeIf { favVis("LIVE", it.key.sourceId.value, it.categoryId.value) } }
             } else unified.rows(id, src, vis, providerFilter.hiddenIds.first())
             // Task 98: the header chip filters within the category; the grid only ever sees the rows that pass.
-            val shown = applyFilter(list)
+            val shown = if (list.size > BIG_LIST && _state.value.filter != GuideFilter.ALL) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { applyFilter(list) } else applyFilter(list)
             channels = shown
+            val now = clock.nowMs()
+            // The grid first: the guide's extent (for jump limits) is computed after it is on screen.
+            _state.update { it.copy(loading = false, grid = GridData(shown), dayStarts = guideDayStarts(now, maxEndMs), viewMs = now, atNow = true, jump = null) }
             if (maxEndSource != src) {
                 // One scan per source per visit: the guide's extent does not change when the viewer
                 // switches category, and the query reads the whole programme table.
                 maxEndSource = src
                 maxEndMs = sources.sources().first().filter { it.isLiveCapable() }.maxOfOrNull { epg.maxProgrammeEnd(it.id) } ?: 0L
+                _state.update { it.copy(dayStarts = guideDayStarts(now, maxEndMs)) }
             }
-            val now = clock.nowMs()
-            // A new category starts on "now" (that is where the grid begins); the strip follows the
-            // data this source really has instead of a fixed 7-day guess.
-            _state.update { it.copy(loading = false, grid = GridData(shown), dayStarts = guideDayStarts(now, maxEndMs), viewMs = now, atNow = true, jump = null) }
         }
     }
 

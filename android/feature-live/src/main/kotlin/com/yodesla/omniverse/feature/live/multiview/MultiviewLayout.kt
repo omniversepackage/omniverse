@@ -38,6 +38,26 @@ object MultiviewLayout {
         return if (target < count) target else null
     }
 
+    /**
+     * Enlarged layout: display position 0 is the big screen on top, positions 1.. are the small ones in
+     * a row below it. Up/Down move between big and small, Left/Right between the small ones.
+     */
+    fun enlargedNeighbor(pos: Int, count: Int, direction: PadDirection): Int? {
+        if (count < 2 || pos !in 0 until count) return null
+        return when {
+            pos == 0 -> if (direction == PadDirection.DOWN) 1 else null
+            direction == PadDirection.UP -> 0
+            direction == PadDirection.LEFT -> (pos - 1).takeIf { it >= 1 }
+            direction == PadDirection.RIGHT -> (pos + 1).takeIf { it < count }
+            else -> null
+        }
+    }
+
+    /** Tile indices in display order: the enlarged one first (when present), the rest keep their order. */
+    fun displayOrder(count: Int, enlarged: Int?): List<Int> =
+        if (enlarged != null && enlarged in 0 until count && count >= 2) listOf(enlarged) + (0 until count).filter { it != enlarged }
+        else (0 until count).toList()
+
     /** Only the focused tile has audio; an out-of-range focus (nothing focused yet) has none. */
     fun audibleIndex(focused: Int, count: Int): Int? = if (focused in 0 until count) focused else null
 

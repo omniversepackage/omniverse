@@ -84,6 +84,36 @@ class SearchViewModelTest {
         assertEquals(emptySet(), vm.state.value.favoriteChannels)
     }
 
+    @Test
+    fun aMoviesSearchOnlyAsksForMoviesAndNeverShowsChannelsOrGuide() = runTest(dispatcher) {
+        val search = FakeSearch()
+        val vm = SearchViewModel(search, FakeCatalog(), ShowEverything, scope = com.yodesla.omniverse.core.data.SearchScope.MOVIES)
+        vm.onQuery("movie")
+        advanceUntilIdle()
+        assertEquals(true, search.filteredFilters?.movies)
+        assertEquals(false, search.filteredFilters?.shows)
+        assertEquals(listOf(ContentKind.VOD.name), vm.state.value.rows.map { it.id })
+        assertEquals(false, vm.state.value.busy)
+        assertEquals(false, search.guideAsked)
+    }
+
+    @Test
+    fun busyShowsFromTheFirstKeystrokeAndClearsWhenTheLastResultLands() = runTest(dispatcher) {
+        val gate = CompletableDeferred<Unit>()
+        val vm = SearchViewModel(FakeSearch(gate), FakeCatalog(), ShowEverything)
+        vm.onQuery("movie")
+        assertEquals(true, vm.state.value.busy) // before the debounce even fires
+        advanceTimeBy(201)
+        runCurrent()
+        assertEquals(true, vm.state.value.busy) // titles are in, the guide lookup is still running
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(false, vm.state.value.busy)
+        vm.onQuery("")
+        advanceUntilIdle()
+        assertEquals(false, vm.state.value.busy)
+    }
+
     private fun resultIds(vm: SearchViewModel): List<String> =
         vm.state.value.rows.flatMap { row -> row.cards.map { it.open.remoteId.value } }
 
@@ -194,9 +224,11 @@ class SearchViewModelTest {
 private class FakeSearch(private val guideGate: CompletableDeferred<Unit>? = null) : SearchRepository {
     var filteredQuery: String? = null
     var filteredFilters: SearchFilters? = null
+    var guideAsked = false
     override suspend fun search(query: String, limitPerKind: Int): Map<ContentKind, List<SearchHit>> =
         mapOf(ContentKind.VOD to listOf(SearchHit(keyA, "Movie A"), SearchHit(keyB, "Movie B")))
     override suspend fun searchProgrammes(query: String, nowMs: Long, windowMs: Long, limit: Int): List<com.yodesla.omniverse.core.data.ProgrammeHit> {
+        guideAsked = true
         guideGate?.await()
         return emptyList()
     }

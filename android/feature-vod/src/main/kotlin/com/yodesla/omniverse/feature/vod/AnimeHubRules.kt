@@ -80,7 +80,24 @@ internal fun animeHubShelves(candidates: List<AnimeShelf>, minShelf: Int = Anime
 internal fun PosterRow.hubId(): String = tmdbId?.let { "${key.kind}:tmdb:$it" } ?: "${key.kind}:${uid()}"
 
 /** Rows with a provider rating only: a "Top rated" shelf must not be padded with unrated titles. */
-internal fun ratedOnly(rows: List<PosterRow>): List<PosterRow> = rows.filter { (it.rating ?: 0f) > 0f }
+/** Rated titles for the "Top" shelves; when too few have a real score yet, all titles (rated first). */
+internal fun ratedOnly(rows: List<PosterRow>): List<PosterRow> {
+    val rated = rows.filter { (it.rating ?: 0f) > 0f }
+    return if (rated.size >= 12) rated else rated + rows.filter { (it.rating ?: 0f) <= 0f }
+}
+
+/**
+ * Provider "ratings" that are placeholders: some IPTV sources give every anime the same score
+ * (8.0). When one value covers 40%+ of the rated titles it says nothing, so it is dropped and only
+ * real scores (TMDB, applied afterwards) are shown.
+ */
+internal fun dropPlaceholderRatings(rows: List<PosterRow>): List<PosterRow> {
+    val rated = rows.mapNotNull { r -> r.rating?.takeIf { it > 0f }?.let { kotlin.math.round(it * 10f).toInt() } }
+    if (rated.size < 20) return rows
+    val (mode, count) = rated.groupingBy { it }.eachCount().maxBy { it.value }
+    if (count < rated.size * 0.4) return rows
+    return rows.map { r -> val v = r.rating; if (v != null && kotlin.math.round(v * 10f).toInt() == mode) r.copy(rating = null) else r }
+}
 
 /** Interleave two lists (series, movie, series …) so a mixed shelf is not all one kind up front. */
 internal fun <T> interleave(a: List<T>, b: List<T>): List<T> {
@@ -184,4 +201,48 @@ internal fun channelGrid(channels: List<HubChannel>, kind: ChannelKindFilter, se
         ChannelSort.ON_NOW -> picked.sortedBy { it.nowTitle == null }
         ChannelSort.AZ -> picked.sortedBy { channelNameKey(it.row.name) }
     }
+}
+
+// ---------------------------------------------------------------- Anime-only search (Task 143)
+
+/**
+ * Kory: "a search within the anime section that only searches the anime section". The hub already holds
+ * every anime / animated title and channel in memory, so its search is instant and can never return
+ * anything that is not on the Anime page. Every query word must appear in the name; results rank exact,
+ * starts-with, word-start, then mid-word, with the better-rated title first inside a tier.
+ */
+// The compact form also lets "yugioh" find "Yu-Gi-Oh!" and "dragonball" find "Dragon Ball".
+private fun matches(normalizedName: String, parts: List<String>) = parts.isNotEmpty() &&
+    (parts.all { normalizedName.contains(it) } || normalizedName.replace(" ", "").contains(parts.joinToString("")))
+
+internal fun searchHubTitles(titles: List<HubTitle>, query: String, limit: Int = 80): List<PosterRow> {
+    val needle = com.yodesla.omniverse.core.data.search.FastTitleSearch.normalize(query)
+    val parts = needle.split(' ').filter { it.isNotEmpty() }
+    if (parts.isEmpty()) return emptyList()
+    return titles.asSequence()
+        .filter { matches(com.yodesla.omniverse.core.data.search.FastTitleSearch.normalize(it.row.name), parts) }
+        .sortedWith(compareBy<HubTitle>({ com.yodesla.omniverse.core.data.search.FastTitleSearch.tier(it.row.name, needle) },
+            { (it.row.rating ?: 0f) <= 0f }, { -(it.row.rating ?: 0f) }, { it.row.name.length }, { it.row.name.lowercase() }))
+        .map { it.row }.take(limit).toList()
+}
+
+/** Channels match on their name, their cleaned core name, or the programme airing now ("what is on"). */
+internal fun searchHubChannels(channels: List<HubChannel>, query: String, limit: Int = 80): List<HubChannel> {
+    val needle = com.yodesla.omniverse.core.data.search.FastTitleSearch.normalize(query)
+    val parts = needle.split(' ').filter { it.isNotEmpty() }
+    if (parts.isEmpty()) return emptyList()
+    fun nameTier(c: HubChannel): Int? {
+        val name = com.yodesla.omniverse.core.data.search.FastTitleSearch.normalize(c.row.name)
+        val core = com.yodesla.omniverse.core.data.search.FastTitleSearch.normalize(com.yodesla.omniverse.core.data.metadata.AnimeHubFeeds.channelCoreName(c.row.name))
+        val now = com.yodesla.omniverse.core.data.search.FastTitleSearch.normalize(c.nowTitle.orEmpty())
+        return when {
+            matches(core, parts) -> com.yodesla.omniverse.core.data.search.FastTitleSearch.tier(com.yodesla.omniverse.core.data.metadata.AnimeHubFeeds.channelCoreName(c.row.name), needle)
+            matches(name, parts) -> 3
+            matches(now, parts) -> 4
+            else -> null
+        }
+    }
+    return channels.mapNotNull { c -> nameTier(c)?.let { c to it } }
+        .sortedWith(compareBy({ it.second }, { it.first.row.name.length }, { it.first.row.name.lowercase() }))
+        .map { it.first }.take(limit)
 }

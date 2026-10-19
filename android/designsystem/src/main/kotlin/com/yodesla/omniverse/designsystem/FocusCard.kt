@@ -29,6 +29,8 @@ fun FocusCard(
     modifier: Modifier = Modifier,
     onLongClick: (() -> Unit)? = null,
     glass: Boolean = true,
+    /** false hides the focus border + glow (Multiview fades them with the rest of its overlay). */
+    showFocus: Boolean = true,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val shape = RoundedCornerShape(OmniSpacing.cardCorner)
@@ -45,11 +47,11 @@ fun FocusCard(
         ),
         border = CardDefaults.border(
             border = Border.None,
-            focusedBorder = Border(BorderStroke(2.dp, OmniTheme.colors.focusBorder), 0.dp, shape),
+            focusedBorder = if (showFocus) Border(BorderStroke(2.dp, OmniTheme.colors.focusBorder), 0.dp, shape) else Border.None,
             pressedBorder = Border(BorderStroke(2.dp, OmniTheme.colors.focusBorder), 0.dp, shape),
         ),
         glow = CardDefaults.glow(
-            focusedGlow = Glow(elevationColor = OmniTheme.colors.accent.copy(alpha = 0.8f), elevation = 14.dp),
+            focusedGlow = if (showFocus) Glow(elevationColor = OmniTheme.colors.accent.copy(alpha = 0.8f), elevation = 14.dp) else Glow.None,
         ),
     ) {
         Box(modifier = if (glass) Modifier.glassSurface(focused = focused, shadow = false) else Modifier, content = content)

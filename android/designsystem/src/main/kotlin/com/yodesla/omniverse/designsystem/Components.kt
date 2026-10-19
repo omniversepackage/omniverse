@@ -97,13 +97,19 @@ fun LogoImage(url: String?, name: String, modifier: Modifier = Modifier, plain: 
         return
     }
     // plain = no tile behind the logo (it sits on artwork or a tinted frame).
+    // Painter + Image instead of SubcomposeAsyncImage: a subcomposition per logo made every new
+    // row in the Live TV list expensive to compose while scrolling. The monogram sits underneath
+    // until the logo has loaded (and stays if it fails).
+    val painter = coil3.compose.rememberAsyncImagePainter(url, contentScale = ContentScale.Fit)
+    val loaded by androidx.compose.runtime.produceState(false, painter) {
+        painter.state.collect { value = it is coil3.compose.AsyncImagePainter.State.Success }
+    }
     Box(if (plain) modifier else modifier.clip(RoundedCornerShape(8.dp)).background(OmniTheme.colors.elevated)) {
-        SubcomposeAsyncImage(
-            model = url,
+        if (!loaded) Monogram(name, Modifier.fillMaxSize())
+        androidx.compose.foundation.Image(
+            painter = painter,
             contentDescription = null,
             contentScale = ContentScale.Fit, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt,
-            loading = { Monogram(name, Modifier.fillMaxSize()) },
-            error = { Monogram(name, Modifier.fillMaxSize()) },
             modifier = Modifier.fillMaxSize().padding(6.dp),
         )
     }
@@ -174,7 +180,7 @@ fun ErrorCard(
 
 // ---------------------------------------------------------------- Channel row
 
-val CHANNEL_ROW_HEIGHT = 76.dp
+val CHANNEL_ROW_HEIGHT = 60.dp // dense list: ~8 channels per screen instead of ~5 (Kory: Live TV overhaul)
 
 @Immutable
 data class ChannelRowUi(
@@ -210,7 +216,7 @@ fun ChannelRow(
                 modifier = Modifier.widthIn(min = if (showNext) 32.dp else 24.dp), maxLines = 1,
             )
             Spacer(Modifier.width(OmniSpacing.s))
-            LogoImage(ui.logoUrl, ui.name, Modifier.size(if (showNext) 72.dp else 52.dp, if (showNext) 40.dp else 32.dp))
+            LogoImage(ui.logoUrl, ui.name, Modifier.size(if (showNext) 64.dp else 48.dp, if (showNext) 36.dp else 30.dp))
             Spacer(Modifier.width(if (showNext) OmniSpacing.m else OmniSpacing.s))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -218,7 +224,7 @@ fun ChannelRow(
                         Box(Modifier.size(8.dp).clip(CircleShape).background(c.accent))
                         Spacer(Modifier.width(OmniSpacing.s))
                     }
-                    Text(ui.name, style = t.title, color = c.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    Text(ui.name, style = t.body.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold), color = c.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                     if (ui.isFavorite) {
                         Spacer(Modifier.width(OmniSpacing.s))
                         androidx.tv.material3.Icon(androidx.compose.material.icons.Icons.Rounded.Star, contentDescription = "Favourite", tint = c.accent, modifier = Modifier.size(16.dp))
@@ -233,10 +239,10 @@ fun ChannelRow(
                     }
                 }
                 if (ui.nowTitle != null) {
-                    Text(ui.nowTitle, style = t.body, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(ui.nowTitle, style = t.caption, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 if (ui.nowProgress != null) {
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(3.dp))
                     ProgressLine(ui.nowProgress, Modifier.fillW(0.7f))
                 }
             }

@@ -36,6 +36,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -97,6 +98,8 @@ fun MultiviewRoute(
     onRemove: (ContentKey) -> Unit = {},
     /** "End Multiview": clear the session and leave. */
     onEnd: () -> Unit = {},
+    /** "Add a screen": leave to the Live TV menu to pick any channel; the pick is added to the session. */
+    onAddScreen: () -> Unit = {},
     /** "Save as group": persist the current session as a saved group. */
     onSaveGroup: () -> Unit = {},
     /** Task 111 H2/M4: the shared Kids clock. While set, the tiles charge the allowance and a block
@@ -157,12 +160,29 @@ fun MultiviewRoute(
 
     var focused by remember { mutableStateOf(0) }
     var menuFor by remember { mutableStateOf<Int?>(null) }
+    // "Enlarge this screen": that tile becomes the big one on top, the others a row of small ones below.
+    var enlargedKey by remember { mutableStateOf<ContentKey?>(null) }
+    // The focus ring, channel chip, speaker badge and caption fade ~4 s after the last key press and
+    // come back on any key or focus change, so the picture stays clean while watching.
+    var chromeTick by remember { mutableStateOf(0) }
+    var chrome by remember { mutableStateOf(true) }
     var swapFor by remember { mutableStateOf<Int?>(null) }
     var swapCandidates by remember { mutableStateOf<List<ChannelRow>>(emptyList()) }
     val requesters = remember(tiles.size) { List(tiles.size) { FocusRequester() } }
     LaunchedEffect(tiles.size) { if (tiles.isNotEmpty()) runCatching { requesters[0].requestFocus() } }
     LaunchedEffect(swapFor) { swapCandidates = if (swapFor != null) viewModel.swapCandidates() else emptyList() }
 
+    val enlargedIndex = enlargedKey?.let { k -> tiles.indexOfFirst { it.key == k } }?.takeIf { it >= 0 && tiles.size >= 2 }
+    val order = MultiviewLayout.displayOrder(tiles.size, enlargedIndex)
+    // Focus follows the tile through the layout change (its composable moves to a new parent).
+    LaunchedEffect(enlargedIndex) {
+        kotlinx.coroutines.delay(120)
+        if (focused in tiles.indices) runCatching { requesters[focused].requestFocus() }
+    }
+    LaunchedEffect(chromeTick, focused, menuFor, swapFor, enlargedKey) {
+        chrome = true
+        if (menuFor == null && swapFor == null) { delay(CHROME_MS); chrome = false }
+    }
     val grid = MultiviewLayout.gridFor(tiles.size)
     val audible = MultiviewLayout.audibleIndex(focused, tiles.size)
 
@@ -171,6 +191,7 @@ fun MultiviewRoute(
             .fillMaxSize()
             .background(Color.Black)
             .onPreviewKeyEvent { e ->
+                if (e.type == KeyEventType.KeyDown) chromeTick++
                 // While a tile menu or the swap picker is open, the D-pad belongs to the overlay.
                 if (menuFor != null || swapFor != null) return@onPreviewKeyEvent false
                 if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
@@ -181,7 +202,10 @@ fun MultiviewRoute(
                     Key.DirectionRight -> PadDirection.RIGHT
                     else -> return@onPreviewKeyEvent false
                 }
-                val n = MultiviewLayout.neighbor(focused, tiles.size, dir) ?: return@onPreviewKeyEvent false
+                val n = if (enlargedIndex != null) {
+                    MultiviewLayout.enlargedNeighbor(order.indexOf(focused), tiles.size, dir)?.let { order[it] }
+                } else MultiviewLayout.neighbor(focused, tiles.size, dir)
+                if (n == null) return@onPreviewKeyEvent false
                 runCatching { requesters[n].requestFocus() }.isSuccess
             },
     ) {
@@ -191,28 +215,47 @@ fun MultiviewRoute(
                 modifier = Modifier.align(Alignment.Center),
             )
         }
-        Column(Modifier.fillMaxSize().padding(OmniSpacing.s)) {
-            for (r in 0 until grid.rows) {
-                Row(Modifier.weight(1f).fillMaxWidth()) {
-                    for (col in 0 until grid.cols) {
-                        val index = r * grid.cols + col
-                        if (index < tiles.size) {
-                            val tile = tiles[index]
-                            MultiviewTile(
+        if (tiles.size == 1 && chrome) {
+            // Arrived from a channel's options: say how to bring in the next screen.
+            Text(
+                "Hold OK  ·  Add a screen", style = OmniTheme.type.body, color = Color.White.copy(alpha = 0.85f),
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 18.dp)
+                    .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(10.dp)).padding(horizontal = 14.dp, vertical = 6.dp),
+            )
+        }
+        val slot: @Composable (Int, Modifier) -> Unit = { index, mod ->
+            val tile = tiles[index]
+            MultiviewTile(
                                 tile = tile,
                                 engine = engines[index],
                                 focused = focused == index,
+                                chrome = chrome,
                                 audible = audible == index,
                                 openStream = foreground && kids.blocked == null && viewModel.allows(tile.key),
                                 requester = requesters[index],
                                 onFocus = { focused = index },
                                 onOpen = { if (kids.blocked == null) tile.categoryId?.let { onPlay(tile.key, it) } },
                                 onMenu = { menuFor = index },
-                                modifier = Modifier.weight(1f).fillMaxHeight().padding(OmniSpacing.s),
-                            )
-                        } else {
+                modifier = mod.padding(OmniSpacing.s),
+            )
+        }
+        if (enlargedIndex != null) {
+            // One screen big on top; the others small in a row underneath.
+            Column(Modifier.fillMaxSize().padding(OmniSpacing.s)) {
+                Box(Modifier.weight(3f).fillMaxWidth()) { slot(order[0], Modifier.fillMaxSize()) }
+                Row(Modifier.weight(1f).fillMaxWidth()) {
+                    for (p in 1 until order.size) slot(order[p], Modifier.weight(1f).fillMaxHeight())
+                }
+            }
+        } else {
+            Column(Modifier.fillMaxSize().padding(OmniSpacing.s)) {
+                for (r in 0 until grid.rows) {
+                    Row(Modifier.weight(1f).fillMaxWidth()) {
+                        for (col in 0 until grid.cols) {
+                            val index = r * grid.cols + col
+                            if (index < tiles.size) slot(index, Modifier.weight(1f).fillMaxHeight())
                             // The empty cell of a 3-tile quad keeps its share of the row.
-                            Spacer(Modifier.weight(1f).fillMaxHeight())
+                            else Spacer(Modifier.weight(1f).fillMaxHeight())
                         }
                     }
                 }
@@ -225,6 +268,10 @@ fun MultiviewRoute(
             TileMenu(
                 name = tiles[menu].name,
                 channel = FavoriteChannel(key.sourceId.value, key.remoteId.value, tiles[menu].name),
+                canEnlarge = tiles.size >= 2,
+                isEnlarged = enlargedIndex == menu,
+                onEnlarge = { enlargedKey = if (enlargedIndex == menu) null else key; focused = menu; menuFor = null },
+                onAddScreen = if (tiles.size < MultiviewLayout.MAX_TILES) ({ menuFor = null; onAddScreen() }) else null,
                 onSwap = { swapFor = menu; menuFor = null },
                 onRetry = { viewModel.retry(menu); menuFor = null },
                 onRemove = { viewModel.removeTile(key); onRemove(key); menuFor = null },
@@ -252,12 +299,14 @@ private fun MultiviewTile(
     focused: Boolean,
     audible: Boolean,
     openStream: Boolean,
+    chrome: Boolean,
     requester: FocusRequester,
     onFocus: () -> Unit,
     onOpen: () -> Unit,
     onMenu: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val fade by androidx.compose.animation.core.animateFloatAsState(if (chrome) 1f else 0f, androidx.compose.animation.core.tween(500), label = "mvChrome")
     val c = OmniTheme.colors
     val playerState by engine.state.collectAsStateWithLifecycle()
     LaunchedEffect(engine, audible) { engine.player.setVolume(if (audible) 1f else 0f) }
@@ -274,12 +323,13 @@ private fun MultiviewTile(
         onClick = onOpen,
         onLongClick = onMenu,
         glass = false,
+        showFocus = chrome,
         modifier = modifier.focusRequester(requester).onFocusChanged { if (it.hasFocus) onFocus() },
     ) {
         EngineSurface(engine, Modifier.fillMaxSize())
         // Channel chip: always visible so every tile is identifiable at a glance.
         Row(
-            Modifier.align(Alignment.TopStart).padding(8.dp)
+            Modifier.align(Alignment.TopStart).padding(8.dp).alpha(fade)
                 .background(Color.Black.copy(alpha = 0.88f), RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -291,11 +341,11 @@ private fun MultiviewTile(
             )
         }
         // The tile that currently carries audio gets a small speaker badge.
-        if (audible) SpeakerBadge(Modifier.align(Alignment.TopEnd).padding(8.dp))
+        if (audible) SpeakerBadge(Modifier.align(Alignment.TopEnd).padding(8.dp).alpha(fade))
         // The focused tile carries the name + now-playing caption (Task 55).
         if (focused) {
             Column(
-                Modifier.align(Alignment.BottomStart).fillMaxWidth()
+                Modifier.align(Alignment.BottomStart).fillMaxWidth().alpha(fade)
                     .background(Brush.verticalGradient(0f to Color.Black.copy(alpha = 0.85f), 1f to Color.Black.copy(alpha = 0.95f)))
                     .padding(horizontal = 10.dp, vertical = 6.dp),
             ) {
@@ -328,6 +378,10 @@ private fun MultiviewTile(
 private fun TileMenu(
     name: String,
     channel: FavoriteChannel,
+    canEnlarge: Boolean,
+    isEnlarged: Boolean,
+    onEnlarge: () -> Unit,
+    onAddScreen: (() -> Unit)?,
     onSwap: () -> Unit,
     onRetry: () -> Unit,
     onRemove: () -> Unit,
@@ -338,17 +392,38 @@ private fun TileMenu(
     val c = OmniTheme.colors
     val context = LocalContext.current
     val first = remember(name) { FocusRequester() }
+    // The menu opens WHILE OK is still held down. Until a fresh press starts, every OK event
+    // (the rest of the hold and its release) is swallowed, or the release would click the
+    // first button ("Enlarge this screen") before the viewer could choose.
+    var armed by remember(name) { mutableStateOf(false) }
     BackHandler { onDismiss() }
     Box(Modifier.fillMaxSize().background(Color(0xCC03060C)), contentAlignment = Alignment.Center) {
         Column(
-            Modifier.widthIn(max = 460.dp).clip(RoundedCornerShape(22.dp)).background(c.elevated).padding(OmniSpacing.xl),
+            Modifier.widthIn(max = 460.dp).clip(RoundedCornerShape(22.dp)).background(c.elevated).padding(OmniSpacing.xl)
+                .onPreviewKeyEvent { e ->
+                    if (e.key != Key.DirectionCenter && e.key != Key.Enter) false else {
+                        if (e.type == KeyEventType.KeyDown && e.nativeKeyEvent.repeatCount == 0) armed = true
+                        !armed
+                    }
+                },
             verticalArrangement = Arrangement.spacedBy(OmniSpacing.s),
         ) {
             Text(name, style = OmniTheme.type.headline, color = c.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            // The two layout actions lead the menu; Swap keeps its place after them.
+            if (canEnlarge) OmniButton(
+                context.getString(if (isEnlarged) R.string.multiview_unenlarge else R.string.multiview_enlarge),
+                onClick = onEnlarge,
+                modifier = Modifier.fillMaxWidth().focusRequester(first),
+            )
+            if (onAddScreen != null) OmniButton(
+                context.getString(R.string.multiview_add_screen),
+                onClick = onAddScreen,
+                modifier = Modifier.fillMaxWidth().then(if (!canEnlarge) Modifier.focusRequester(first) else Modifier),
+            )
             OmniButton(
                 context.getString(R.string.multiview_swap_channel),
                 onClick = onSwap,
-                modifier = Modifier.fillMaxWidth().focusRequester(first),
+                modifier = Modifier.fillMaxWidth().then(if (!canEnlarge && onAddScreen == null) Modifier.focusRequester(first) else Modifier),
             )
             ChannelFavoriteButton(channel, Modifier.fillMaxWidth())
             OmniButton(context.getString(R.string.multiview_retry), onClick = onRetry, modifier = Modifier.fillMaxWidth())
@@ -447,3 +522,6 @@ private fun failureText(kind: FailureKind): String = when (kind) {
     FailureKind.UNSUPPORTED -> "Unsupported stream"
     FailureKind.OTHER -> "Something went wrong"
 }
+
+/** How long the Multiview overlay (focus ring, channel chip, caption) stays after the last key press. */
+private const val CHROME_MS = 4_000L

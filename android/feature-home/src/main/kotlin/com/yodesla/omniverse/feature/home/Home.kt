@@ -422,7 +422,7 @@ class HomeViewModel(
                 HomeCard("discovery-${shelf.id}-${p.key.sourceId.value}-${p.key.remoteId.value}", p.key, displayTitle(p.name, p.year),
                     listOfNotNull(p.year?.toString(), if (p.key.kind == ContentKind.VOD) "Movie" else "Show").joinToString(" · "),
                     p.posterUrl, section = shelf.title, titleIdentity = p.titleIdentity())
-            }, caption = shelf.caption) }
+            }) } // No source/date caption under the shelf title (Kory: "Trending This Week" is enough).
             val at = rows.indexOfFirst { it.id != "continue" && it.id != "newEpisodes" }.let { if (it < 0) rows.size else it }
             rows.take(at) + discovered + rows.drop(at)
         }.onEach { rows -> prefetchArt(rows) }

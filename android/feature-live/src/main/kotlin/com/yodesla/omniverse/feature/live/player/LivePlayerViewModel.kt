@@ -1,4 +1,5 @@
 package com.yodesla.omniverse.feature.live.player
+import com.yodesla.omniverse.feature.live.BIG_LIST
 import com.yodesla.omniverse.feature.live.UnifiedLiveCatalog
 import com.yodesla.omniverse.feature.live.liveChannelIdentity
 import com.yodesla.omniverse.feature.live.liveScope
@@ -162,8 +163,14 @@ class LivePlayerViewModel(
             moveTo(row, settleMs = 0)
             if (categoryId.value == com.yodesla.omniverse.feature.live.LiveViewModel.ALL || categoryId.value.startsWith("__live:")) {
                 val rows = unified.rows(categoryId.value, key.sourceId, allowedVisibility.first(), providerFilter.hiddenIds.first())
-                order = rows.map { it.key }
-                index = rows.indexOfFirst { liveChannelIdentity(it.name) == liveChannelIdentity(row.name) }
+                // Identity match over every channel: off Main (All channels is tens of thousands).
+                val identify = {
+                    val id = liveChannelIdentity(row.name)
+                    rows.map { it.key } to rows.indexOfFirst { liveChannelIdentity(it.name) == id }
+                }
+                val (o, i) = if (rows.size > BIG_LIST) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { identify() } else identify()
+                order = o
+                index = i
                 schedulePreload()
                 return@launch
             }

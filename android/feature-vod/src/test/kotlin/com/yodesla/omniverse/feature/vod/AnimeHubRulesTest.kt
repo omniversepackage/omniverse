@@ -112,4 +112,25 @@ class AnimeHubRulesTest {
         assertEquals(listOf("3"), channelGrid(listOf(a, b, t), ChannelKindFilter.CARTOONS, null, ChannelSort.FEATURED).map { it.row.key.remoteId.value })
         assertEquals(listOf("1"), channelGrid(listOf(a, b, t), ChannelKindFilter.ALL, "Xumo", ChannelSort.FEATURED).map { it.row.key.remoteId.value })
     }
+
+    @Test fun animeSearchOnlyReturnsHubTitlesRankedByMatchQuality() {
+        val titles = listOf(
+            HubTitle(g("a", 2002, 8f, null).copy(name = "Naruto Shippuden"), true),
+            HubTitle(g("b", 2002, 7f, null).copy(name = "Naruto"), true),
+            HubTitle(g("c", 2017, 9f, null).copy(name = "Boruto: Naruto Next Generations"), true),
+            HubTitle(g("d", 1999, 9f, null).copy(name = "One Piece"), true),
+        )
+        assertEquals(listOf("b", "a", "c"), searchHubTitles(titles, "naruto").map { it.key.remoteId.value })
+        assertEquals(listOf("c"), searchHubTitles(titles, "naruto next").map { it.key.remoteId.value })
+        assertEquals(emptyList(), searchHubTitles(titles, "bleach"))
+        assertEquals(emptyList(), searchHubTitles(titles, "  "))
+    }
+
+    @Test fun animeSearchChannelsMatchNameCoreNameOrWhatIsOnNow() {
+        val a = HubChannel(ch("1", "US: Naruto"), AnimeChannelKind.ANIME)
+        val b = HubChannel(ch("2", "Pluto TV Anime"), AnimeChannelKind.ANIME, nowTitle = "Naruto Shippuden")
+        val c = HubChannel(ch("3", "Cartoon Network"), AnimeChannelKind.CARTOON)
+        assertEquals(listOf("1", "2"), searchHubChannels(listOf(c, b, a), "naruto").map { it.row.key.remoteId.value })
+        assertEquals(listOf("3"), searchHubChannels(listOf(a, b, c), "cartoon").map { it.row.key.remoteId.value })
+    }
 }

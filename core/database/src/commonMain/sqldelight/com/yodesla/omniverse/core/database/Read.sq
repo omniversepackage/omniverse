@@ -172,11 +172,17 @@ WHERE source_id = :sourceId AND channel_key IN :keys AND end_ms > :fromMs AND st
 ORDER BY channel_key, start_ms;
 
 -- "On TV" search: programmes airing now or later (until :untilMs) whose title contains the
--- caller's sanitized text (no % or _ reach :pattern). Joined to the provider's own channel.
+-- compacted needle (no spaces/punctuation, common accents folded; :head = its first two letters
+-- as a cheap prefilter), so "yugioh" finds "Yu-Gi-Oh!". Joined to the provider's own channel.
 searchProgrammes:
 SELECT p.title, p.start_ms, p.end_ms, p.has_archive, c.source_id, c.remote_id, c.name, c.logo_url, c.primary_category_id
-FROM programme p JOIN channel c ON c.source_id = p.source_id AND c.epg_channel_id = p.channel_key
-WHERE p.end_ms > :nowMs AND p.start_ms < :untilMs AND p.title LIKE :pattern AND c.removed_ms IS NULL
+-- CROSS JOIN keeps channel as the outer loop so each channel's programmes are read through the
+-- (channel_key, start_ms) primary key for [fromMs, untilMs) only; the old programme-first scan
+-- read the whole multi-day guide (~20 s on the Shield).
+FROM channel c CROSS JOIN programme p
+WHERE c.removed_ms IS NULL AND c.epg_channel_id IS NOT NULL AND c.epg_channel_id <> ''
+  AND p.channel_key = c.epg_channel_id AND p.start_ms > :fromMs AND p.start_ms < :untilMs
+  AND p.source_id = c.source_id AND p.end_ms > :nowMs AND instr(lower(p.title), :head) > 0 AND instr(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(lower(p.title), ' ', ''), '-', ''), ':', ''), '.', ''), '''', ''), '!', ''), ',', ''), '’', ''), '  AND p.source_id = c.source_id AND p.end_ms > :nowMs AND p.title LIKE :pattern', 'and'), 'é', 'e'), 'è', 'e'), 'ê', 'e'), 'á', 'a'), 'à', 'a'), 'ö', 'o'), 'ü', 'u'), 'ñ', 'n'), :needle) > 0
 ORDER BY p.start_ms, c.sort_index
 LIMIT :limit;
 
@@ -709,13 +715,22 @@ LIMIT :limit;
 
 -- Task 85: how far the guide can actually go — the latest programme end stored for a source
 -- (0 when the guide is empty). Drives the header's day strip and the forward jump limit.
+-- The guide's extent. One primary-key seek per channel (its latest programme) instead of
+-- max(end_ms) over the whole programme table, which has no source_id index (a full scan of
+-- millions of rows, seconds on the Shield, every time the Guide opened).
 maxProgrammeEnd:
-SELECT COALESCE(max(end_ms), 0) AS max_end_ms FROM programme WHERE source_id = :sourceId;
+SELECT COALESCE(max((
+    SELECT p.end_ms FROM programme p
+    WHERE p.channel_key = c.epg_channel_id AND p.source_id = c.source_id
+    ORDER BY p.start_ms DESC LIMIT 1
+)), 0) AS max_end_ms
+FROM channel c
+WHERE c.source_id = :sourceId AND c.removed_ms IS NULL AND c.epg_channel_id IS NOT NULL AND c.epg_channel_id <> '';
 
 -- TMDB art cache (tasks 84d, 84f): batch read for poster rows (callers must pass a non-empty id
 -- set). kind values: MOVIE, SERIES. Only cached rows come back; absent ids simply have no art.
 tmdbMetaForIds:
-SELECT tmdb_id, kind, backdrop_path, logo_path, poster_path, certification, runtime_min, overview, card_backdrop_path
+SELECT tmdb_id, kind, backdrop_path, logo_path, poster_path, certification, runtime_min, overview, card_backdrop_path, vote_average, vote_count
 FROM tmdb_meta
 WHERE kind = :kind AND tmdb_id IN :ids;
 
@@ -1676,3 +1691,68 @@ WHERE v.removed_ms IS NULL AND (
      c.name LIKE '%anim%' OR c.name LIKE '%cartoon%' OR c.name LIKE '%crunchyroll%' OR c.name LIKE '%funimation%' OR c.name LIKE '%hidive%' OR c.name LIKE '%manga%'
   OR v.genre LIKE '%anim%' OR v.genre LIKE '%cartoon%' OR v.genre LIKE '%crunchyroll%' OR v.genre LIKE '%funimation%' OR v.genre LIKE '%hidive%' OR v.genre LIKE '%manga%'
 );
+
+-- ---------- Task 143: fast plain-text title search ----------
+-- The filtered-search CTE builds normalised strings for every title and counts per source, which is
+-- needed only when a chip filter is on. A plain text search takes the FTS hits first (LIMIT inside the
+-- subquery) and then joins just those few rows by primary key. Exclusions, ranking and the Plex-first
+-- group_key dedup happen in Kotlin (SearchRepositoryImpl.searchTitles).
+searchVodFast:
+SELECT v.source_id, v.remote_id, v.name, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id, v.group_key,
+       CASE s.kind WHEN 'PLEX' THEN 0 ELSE 1 END AS plex_rank, s.sort_index AS src_sort, v.sort_index AS item_sort
+FROM (SELECT DISTINCT source_id, remote_id FROM search_index WHERE search_index MATCH :matchQuery AND kind = 'VOD' LIMIT :fetch) m
+JOIN vod v ON v.source_id = m.source_id AND v.remote_id = m.remote_id
+JOIN source s ON s.id = v.source_id
+WHERE v.removed_ms IS NULL;
+
+searchSeriesFast:
+SELECT v.source_id, v.remote_id, v.name, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id, v.group_key,
+       CASE s.kind WHEN 'PLEX' THEN 0 ELSE 1 END AS plex_rank, s.sort_index AS src_sort, v.sort_index AS item_sort
+FROM (SELECT DISTINCT source_id, remote_id FROM search_index WHERE search_index MATCH :matchQuery AND kind = 'SERIES' LIMIT :fetch) m
+JOIN series v ON v.source_id = m.source_id AND v.remote_id = m.remote_id
+JOIN source s ON s.id = v.source_id
+WHERE v.removed_ms IS NULL;
+
+-- Mid-word and punctuation/accent-blind matches FTS cannot see ("ball" in "Dragonball", "yugioh" in
+-- "Yu-Gi-Oh!", "pokemon" in "Pokémon"): names compacted (no spaces/punctuation, common accents folded).
+-- Runs only when the FTS pass came up short; :head (first two needle letters) is a cheap prefilter.
+searchVodSubstring:
+SELECT v.source_id, v.remote_id, v.name, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id, v.group_key,
+       CASE s.kind WHEN 'PLEX' THEN 0 ELSE 1 END AS plex_rank, s.sort_index AS src_sort, v.sort_index AS item_sort
+FROM vod v JOIN source s ON s.id = v.source_id
+WHERE v.removed_ms IS NULL AND instr(lower(v.name), :head) > 0 AND instr(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(lower(v.name), ' ', ''), '-', ''), ':', ''), '.', ''), '''', ''), '!', ''), ',', ''), '’', ''), '&', 'and'), 'é', 'e'), 'è', 'e'), 'ê', 'e'), 'á', 'a'), 'à', 'a'), 'ö', 'o'), 'ü', 'u'), 'ñ', 'n'), :needle) > 0
+LIMIT :fetch;
+
+searchSeriesSubstring:
+SELECT v.source_id, v.remote_id, v.name, v.poster_url, v.primary_category_id, v.rating, v.year, v.tmdb_id, v.group_key,
+       CASE s.kind WHEN 'PLEX' THEN 0 ELSE 1 END AS plex_rank, s.sort_index AS src_sort, v.sort_index AS item_sort
+FROM series v JOIN source s ON s.id = v.source_id
+WHERE v.removed_ms IS NULL AND instr(lower(v.name), :head) > 0 AND instr(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(lower(v.name), ' ', ''), '-', ''), ':', ''), '.', ''), '''', ''), '!', ''), ',', ''), '’', ''), '&', 'and'), 'é', 'e'), 'è', 'e'), 'ê', 'e'), 'á', 'a'), 'à', 'a'), 'ö', 'o'), 'ü', 'u'), 'ñ', 'n'), :needle) > 0
+LIMIT :fetch;
+
+-- Channel twin of searchVodSubstring: punctuation/accent-blind ("yugioh" → "24/7: Yu-Gi-Oh!"),
+-- run only when the FTS pass came up short.
+searchLiveSubstring:
+SELECT c.source_id, c.remote_id, c.name
+FROM channel c
+WHERE c.removed_ms IS NULL AND instr(lower(c.name), :head) > 0 AND instr(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(lower(c.name), ' ', ''), '-', ''), ':', ''), '.', ''), '''', ''), '!', ''), ',', ''), '’', ''), '&', 'and'), 'é', 'e'), 'è', 'e'), 'ê', 'e'), 'á', 'a'), 'à', 'a'), 'ö', 'o'), 'ü', 'u'), 'ñ', 'n'), :needle) > 0
+LIMIT :fetch;
+
+-- Distinct guide titles in the search window, loaded once (in memory, ~15 min) so a query with no
+-- matching title skips the guide walk entirely. Only one short column, so the cursor stays small.
+guideTitlesWindow:
+SELECT DISTINCT p.title
+FROM channel c CROSS JOIN programme p
+WHERE c.removed_ms IS NULL AND c.epg_channel_id IS NOT NULL AND c.epg_channel_id <> ''
+  AND p.channel_key = c.epg_channel_id AND p.start_ms > :fromMs AND p.start_ms < :untilMs
+  AND p.source_id = c.source_id AND p.end_ms > :nowMs;
+
+-- "On TV" rows for titles already matched in memory (exact titles; no per-row string work).
+searchProgrammesByTitles:
+SELECT p.title, p.start_ms, p.end_ms, p.has_archive, c.source_id, c.remote_id, c.name, c.logo_url, c.primary_category_id
+FROM channel c CROSS JOIN programme p
+WHERE c.removed_ms IS NULL AND c.epg_channel_id IS NOT NULL AND c.epg_channel_id <> ''
+  AND p.channel_key = c.epg_channel_id AND p.start_ms > :fromMs AND p.start_ms < :untilMs
+  AND p.source_id = c.source_id AND p.end_ms > :nowMs AND p.title IN :titles
+ORDER BY p.start_ms, c.sort_index
+LIMIT :limit;

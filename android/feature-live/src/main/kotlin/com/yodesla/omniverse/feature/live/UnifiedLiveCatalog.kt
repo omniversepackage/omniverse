@@ -61,7 +61,9 @@ internal class UnifiedLiveCatalog(private val sources: SourceRepository, private
             if (source.value in excludedSources) return emptyList()
             catalog.channelList(source, RemoteId(category)).filter { visible("LIVE", it.key.sourceId.value, it.categoryId.value) }
         }
-        return groupedLiveChannels(rows)
+        // Off the caller's (main) thread: All channels can be tens of thousands of rows, and the
+        // name normalisation behind the grouping froze the UI (ANRs) when it ran on Main.
+        return if (rows.size > BIG_LIST) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { groupedLiveChannels(rows) } else groupedLiveChannels(rows)
     }
 
     suspend fun alternatives(row: ChannelRow, visible: Visibility): List<ChannelRow> =
@@ -70,3 +72,6 @@ internal class UnifiedLiveCatalog(private val sources: SourceRepository, private
         }.filter { it.key != row.key && liveChannelIdentity(it.name) == liveChannelIdentity(row.name) &&
             visible("LIVE", it.key.sourceId.value, it.categoryId.value) }.distinctBy { it.key }
 }
+
+/** Lists longer than this are processed off the main thread; small ones stay inline (cheaper, deterministic). */
+internal const val BIG_LIST = 2_000

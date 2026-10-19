@@ -124,7 +124,7 @@ internal sealed interface Screen {
     /** Task 142: Explore › Anime — every anime and animated title plus anime/cartoon channels. */
     data object Anime : Section { override val id = "anime" }
     /** [query]: a voice / global-search text to pre-fill the field (task 80); null = normal open. */
-    data class Search(val query: String? = null) : Section { override val id = "search" }
+    data class Search(val query: String? = null, val scope: com.yodesla.omniverse.core.data.SearchScope = com.yodesla.omniverse.core.data.SearchScope.ALL) : Section { override val id = "search" }
     data object Settings : Section { override val id = "settings" }
     data object DevGuide : Section { override val id = "dev" }
 
@@ -195,6 +195,16 @@ fun TvRoot(brand: BrandConfig, graph: AppGraph, mobile: Boolean = false) {
     val contentFocus = remember { FocusRequester() }
     fun push(s: Screen) { stack.add(s) }
     fun pop() { if (stack.size > 1) stack.removeAt(stack.lastIndex) }
+    // Multiview "Add a screen": the next channel chosen in Live TV / the Guide joins Multiview instead of playing.
+    var multiviewPicking by remember { mutableStateOf(false) }
+    fun pickForMultiview(key: ContentKey): Boolean {
+        if (!multiviewPicking) return false
+        multiviewPicking = false
+        graph.multiviewSession.add(key)
+        pop()
+        return true
+    }
+    LaunchedEffect(stack.lastOrNull()) { if (stack.lastOrNull() is Screen.Multiview) multiviewPicking = false }
     fun replaceTop(s: Screen) { stack[stack.lastIndex] = s }
 
     // Task 101: the first drawn frame is the reference point of the startup timeline, and the point
@@ -562,7 +572,7 @@ fun TvRoot(brand: BrandConfig, graph: AppGraph, mobile: Boolean = false) {
                         }
                         .focusGroup(),
                 ) {
-                    sectionState.SaveableStateProvider(top.id) { key(top) { SectionContent(top, graph, lastPlayed, ::openCard, ::push, ::addSource, browseEntry = browseEntries[top.id] ?: 0, onOpenNavigation = { railOpen = true }, onOpenSection = ::openSection, miniPlayer = miniPlayer, appScope = appScope, onSearch = { openSection("search") }, onManageProfiles = { requestProfileAdmin { push(Screen.ManageProfiles) } }, onRequirePin = ::requestBackupAdmin, onSetPickerAtStart = { enabled, update -> requestProfileAdmin { update(enabled) } }, onCreateProfile = { requestProfileAdmin { profilesVm.openNew(); push(Screen.ProfileEdit(null)) } }) } }
+                    sectionState.SaveableStateProvider(top.id) { key(top) { SectionContent(top, graph, lastPlayed, ::openCard, ::push, ::addSource, pickForMultiview = ::pickForMultiview, multiviewPicking = multiviewPicking, onCancelPick = { multiviewPicking = false; pop() }, browseEntry = browseEntries[top.id] ?: 0, onOpenNavigation = { railOpen = true }, onOpenSection = ::openSection, miniPlayer = miniPlayer, appScope = appScope, onSearch = { scope -> if (scope == com.yodesla.omniverse.core.data.SearchScope.ALL) openSection("search") else { railOpen = false; stack.add(Screen.Search(scope = scope)) } }, onManageProfiles = { requestProfileAdmin { push(Screen.ManageProfiles) } }, onRequirePin = ::requestBackupAdmin, onSetPickerAtStart = { enabled, update -> requestProfileAdmin { update(enabled) } }, onCreateProfile = { requestProfileAdmin { profilesVm.openNew(); push(Screen.ProfileEdit(null)) } }) } }
                 }
                 if (railOpen) NavRail(shownNav, selectedId = top.id, onSelect = ::openSection, selectedRequester = railFocus,
                     onHold = { id -> navMenu = navItems.firstOrNull { it.id == id && id !in UNHIDEABLE_NAV } })
@@ -591,6 +601,8 @@ fun TvRoot(brand: BrandConfig, graph: AppGraph, mobile: Boolean = false) {
                     when (top) {
                         is Screen.Player -> {
                             LivePlayerRoute(liveVm, top.key, top.categoryId, liveEngine, onExit = { pop() },
+                                // Channel options > Multiview: this channel becomes the first screen.
+                                onMultiview = { k -> graph.multiviewSession.add(k); pop(); push(Screen.Multiview) },
                                 nowPlaying = graph.nowPlaying, nowPlayingControls = graph.nowPlayingControls,
                                 kidsTime = graph.kidsTime, kidsPinEnabled = pinEnabled, onRequestKidsPin = ::requestKidsExtension)
                         }
@@ -664,6 +676,7 @@ fun TvRoot(brand: BrandConfig, graph: AppGraph, mobile: Boolean = false) {
                                 onSwap = { old, new -> graph.multiviewSession.replace(old, new) },
                                 onRemove = { k -> graph.multiviewSession.remove(k) },
                                 onEnd = { graph.multiviewSession.clear(); pop() },
+                                onAddScreen = { multiviewPicking = true; push(Screen.Live()) },
                                 onSaveGroup = { appScope.launch { graph.multiviewGroups.saveAuto(graph.multiviewSession.channels.value) } },
                                 kidsTime = graph.kidsTime,
                             )
@@ -684,6 +697,17 @@ fun TvRoot(brand: BrandConfig, graph: AppGraph, mobile: Boolean = false) {
                         is Screen.Section -> Unit
                     }
                 }
+            }
+        }
+        // Multiview "Add a screen": say what the next OK does, and that Back cancels.
+        if (multiviewPicking && top is Screen.Live) {
+            Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.BottomCenter) {
+                androidx.tv.material3.Text(
+                    androidx.compose.ui.res.stringResource(com.yodesla.omniverse.feature.live.R.string.multiview_pick_hint),
+                    style = OmniTheme.type.body, color = OmniTheme.colors.textPrimary,
+                    modifier = Modifier.padding(bottom = 28.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                        .background(OmniTheme.colors.elevated.copy(alpha = 0.95f)).padding(horizontal = 18.dp, vertical = 8.dp),
+                )
             }
         }
         // Task 106: the mini live player was stopped by a Kids limit. The full-screen players show
@@ -849,7 +873,12 @@ private fun SectionContent(
     addSource: () -> Unit,
     onOpenNavigation: () -> Unit = {},
     onOpenSection: (String) -> Unit = {},
-    onSearch: () -> Unit = {},
+    onSearch: (com.yodesla.omniverse.core.data.SearchScope) -> Unit = {},
+    /** Multiview "Add a screen": true when the key was consumed as the pick (then it is NOT played). */
+    pickForMultiview: (ContentKey) -> Boolean = { false },
+    /** True while "Add a screen" waits for a pick; Back then cancels it and returns to Multiview. */
+    multiviewPicking: Boolean = false,
+    onCancelPick: () -> Unit = {},
     onManageProfiles: () -> Unit = {},
     /** Runs [action] immediately, or after the parental PIN when one is set (M4: backup restore). */
     onRequirePin: (() -> Unit) -> Unit = { it() },
@@ -900,6 +929,9 @@ private fun SectionContent(
             // grid (Back/Left returns to the full-width list). The last view used is remembered.
             val scope = appScope
             val savedView by graph.userData.setting(LIVE_VIEW_KEY).collectAsStateWithLifecycle(initialValue = null)
+            // The "Horizontal categories" setting (Movies & Shows) also puts Live TV categories on top.
+            val categoriesSetting by graph.userData.setting(com.yodesla.omniverse.core.data.MoviesShowsView.KEY).collectAsStateWithLifecycle(initialValue = null)
+            val topCategories = !LocalCompact.current && com.yodesla.omniverse.core.data.MoviesShowsView.parse(categoriesSetting) == com.yodesla.omniverse.core.data.MoviesShowsView.HORIZONTAL
             // Task 107: Back from a channel opened from Search lands straight in the Guide on it.
             var view by remember { mutableStateOf<String?>(if (s.inGuide) "guide" else null) }
             val shown = view ?: savedView ?: "list"
@@ -911,14 +943,18 @@ private fun SectionContent(
                 fun leaveGuide() { switchTo("list") }
                 // The Guide shows whatever category is picked in the channel list's left column.
                 val listVm = viewModel(key = "live") { LiveViewModel(graph.sources, graph.catalog, graph.epg, graph.userData, graph.clock, visibility = graph.vodVisibility, favoritesVisibility = graph.favoritesVisibility, langSummary = graph.categoryLanguageSummary) }
-                val listCategory = listVm.state.collectAsStateWithLifecycle().value.selectedCategoryId
+                val listState = listVm.state.collectAsStateWithLifecycle().value
+                val listCategory = listState.selectedCategoryId
                 LaunchedEffect(listCategory) {
                     // Task 84g: the Guide now handles Recently watched too, so sync every category.
                     listCategory?.let { vm.selectCategory(it) }
                 }
                 BackHandler { leaveGuide() }
                 val kidsState by graph.kidsTime.state.collectAsStateWithLifecycle()
-                GuideRoute(vm, onPlay = { k, cat -> openCard(k, cat) }, onExitLeft = ::leaveGuide, miniPlayer = miniPlayer, focusKey = lastPlayed, session = graph.multiviewSession, onOpenMultiview = { push(Screen.Multiview) }, multiviewEnabled = multiviewEntryAllowed(kidsState.blocked != null), onPlayCatchup = { e ->
+                GuideRoute(vm, onPlay = { k, cat -> if (!pickForMultiview(k)) openCard(k, cat) },
+                    categoryBar = if (topCategories) ({ focus, onPicked ->
+                        com.yodesla.omniverse.feature.live.LiveCategoryBar(listState.categories, listCategory, onSelect = { listVm.selectCategory(it); onPicked() }, selectedFocus = focus, sidePadding = 0.dp)
+                    }) else null, onExitLeft = ::leaveGuide, miniPlayer = miniPlayer, focusKey = lastPlayed, session = graph.multiviewSession, onOpenMultiview = { push(Screen.Multiview) }, multiviewEnabled = multiviewEntryAllowed(kidsState.blocked != null), onPlayCatchup = { e ->
                     val minutes = ((e.endMs - e.startMs + 59_999) / 60_000).toInt()
                     push(Screen.VodPlay(PlayItem(
                         request = PlaybackRequest.Catchup(e.key.sourceId, e.key.remoteId, e.startMs, minutes),
@@ -928,8 +964,10 @@ private fun SectionContent(
             } else {
                 val vm = viewModel(key = "live") { LiveViewModel(graph.sources, graph.catalog, graph.epg, graph.userData, graph.clock, visibility = graph.vodVisibility, favoritesVisibility = graph.favoritesVisibility, langSummary = graph.categoryLanguageSummary) }
                 // Back from a channel lands in the full Guide on that channel, not the list (Kory).
-                LiveRoute(vm, onPlay = { k, cat -> switchTo("guide"); openCard(k, cat) }, onAddSource = addSource, playingKey = lastPlayed, onOpenGuide = { switchTo("guide") }, onOpenGuideForCategory = { switchTo("guide") }, onOpenNavigation = onOpenNavigation, miniPlayer = miniPlayer, onSearch = onSearch, session = graph.multiviewSession, onOpenMultiview = { push(Screen.Multiview) }, onMultiview = { keys -> graph.multiviewSession.setAll(keys); push(Screen.Multiview) }, onOpenLanguageFilter = { push(Screen.Settings) })
+                LiveRoute(vm, onPlay = { k, cat -> if (!pickForMultiview(k)) { switchTo("guide"); openCard(k, cat) } }, onAddSource = addSource, playingKey = lastPlayed, onOpenGuide = { switchTo("guide") }, onOpenGuideForCategory = { switchTo("guide") }, onOpenNavigation = onOpenNavigation, miniPlayer = miniPlayer, onSearch = { onSearch(com.yodesla.omniverse.core.data.SearchScope.LIVE) }, session = graph.multiviewSession, onOpenMultiview = { push(Screen.Multiview) }, onMultiview = { keys -> graph.multiviewSession.setAll(keys); push(Screen.Multiview) }, onOpenLanguageFilter = { push(Screen.Settings) }, topCategories = topCategories)
             }
+            // Composed after the Guide/list content, so it wins over their own Back handling.
+            BackHandler(enabled = multiviewPicking) { onCancelPick() }
         }
         Screen.Anime -> {
             val vm = viewModel(key = "anime") {
@@ -960,23 +998,23 @@ private fun SectionContent(
                 val leftMenu by graph.userData.setting("left_opens_menu").collectAsStateWithLifecycle(initialValue = null)
                 val menuWarning by graph.userData.setting("warn_main_menu").collectAsStateWithLifecycle(initialValue = null)
                 val menuScope = rememberCoroutineScope()
-                HorizontalBrowseRoute(vm, home, title, onOpenNavigation, onSearch,
+                HorizontalBrowseRoute(vm, home, title, onOpenNavigation, { onSearch(if (kind == ContentKind.VOD) com.yodesla.omniverse.core.data.SearchScope.MOVIES else com.yodesla.omniverse.core.data.SearchScope.SHOWS) },
                     leftMenuEnabled = leftMenu != "false", warnBeforeMenu = menuWarning != "false",
                     onDisableWarning = { menuScope.launch { graph.userData.putSetting("warn_main_menu", "false") } },
                     onOpenHomeCard = { card -> push(Screen.Detail(card.open, focusEpisode = card.focusEpisode)) },
                     onPlay = { key, fromStart -> push(Screen.Detail(key, fromStart)) },
                     onOpen = { push(Screen.Detail(it)) }, entry = browseEntry)
             } else {
-                VodBrowseRoute(vm, title, onPlay = { key, fromStart -> push(Screen.Detail(key, fromStart)) }, onOpenNavigation = onOpenNavigation, onSearch = onSearch) { push(Screen.Detail(it)) }
+                VodBrowseRoute(vm, title, onPlay = { key, fromStart -> push(Screen.Detail(key, fromStart)) }, onOpenNavigation = onOpenNavigation, onSearch = { onSearch(if (kind == ContentKind.VOD) com.yodesla.omniverse.core.data.SearchScope.MOVIES else com.yodesla.omniverse.core.data.SearchScope.SHOWS) }) { push(Screen.Detail(it)) }
             }
         }
         is Screen.Search -> {
-            val vm = viewModel(key = "search") { SearchViewModel(graph.search, graph.catalog, visibility = graph.browseVisibility,
+            val vm = viewModel(key = "search-" + s.scope.name) { SearchViewModel(graph.search, graph.catalog, visibility = graph.browseVisibility,
                 excludedCategoryKeys = graph.searchExcludedCategoryKeys,
                 historySource = graph.userData.setting(com.yodesla.omniverse.feature.home.SEARCH_HISTORY_KEY),
                 saveHistory = { graph.userData.putSetting(com.yodesla.omniverse.feature.home.SEARCH_HISTORY_KEY, it) },
                 reminders = com.yodesla.omniverse.core.data.reminders.ReminderStore(graph.userData, graph.clock), clock = graph.clock,
-                initialQuery = s.query, userData = graph.userData) }
+                initialQuery = s.query, userData = graph.userData, scope = s.scope) }
             // The VM outlives the section (key "search"), so a voice query arriving on a re-entry
             // must be pushed in explicitly; initialQuery only covers the VM's first creation.
             LaunchedEffect(s.query) { s.query?.let(vm::onQuery) }

@@ -315,6 +315,17 @@ data class SearchFilters(
  */
 data class SearchFilteredPage(val rows: List<PosterRow>, val more: Boolean = false)
 
+/**
+ * Task 143: where a search runs. Each section owns a search that touches only its own content
+ * (Kory: "the individual sub categories need their own searches").
+ */
+enum class SearchScope(val label: String, val kinds: List<ContentKind>, val live: Boolean) {
+    ALL("everything", listOf(ContentKind.VOD, ContentKind.SERIES), true),
+    MOVIES("movies", listOf(ContentKind.VOD), false),
+    SHOWS("shows", listOf(ContentKind.SERIES), false),
+    LIVE("live TV", emptyList(), true),
+}
+
 /** Sorts movie and show search results before the result limit is applied. */
 enum class SearchSort { RELEVANCE, TITLE_ASC, TITLE_DESC, YEAR_NEWEST, YEAR_OLDEST, RATING }
 
@@ -340,11 +351,30 @@ interface SearchRepository {
         sort: SearchSort = SearchSort.RELEVANCE,
     ): Map<ContentKind, SearchFilteredPage> = emptyMap()
 
+    /**
+     * Task 143: plain-text title search (no chip filters) for [kinds] — FTS hits joined by primary key,
+     * ranked (exact / starts-with / word-start / mid-word) and collapsed Plex-first by group_key, under
+     * [excludedCategoryKeys]. Much cheaper than [searchFiltered] when no filter is on.
+     */
+    suspend fun searchTitles(
+        query: String,
+        kinds: Collection<ContentKind>,
+        excludedCategoryKeys: Collection<String> = emptyList(),
+        limitPerKind: Int = 24,
+    ): Map<ContentKind, SearchFilteredPage> = searchFiltered(
+        query,
+        SearchFilters(movies = kinds.toList() == listOf(ContentKind.VOD), shows = kinds.toList() == listOf(ContentKind.SERIES)),
+        excludedCategoryKeys, limitPerKind,
+    )
+
     /** Decade starts (1980, 2010 …) that actually have titles in [kinds] under [excludedCategoryKeys], newest first. */
     suspend fun decadeOptions(kinds: Collection<ContentKind>, excludedCategoryKeys: Collection<String> = emptyList()): List<Int> = emptyList()
 
     /** Programmes airing now or within [windowMs] whose title contains [query]; soonest first. */
     suspend fun searchProgrammes(query: String, nowMs: Long, windowMs: Long = 86_400_000L, limit: Int = 30): List<ProgrammeHit> = emptyList()
+
+    /** Loads the guide's distinct titles before the first keystroke (search screen open). */
+    suspend fun warmGuideSearch(nowMs: Long) {}
 
     /**
      * Movie/show titles (VOD + SERIES) most-recent first, capped at [limit], for typo-tolerant

@@ -128,6 +128,9 @@ fun EpgGrid(
     jump: GridJump? = null,
 ) {
     val c = OmniTheme.colors
+    // Long-lived effects call the latest callbacks without restarting.
+    val onFocusedChangeNow by androidx.compose.runtime.rememberUpdatedState(onFocusedChange)
+    val onViewTimeNow by androidx.compose.runtime.rememberUpdatedState(onViewTime)
     // Guide rows are fixed-height (42 dp) canvas cells. Cap their text at 1.15 so two-line channel
     // names and single-line programme titles stay readable inside the row even at "Extra large" (1.3).
     val type = OmniType().scaled(minOf(LocalTextScale.current, 1.15f))
@@ -160,7 +163,8 @@ fun EpgGrid(
     fun programmeAt(row: Int, t: Long): GridProgramme? =
         cache[blockKey(row, t)]?.firstOrNull { t >= it.startMs && t < it.endMs }
 
-    BoxWithConstraints(modifier.background(c.background.copy(alpha = 0.66f))) {
+    // No full-size translucent fill: at 4K every blended full-screen layer costs GPU time per frame.
+    BoxWithConstraints(modifier) {
         val rowPx = with(density) { rowHeight.toPx() }
         val headerPx = with(density) { 40.dp.toPx() }
         val gridWidthPx = constraints.maxWidth - with(density) { channelColumn.toPx() }
@@ -177,17 +181,19 @@ fun EpgGrid(
 
         // Logo painters for the visible window only. Composition touches this map only when the window
         // moves (a key press that scrolls); painters load off-thread and invalidate just the canvas.
-        val logoBase = (topRow.targetValue.roundToInt() - 2).coerceAtLeast(0)
+        // The window moves in steps of LOGO_STEP rows so ordinary row-by-row scrolling never recomposes
+        // this block (it used to re-run on every key press, the main source of guide jank).
+        val logoBase by remember(data) { androidx.compose.runtime.derivedStateOf { ((topRow.targetValue.roundToInt() - 2).coerceAtLeast(0) / LOGO_STEP) * LOGO_STEP } }
         val logoPainters = HashMap<Int, androidx.compose.ui.graphics.painter.Painter>()
-        for (r in logoBase until (logoBase + visibleRows + 5).coerceAtMost(data.channelCount)) {
+        for (r in logoBase until (logoBase + visibleRows + LOGO_STEP + 4).coerceAtMost(data.channelCount)) {
             val url = data.channel(r).logoUrl ?: continue
             key(url) {
-                // Decode well above the slot size and scale with high quality: logos must stay crisp on 4K.
+                // 256x128 is still ~2x the 64 dp slot on a 4K Shield; 480x240 per row bloated native memory.
                 logoPainters[r] = coil3.compose.rememberAsyncImagePainter(
                     model = coil3.request.ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
-                        .data(url).size(480, 240).build(),
+                        .data(url).size(256, 128).build(),
                     contentScale = androidx.compose.ui.layout.ContentScale.Fit,
-                    filterQuality = androidx.compose.ui.graphics.FilterQuality.High,
+                    filterQuality = androidx.compose.ui.graphics.FilterQuality.Medium,
                 )
             }
         }
@@ -259,12 +265,18 @@ fun EpgGrid(
 
         // Publish the initial selection, then refresh it when its EPG block arrives.
         // Previously the detail pane stayed on its placeholder until a D-pad move.
-        val selectedBlock = cache[blockKey(selRow, selTime)]
-        LaunchedEffect(data, focused, selRow, selTime, selectedBlock) {
-            if (focused && data.channelCount > 0) {
-                onViewTime(selTime)
-                onFocusedChange(selRow, programmeAt(selRow, selTime))
-            }
+        // Read in a snapshotFlow, not in composition: reading selRow/selTime here recomposed the whole
+        // grid on every D-pad press. Only a changed block (data arrived) re-publishes; moves publish
+        // through ensureVisible().
+        LaunchedEffect(data) {
+            snapshotFlow { Triple(focused, selRow, cache[blockKey(selRow, selTime)]) }
+                .distinctUntilChanged()
+                .collect { (f, _, _) ->
+                    if (f && data.channelCount > 0) {
+                        onViewTimeNow(selTime)
+                        onFocusedChangeNow(selRow, programmeAt(selRow, selTime))
+                    }
+                }
         }
 
         Row(Modifier.fillMaxSize()) {
@@ -503,6 +515,7 @@ private fun DrawScope.drawHeader(
 }
 
 
+private const val LOGO_STEP = 6
 private const val HALF_HOUR = 30 * 60_000L
 private const val HOUR = 60 * 60_000L
 private const val TWO_HOURS = 2 * HOUR

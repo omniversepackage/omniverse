@@ -38,6 +38,8 @@ fun PosterCard(
     progress: Float? = null,
     /** Hold OK: opens the title menu (Resume / Start over / Details / My List / Remove…). */
     onLongClick: (() -> Unit)? = null,
+    /** Smaller label + gap for dense lists (search results). */
+    compact: Boolean = false,
 ) {
     val c = OmniTheme.colors
     Column(modifier) {
@@ -65,8 +67,8 @@ fun PosterCard(
             }
         }
         // The poster grows around its center on focus; its transformed bottom must clear the title.
-        Spacer(Modifier.height(OmniSpacing.m))
-        Text(title, style = OmniTheme.type.body.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold), color = c.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Spacer(Modifier.height(if (compact) OmniSpacing.s else OmniSpacing.m))
+        Text(title, style = (if (compact) OmniTheme.type.caption else OmniTheme.type.body).copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold), color = c.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
         if (subtitle != null) Text(subtitle, style = OmniTheme.type.caption, color = c.textTertiary, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }

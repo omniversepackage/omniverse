@@ -20,6 +20,8 @@ import com.yodesla.omniverse.core.model.RemoteId
 import com.yodesla.omniverse.core.model.SourceId
 import com.yodesla.omniverse.core.model.TimeWindow
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 class EpgRepositoryImpl(
@@ -140,11 +142,21 @@ class SearchRepositoryImpl(
         val match = toMatchExpression(query) ?: return@withContext emptyList()
         val needle = normalize(query)
         val fetch = (limit * 8L).coerceAtMost(400L)
-        db.readQueries.searchByKind(match, ContentKind.LIVE.name, fetch).executeAsList().mapNotNull { r ->
-            val sid = r.source_id ?: return@mapNotNull null
-            val rid = r.remote_id ?: return@mapNotNull null
+        val hits = db.readQueries.searchByKind(match, ContentKind.LIVE.name, fetch).executeAsList().mapNotNullTo(ArrayList()) { r ->
+            val sid = r.source_id ?: return@mapNotNullTo null
+            val rid = r.remote_id ?: return@mapNotNullTo null
             SearchHit(ContentKey(SourceId(sid), ContentKind.LIVE, RemoteId(rid)), r.title.orEmpty())
-        }.sortedWith(compareBy<SearchHit>({ rank(normalize(it.title), needle) }, { it.title.length }, { it.title }))
+        }
+        // Punctuation/accent-blind fallback ("yugioh" → "24/7: Yu-Gi-Oh!"), as for titles.
+        val compact = com.yodesla.omniverse.core.data.search.FastTitleSearch.compact(query)
+        if (hits.size < limit && compact.length >= 3) {
+            val seen = hits.mapTo(HashSet()) { it.key }
+            db.readQueries.searchLiveSubstring(compact.take(2), compact, fetch).executeAsList().forEach { r ->
+                val key = ContentKey(SourceId(r.source_id), ContentKind.LIVE, RemoteId(r.remote_id))
+                if (seen.add(key)) hits += SearchHit(key, r.name)
+            }
+        }
+        hits.sortedWith(compareBy<SearchHit>({ rank(normalize(it.title), needle).let { r -> if (r > 0 && com.yodesla.omniverse.core.data.search.FastTitleSearch.compact(it.title).startsWith(compact)) 1 else r } }, { it.title.length }, { it.title }))
             .take(limit)
     }
 
@@ -232,6 +244,45 @@ class SearchRepositoryImpl(
         out
     }
 
+    override suspend fun searchTitles(
+        query: String,
+        kinds: Collection<ContentKind>,
+        excludedCategoryKeys: Collection<String>,
+        limitPerKind: Int,
+    ): Map<ContentKind, SearchFilteredPage> = withContext(io) {
+        val text = query.trim().takeIf { it.isNotEmpty() } ?: return@withContext emptyMap()
+        val match = (listOf(text) + com.yodesla.omniverse.core.data.search.SmartTitleSearch.expansions(text))
+            .mapNotNull(::toMatchExpression).distinct().joinToString(" OR ") { "($it)" }.takeIf { it.isNotBlank() }
+            ?: return@withContext emptyMap()
+        val needle = com.yodesla.omniverse.core.data.search.FastTitleSearch.normalize(text)
+        val compact = com.yodesla.omniverse.core.data.search.FastTitleSearch.compact(text)
+        val excluded = excludedCategoryKeys.toSet()
+        val fetch = (limitPerKind * 12L).coerceIn(120L, 600L)
+        val out = LinkedHashMap<ContentKind, SearchFilteredPage>()
+        for (kind in kinds) {
+            val isVod = kind == ContentKind.VOD
+            fun hit(substring: Boolean, src: String, remote: String, name: String, poster: String?, cat: String, rating: Double?, year: Long?, tmdb: String?, group: String?, plex: Long, srcSort: Long, itemSort: Long) =
+                com.yodesla.omniverse.core.data.search.TitleHit(
+                    PosterRow(ContentKey(SourceId(src), kind, RemoteId(remote)), name, poster, year?.toInt(), rating?.toFloat(), categoryId = RemoteId(cat), tmdbId = tmdb),
+                    group, plex.toInt(), srcSort, itemSort, substring,
+                )
+            val hits = ArrayList<com.yodesla.omniverse.core.data.search.TitleHit>()
+            if (isVod) db.readQueries.searchVodFast(match, fetch).executeAsList().forEach { r -> hits += hit(false, r.source_id, r.remote_id, r.name, r.poster_url, r.primary_category_id, r.rating, r.year, r.tmdb_id, r.group_key, r.plex_rank, r.src_sort, r.item_sort) }
+            else db.readQueries.searchSeriesFast(match, fetch).executeAsList().forEach { r -> hits += hit(false, r.source_id, r.remote_id, r.name, r.poster_url, r.primary_category_id, r.rating, r.year, r.tmdb_id, r.group_key, r.plex_rank, r.src_sort, r.item_sort) }
+            // Mid-word / punctuation- and accent-blind matches ("ball" in "Dragonball", "yugioh" in
+            // "Yu-Gi-Oh!", "pokemon" in "Pokémon"): only when the word-start pass came up short (a full
+            // compacted-name scan costs ~3x the FTS pass, so it never runs on every keystroke).
+            if (hits.size < limitPerKind && compact.length >= 3) {
+                val seen = hits.mapTo(HashSet()) { it.row.key.sourceId.value + ":" + it.row.key.remoteId.value }
+                if (isVod) db.readQueries.searchVodSubstring(compact.take(2), compact, fetch).executeAsList().forEach { r -> if (seen.add(r.source_id + ":" + r.remote_id)) hits += hit(true, r.source_id, r.remote_id, r.name, r.poster_url, r.primary_category_id, r.rating, r.year, r.tmdb_id, r.group_key, r.plex_rank, r.src_sort, r.item_sort) }
+                else db.readQueries.searchSeriesSubstring(compact.take(2), compact, fetch).executeAsList().forEach { r -> if (seen.add(r.source_id + ":" + r.remote_id)) hits += hit(true, r.source_id, r.remote_id, r.name, r.poster_url, r.primary_category_id, r.rating, r.year, r.tmdb_id, r.group_key, r.plex_rank, r.src_sort, r.item_sort) }
+            }
+            val (rows, more) = com.yodesla.omniverse.core.data.search.FastTitleSearch.rank(hits, text, excluded, kind.name, limitPerKind)
+            if (rows.isNotEmpty()) out[kind] = SearchFilteredPage(rows, more)
+        }
+        out
+    }
+
     override suspend fun decadeOptions(kinds: Collection<ContentKind>, excludedCategoryKeys: Collection<String>): List<Int> = withContext(io) {
         kinds.flatMap { kind ->
             db.readQueries.searchDecades(kind = kind.name, excludedKeys = excludedCategoryKeys).executeAsList()
@@ -241,12 +292,43 @@ class SearchRepositoryImpl(
     override suspend fun searchProgrammes(query: String, nowMs: Long, windowMs: Long, limit: Int): List<ProgrammeHit> = withContext(io) {
         // LIKE wildcards in user text are dropped rather than escaped (no ESCAPE clause needed).
         val needle = query.trim().replace("%", "").replace("_", "").takeIf { it.length >= 2 } ?: return@withContext emptyList()
-        db.readQueries.searchProgrammes(nowMs, nowMs + windowMs, "%$needle%", limit.toLong()).executeAsList().map { r ->
+        // Punctuation/accent-blind like titles and channels ("yugioh" → "Yu-Gi-Oh!").
+        val compact = com.yodesla.omniverse.core.data.search.FastTitleSearch.compact(needle).takeIf { it.length >= 2 } ?: return@withContext emptyList()
+        // Programmes that began up to 4 h ago and are still on count as "now"; longer ones are missed.
+        val from = nowMs - GUIDE_LOOKBACK_MS
+        val titles = guideTitles?.takeIf { nowMs - it.builtAt in 0 until GUIDE_TTL_MS && it.untilMs >= nowMs + windowMs }
+        val rows = if (titles != null) {
+            // Match in memory first: no matching title → no guide walk at all.
+            val hit = titles.entries.filter { it.second.contains(compact) }.map { it.first }.take(GUIDE_MAX_TITLES)
+            if (hit.isEmpty()) return@withContext emptyList()
+            db.readQueries.searchProgrammesByTitles(from, nowMs + windowMs, nowMs, hit, limit.toLong()).executeAsList()
+                .map { r -> ProgrammeRow(r.title, r.start_ms, r.end_ms, r.source_id, r.remote_id, r.name, r.logo_url, r.primary_category_id) }
+        } else {
+            db.readQueries.searchProgrammes(from, nowMs + windowMs, nowMs, compact.take(2), compact, limit.toLong()).executeAsList()
+                .map { r -> ProgrammeRow(r.title, r.start_ms, r.end_ms, r.source_id, r.remote_id, r.name, r.logo_url, r.primary_category_id) }
+        }
+        rows.map { r ->
             ProgrammeHit(
                 channel = ContentKey(SourceId(r.source_id), ContentKind.LIVE, RemoteId(r.remote_id)),
                 categoryId = RemoteId(r.primary_category_id), channelName = r.name, logoUrl = r.logo_url,
                 title = r.title, startMs = r.start_ms, endMs = r.end_ms,
             )
+        }
+    }
+
+    private class ProgrammeRow(val title: String, val start_ms: Long, val end_ms: Long, val source_id: String, val remote_id: String, val name: String, val logo_url: String?, val primary_category_id: String)
+    /** Distinct guide titles for the search window with their compact forms. */
+    private class GuideTitles(val builtAt: Long, val untilMs: Long, val entries: List<Pair<String, String>>)
+    @Volatile private var guideTitles: GuideTitles? = null
+    private val guideLock = Mutex()
+
+    override suspend fun warmGuideSearch(nowMs: Long) = withContext(io) {
+        guideLock.withLock {
+            val g = guideTitles
+            if (g != null && nowMs - g.builtAt in 0 until GUIDE_TTL_MS) return@withLock
+            val until = nowMs + GUIDE_WINDOW_MS + GUIDE_TTL_MS
+            val list = db.readQueries.guideTitlesWindow(nowMs - GUIDE_LOOKBACK_MS, until, nowMs).executeAsList()
+            guideTitles = GuideTitles(nowMs, until, list.map { it to com.yodesla.omniverse.core.data.search.FastTitleSearch.compact(it) })
         }
     }
 
@@ -266,6 +348,11 @@ class SearchRepositoryImpl(
     }
 
     companion object {
+        private const val GUIDE_WINDOW_MS = 86_400_000L
+        private const val GUIDE_TTL_MS = 15 * 60_000L
+        private const val GUIDE_LOOKBACK_MS = 4 * 3_600_000L
+        /** Bound on the SQL IN list (SQLite variable limit); broad two-letter queries use the first ones. */
+        private const val GUIDE_MAX_TITLES = 400
         private val nonWord = Regex("[^\\p{L}\\p{N}]+")
 
         private fun normalize(s: String) = s.lowercase().split(nonWord).filter { it.isNotEmpty() }.joinToString(" ")

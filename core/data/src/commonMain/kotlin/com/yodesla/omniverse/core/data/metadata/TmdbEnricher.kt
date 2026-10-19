@@ -68,7 +68,8 @@ class TmdbEnricher(
         if (!enabled()) return null
         val now = clock.nowMs()
         val cached = withContext(io) { db.tmdbQueries.tmdbMeta(id, kind.name).executeAsOneOrNull() }
-        if (cached != null && isFresh(cached.fetched_ms, cached.hasContent(), now)) return cached.toMeta().takeIf { !it.isEmpty }
+        // Rows cached before v17 have art but no score: fetch them once more to pick up the rating.
+        if (cached != null && !(cached.vote_average == null && cached.hasContent()) && isFresh(cached.fetched_ms, cached.hasContent(), now)) return cached.toMeta().takeIf { !it.isEmpty }
         val found = runCatching { if (kind == WikidataMetadata.Kind.MOVIE) client.movie(id) else client.tv(id) }.getOrNull()
         withContext(io) {
             if (found != null) {
@@ -77,6 +78,8 @@ class TmdbEnricher(
                     posterPath = found.posterPath, certification = found.certification, runtimeMin = found.runtimeMin?.toLong(),
                     genres = found.genres, tagline = found.tagline, fetchedMs = now, overview = found.overview,
                     cardBackdropPath = found.cardBackdropPath,
+                    // 0 marks "fetched, no score" so a title without votes is not re-fetched forever.
+                    voteAverage = found.voteAverage ?: 0.0, voteCount = (found.voteCount ?: 0).toLong(),
                 )
             } else {
                 db.tmdbQueries.insertTmdbMetaMiss(tmdbId = id, kind = kind.name, fetchedMs = now)
@@ -131,6 +134,7 @@ class TmdbEnricher(
         certification = certification, runtimeMin = runtime_min?.toInt(), genres = genres, tagline = tagline,
         overview = overview,
         cardBackdropPath = card_backdrop_path,
+        voteAverage = vote_average, voteCount = vote_count?.toInt(),
     )
 }
 
@@ -165,6 +169,7 @@ class TmdbArt(private val db: OmniverseDb) {
             cached.runtime_min?.toInt(),
             cached.overview,
             cached.card_backdrop_path?.let(Tmdb::backdropUrl),
+            tmdbRating(cached.vote_average, cached.vote_count),
         )
     }
 
@@ -174,18 +179,20 @@ class TmdbArt(private val db: OmniverseDb) {
         val series = rows.filter { it.tmdbKind() == "SERIES" }.mapNotNull { it.tmdbId }.distinct()
         if (movies.isEmpty() && series.isEmpty()) return rows
         val byId = HashMap<String, TmdbArtRow>()
-        if (movies.isNotEmpty()) db.readQueries.tmdbMetaForIds("MOVIE", movies).executeAsList().forEach { byId["MOVIE:${it.tmdb_id}"] = TmdbArtRow(it.backdrop_path, it.logo_path, it.certification, it.runtime_min?.toInt(), it.overview, it.card_backdrop_path) }
-        if (series.isNotEmpty()) db.readQueries.tmdbMetaForIds("SERIES", series).executeAsList().forEach { byId["SERIES:${it.tmdb_id}"] = TmdbArtRow(it.backdrop_path, it.logo_path, it.certification, it.runtime_min?.toInt(), it.overview, it.card_backdrop_path) }
+        // Chunked: whole anime pools (thousands of ids) exceed SQLite's bound-variable limit.
+        for ((kind, ids) in listOf("MOVIE" to movies, "SERIES" to series)) for (chunk in ids.chunked(500)) {
+            db.readQueries.tmdbMetaForIds(kind, chunk).executeAsList().forEach { byId["$kind:${it.tmdb_id}"] = TmdbArtRow(it.backdrop_path, it.logo_path, it.certification, it.runtime_min?.toInt(), it.overview, it.card_backdrop_path, tmdbRating(it.vote_average, it.vote_count)) }
+        }
         return rows.map { row ->
             val kind = row.tmdbKind() ?: return@map row
             val art = byId["$kind:${row.tmdbId}"] ?: return@map row
-            row.withArt(art.backdrop?.let(Tmdb::backdropUrl), art.logo?.let(Tmdb::logoUrl), art.certification, art.runtimeMin, art.overview, art.cardBackdrop?.let(Tmdb::backdropUrl))
+            row.withArt(art.backdrop?.let(Tmdb::backdropUrl), art.logo?.let(Tmdb::logoUrl), art.certification, art.runtimeMin, art.overview, art.cardBackdrop?.let(Tmdb::backdropUrl), art.rating)
         }
     }
 
     private data class TmdbArtRow(
         val backdrop: String?, val logo: String?, val certification: String?, val runtimeMin: Int?, val overview: String?,
-        val cardBackdrop: String?,
+        val cardBackdrop: String?, val rating: Float?,
     )
 }
 
@@ -200,6 +207,7 @@ private fun PosterRow.tmdbKind(): String? {
 
 internal fun PosterRow.withArt(
     backdrop: String?, logo: String?, certification: String?, runtimeMin: Int?, overview: String?, cardBackdrop: String?,
+    tmdbRating: Float? = null,
 ): PosterRow {
     val wide = backdropUrl ?: backdrop
     // Task 87b: card art is a different picture from the banner art - a duplicate is dropped so the
@@ -211,5 +219,13 @@ internal fun PosterRow.withArt(
         certification = this.certification ?: certification,
         runtimeMin = this.runtimeMin ?: runtimeMin,
         plot = pickPlot(plot, overview),
+        // A real TMDB audience score beats the provider's number (often a placeholder).
+        rating = tmdbRating ?: rating,
     )
 }
+
+/** TMDB score as a rating, only when enough people voted for it to mean something. */
+internal fun tmdbRating(voteAverage: Double?, voteCount: Long?): Float? =
+    voteAverage?.takeIf { it > 0.0 && (voteCount ?: 0L) >= MIN_TMDB_VOTES }?.toFloat()
+
+private const val MIN_TMDB_VOTES = 20L

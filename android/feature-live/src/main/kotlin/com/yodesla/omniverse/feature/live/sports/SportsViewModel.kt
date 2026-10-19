@@ -200,6 +200,7 @@ class SportsViewModel(
         }
         launch {
             airings = runCatching { epg.sportsSchedule(now) }.getOrDefault(emptyList()).filter { vis("LIVE", it.channel.sourceId.value, it.categoryId.value) }
+            teamOptions = runCatching { teamChannelOptions(airings, vis, now) }.getOrDefault(emptyMap())
             publishLeagues(); regroup()
         }
         launch {
@@ -262,7 +263,47 @@ class SportsViewModel(
                 if (s > 0 && s > (scored[r.key]?.second ?: 0)) scored[r.key] = r to s
             }
         }
-        return scored.values.sortedByDescending { it.second }.map { it.first }.take(4)
+        // Channels about the CLUBS themselves (a dedicated "Browns" channel carries no network name).
+        // Any league, any team; they outscore network channels, so they are listed first.
+        for (team in listOf(g.home, g.away)) {
+            for (term in com.yodesla.omniverse.core.data.sports.TeamChannelMatcher.termsFor(team, g.league)) {
+                val rows = channelCache.getOrPut("team:$term") { runCatching { epg.channelsNamed(term, 60) }.getOrDefault(emptyList()) }
+                for (r in rows) {
+                    if (!vis("LIVE", r.key.sourceId.value, r.categoryId.value)) continue
+                    val s = com.yodesla.omniverse.core.data.sports.TeamChannelMatcher.score(r.name, team, g.league)
+                    if (s > 0 && s > (scored[r.key]?.second ?: 0)) scored[r.key] = r to s
+                }
+            }
+        }
+        return scored.values.sortedByDescending { it.second }.map { it.first }.take(5)
+    }
+
+    /** Club-named channels for each live guide game (key = [groupKey]); built once per load. */
+    private var teamOptions: Map<String, List<WatchOption>> = emptyMap()
+
+    private suspend fun teamChannelOptions(list: List<SportsAiring>, vis: Visibility, now: Long): Map<String, List<WatchOption>> {
+        val out = HashMap<String, List<WatchOption>>()
+        for (a in list) {
+            if (a.kind != SportsKind.EVENT || !a.isLive(now)) continue
+            val (x, y) = a.teams ?: continue
+            val key = groupKey(a)
+            if (key in out) continue
+            val league = a.league.orEmpty()
+            val scored = HashMap<ContentKey, Pair<ChannelRow, Int>>()
+            for (name in listOf(x, y)) {
+                val team = com.yodesla.omniverse.core.data.sports.GameTeam(name, name, "", null, null, null, null)
+                for (term in com.yodesla.omniverse.core.data.sports.TeamChannelMatcher.termsFor(team, league)) {
+                    val rows = channelCache.getOrPut("team:$term") { runCatching { epg.channelsNamed(term, 60) }.getOrDefault(emptyList()) }
+                    for (r in rows) {
+                        if (!vis("LIVE", r.key.sourceId.value, r.categoryId.value)) continue
+                        val s = com.yodesla.omniverse.core.data.sports.TeamChannelMatcher.score(r.name, team, league)
+                        if (s > 0 && s > (scored[r.key]?.second ?: 0)) scored[r.key] = r to s
+                    }
+                }
+            }
+            out[key] = scored.values.sortedByDescending { it.second }.take(3).map { (r, _) -> WatchOption(r.key, r.categoryId, r.name, r.logoUrl) }
+        }
+        return out
     }
 
     private fun regroup() {
@@ -276,7 +317,8 @@ class SportsViewModel(
         // Guide listings of the same live game on many channels collapse to one card; a group that
         // is the same game as a scheduled one folds into that game's "where to watch" list instead.
         val groups = airPick.filter { a -> a.kind == SportsKind.EVENT && a.isLive(now) }.groupBy(::groupKey).map { (k, list) ->
-            LiveGroup(k, list.first(), list.map { a -> WatchOption(a.channel, a.categoryId, a.channelName, a.logoUrl, a.title) }.distinctBy { it.key })
+            // A channel dedicated to either club leads the list even when its own guide shows no listing.
+            LiveGroup(k, list.first(), (teamOptions[k].orEmpty() + list.map { a -> WatchOption(a.channel, a.categoryId, a.channelName, a.logoUrl, a.title) }).distinctBy { it.key })
         }
         val absorbed = HashSet<String>()
         val liveMerged = live.map { g ->

@@ -34,6 +34,9 @@ data class TmdbMeta(
     val overview: String?,
     /** Task 87b: a DIFFERENT backdrop for landscape cards; null when the title has only one. */
     val cardBackdropPath: String? = null,
+    /** TMDB audience score 0-10 and its vote count (v17); null when TMDB sent none. */
+    val voteAverage: Double? = null,
+    val voteCount: Int? = null,
 ) {
     val isEmpty: Boolean
         get() = backdropPath == null && logoPath == null && posterPath == null &&
@@ -207,6 +210,8 @@ class Tmdb(
                 tagline = json.stringOrNull("tagline")?.takeIf { it.isNotBlank() },
                 // Task 84f: the plot summary is already in the movie/tv detail response - no extra call.
                 overview = json.stringOrNull("overview"),
+                voteAverage = json.doubleOrNull2("vote_average"),
+                voteCount = json.intOrNull2("vote_count"),
             )
         }
 

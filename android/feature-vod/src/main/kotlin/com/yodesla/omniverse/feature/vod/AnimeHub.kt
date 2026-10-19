@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.fillMaxWidth as fmw
@@ -134,6 +135,13 @@ data class AnimeHubState(
     val kindFeatured: Map<ContentKind, List<PosterRow>> = emptyMap(),
     /** Series / Movies: true while the full filterable grid replaces that kind's home. */
     val gridOpen: Boolean = false,
+    /** Task 143: the Anime-only search (Kory: "a search within the anime section that only searches anime"). */
+    val searchOpen: Boolean = false,
+    val searchQuery: String = "",
+    val searchBusy: Boolean = false,
+    val searchSeries: List<PosterRow> = emptyList(),
+    val searchMovies: List<PosterRow> = emptyList(),
+    val searchChannels: List<HubChannel> = emptyList(),
 ) {
     val animeChannels: List<HubChannel> get() = channels.filter { it.kind == AnimeChannelKind.ANIME }
     val cartoonChannels: List<HubChannel> get() = channels.filter { it.kind == AnimeChannelKind.CARTOON }
@@ -214,8 +222,13 @@ class AnimeHubViewModel(
         artVersion.onEach { refreshArt() }.launchIn(viewModelScope)
     }
 
-    private suspend fun titles(kind: ContentKind): List<HubTitle> =
-        runCatching { catalog.animatedTitles(kind, excluded) }.getOrDefault(emptyList()).map { HubTitle(it.row, it.anime) }
+    private suspend fun titles(kind: ContentKind): List<HubTitle> {
+        val raw = runCatching { catalog.animatedTitles(kind, excluded) }.getOrDefault(emptyList())
+        // Real ratings: drop the provider's placeholder score, then apply cached TMDB scores.
+        val rows = runCatching { catalog.refillArt(dropPlaceholderRatings(raw.map { it.row })) }.getOrElse { raw.map { it.row } }
+        return rows.zip(raw) { row, t -> HubTitle(row, t.anime) }
+            .sortedWith(compareBy<HubTitle> { it.row.rating == null }.thenByDescending { it.row.rating ?: 0f })
+    }
 
     private fun visible(row: PosterRow): Boolean =
         row.categoryId?.let { "${row.key.kind.name}|${row.key.sourceId.value}|${it.value}" !in excluded } ?: true
@@ -271,9 +284,9 @@ class AnimeHubViewModel(
             val topSeries = ratedOnly(aS).take(60)
             val topMovies = ratedOnly(aM).take(60)
             val first = listOf(
-                ranked("trend-week-tv", "Trending series this week", weekTv.await()),
-                ranked("trend-week-movie", "Trending movies this week", weekMovie.await()),
-                ranked("trend-day-tv", "Also trending today", dayTv.await()),
+                ranked("trend-week-tv", "Trending This Week · Shows", weekTv.await()),
+                ranked("trend-week-movie", "Trending This Week · Movies", weekMovie.await()),
+                ranked("trend-day-tv", "Trending Today · Shows", dayTv.await()),
                 AnimeShelf("top-series", "Top anime series", topSeries),
                 AnimeShelf("new-series", "New anime series", newest(aS)),
                 AnimeShelf("top-movies", "Anime movies", topMovies),
@@ -294,11 +307,12 @@ class AnimeHubViewModel(
             fun kindHome(kind: ContentKind, week: List<Triple<PosterRow, Int, Boolean>>, day: List<Triple<PosterRow, Int, Boolean>>,
                          anime: List<PosterRow>, animeTitles: List<HubTitle>, cartoons: List<PosterRow>): List<AnimeShelf> {
                 val noun = if (kind == S) "series" else "movies"
+                val label = if (kind == S) "Shows" else "Movies"
                 val genres = topGenres(animeTitles, max = 5).map { g ->
                     AnimeShelf("g-$kind-$g", "$g anime", ratedOnly(anime).filter { r -> genresOf(r).any { it.equals(g, ignoreCase = true) } }.take(40))
                 }
                 return animeHubShelves(listOf(
-                    ranked("k-week-$kind", "Trending $noun this week", week),
+                    ranked("k-week-$kind", "Trending This Week · $label", week),
                     ranked("k-day-$kind", "Also trending today", day),
                     AnimeShelf("k-top-$kind", "Top anime $noun", ratedOnly(anime).take(60)),
                     AnimeShelf("k-new-$kind", "New anime $noun", newest(anime)),
@@ -411,6 +425,38 @@ class AnimeHubViewModel(
 
     fun closeGrid() = _state.update { it.copy(gridOpen = false, grid = emptyList()) }
 
+    private var searchJob: kotlinx.coroutines.Job? = null
+
+    fun openSearch() = _state.update { it.copy(searchOpen = true) }
+
+    fun closeSearch() {
+        searchJob?.cancel()
+        _state.update { it.copy(searchOpen = false, searchQuery = "", searchBusy = false, searchSeries = emptyList(), searchMovies = emptyList(), searchChannels = emptyList()) }
+    }
+
+    /** Typing shows the spinner at once; the in-memory search lands a beat later and the spinner clears. */
+    fun onSearchQuery(q: String) {
+        searchJob?.cancel()
+        if (q.isBlank()) {
+            _state.update { it.copy(searchQuery = q, searchBusy = false, searchSeries = emptyList(), searchMovies = emptyList(), searchChannels = emptyList()) }
+            return
+        }
+        _state.update { it.copy(searchQuery = q, searchBusy = true) }
+        searchJob = viewModelScope.launch {
+            delay(120)
+            val p = pools?.await().orEmpty()
+            val (series, movies, channels) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                Triple(
+                    searchHubTitles(p[ContentKind.SERIES].orEmpty(), q),
+                    searchHubTitles(p[ContentKind.VOD].orEmpty(), q),
+                    searchHubChannels(_state.value.channels, q),
+                )
+            }
+            prefetch(series.take(20) + movies.take(20))
+            _state.update { it.copy(searchSeries = series, searchMovies = movies, searchChannels = channels, searchBusy = false) }
+        }
+    }
+
     fun setGridFilter(filter: AnimeGridFilter) {
         if (_state.value.gridFilter == filter) return
         _state.update { it.copy(gridFilter = filter) }
@@ -482,6 +528,7 @@ fun AnimeHubRoute(
     val state by viewModel.state.collectAsStateWithLifecycle()
     BackHandler {
         when {
+            state.searchOpen -> viewModel.closeSearch()
             state.gridOpen -> viewModel.closeGrid()
             state.tab != AnimeTab.HOME -> viewModel.selectTab(AnimeTab.HOME)
             else -> onOpenNavigation()
@@ -499,6 +546,8 @@ fun AnimeHubRoute(
     LaunchedEffect(Unit) { entered = true }
     val alpha by animateFloatAsState(if (entered) 1f else 0f, tween(300), label = "animeEntry")
     Box(Modifier.fillMaxSize().background(Color.Black).alpha(alpha)) {
+        androidx.compose.runtime.CompositionLocalProvider(LocalAnimeSearchOpen provides viewModel::openSearch) {
+        if (state.searchOpen) AnimeSearch(state, viewModel, tabFocus, leftEdge, onOpen, onWatchChannel) else
         when (state.tab) {
             AnimeTab.HOME -> AnimeHome(
                 state, viewModel, null, state.featured, state.shelves, state.continueWatching,
@@ -514,6 +563,7 @@ fun AnimeHubRoute(
                 )
             }
             AnimeTab.CHANNELS -> AnimeChannelsGrid(state, viewModel, tabFocus, leftEdge, onWatchChannel)
+        }
         }
     }
 }
@@ -544,6 +594,9 @@ private fun AnimeTabs(
             AnimeChip(tab.label, tab == current, (if (tab == current) Modifier.focusRequester(tabFocus) else Modifier).then(leftEdge(i)),
                 height = chipHeight, fontSize = if (compact) 10.sp else 13.sp) { onSelect(tab) }
         }
+        // Task 143: the Anime-only search, on every tab (it searches this page only).
+        val openSearch = LocalAnimeSearchOpen.current
+        AnimeChip("Search", false, height = chipHeight, fontSize = if (compact) 10.sp else 13.sp) { openSearch() }
         if (trailing != null) {
             Spacer(Modifier.width(if (compact) OmniSpacing.s else OmniSpacing.l))
             trailing()
@@ -748,7 +801,7 @@ private fun LazyListScope.posterShelf(
     onOpen: (ContentKey) -> Unit,
 ) {
     item(key = shelf.key) {
-        CrunchyrollShelf(shelf.title, shelf.caption, compact = true) {
+        CrunchyrollShelf(shelf.title, null, compact = true) { // no TMDB/date caption (Kory)
             itemsIndexed(shelf.rows, key = { _, r -> shelf.key + "-" + r.uid() }) { i, row ->
                 // Kory: number what the library actually has 1, 2, 3… (chart order kept, no gaps for missing titles).
                 val ranked = shelf.ranks.isNotEmpty()
@@ -1097,5 +1150,101 @@ private fun FiltersToggle(open: Boolean, summary: String, leftEdge: (Int) -> Mod
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m), modifier = Modifier.padding(start = OmniSpacing.focusEdge)) {
         AnimeChip(if (open) "Filters ▾" else "Filters ▸", open, leftEdge(0), onClick = onToggle)
         Text(summary, style = OmniTheme.type.body, color = OmniTheme.colors.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/** Task 143: opens the Anime-only search (provided by the route; AnimeTabs shows the chip on every tab). */
+internal val LocalAnimeSearchOpen = androidx.compose.runtime.staticCompositionLocalOf<() -> Unit> { {} }
+
+/**
+ * Task 143 (Kory: "a search within the anime section that only searches the anime section"): searches
+ * only what the Anime page holds. The tab you are on sets the scope — Home / Series / Movies / Live
+ * channels — and the field says so. The spinner runs from the first keystroke until results land.
+ */
+@Composable
+private fun AnimeSearch(
+    state: AnimeHubState, vm: AnimeHubViewModel, tabFocus: FocusRequester, leftEdge: (Int) -> Modifier,
+    onOpen: (ContentKey) -> Unit, onWatch: (ContentKey, RemoteId) -> Unit,
+) {
+    val c = OmniTheme.colors
+    val field = remember { FocusRequester() }
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    LaunchedEffect(Unit) { delay(80); runCatching { field.requestFocus() } }
+    val scopeLabel = when (state.tab) {
+        AnimeTab.HOME -> "all of Anime"
+        AnimeTab.SERIES -> "anime series"
+        AnimeTab.MOVIES -> "anime movies"
+        AnimeTab.CHANNELS -> "anime & cartoon channels"
+    }
+    val showSeries = state.tab == AnimeTab.HOME || state.tab == AnimeTab.SERIES
+    val showMovies = state.tab == AnimeTab.HOME || state.tab == AnimeTab.MOVIES
+    val showChannels = state.tab == AnimeTab.HOME || state.tab == AnimeTab.CHANNELS
+    val series = if (showSeries) state.searchSeries else emptyList()
+    val movies = if (showMovies) state.searchMovies else emptyList()
+    val channels = if (showChannels) state.searchChannels else emptyList()
+    val total = series.size + movies.size + channels.size
+    val names: suspend (PosterRow) -> List<String> = vm::titleNames
+    Box(Modifier.fillMaxSize().padding(horizontal = CrunchSide)) {
+        FocusPivot(parentFraction = 0f, leading = 40.dp) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 48.dp), verticalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
+                item(key = "tabs") {
+                    AnimeTabs(state.tab, vm::selectTab, tabFocus, leftEdge, trailing = { AnimeChip("✕ Close search", false, height = 34.dp) { vm.closeSearch() } })
+                }
+                item(key = "field") {
+                    Column {
+                        androidx.compose.material3.OutlinedTextField(
+                            value = state.searchQuery,
+                            onValueChange = vm::onSearchQuery,
+                            singleLine = true,
+                            placeholder = { Text("Search " + scopeLabel + " only", style = OmniTheme.type.body, color = c.textTertiary) },
+                            textStyle = OmniTheme.type.title.copy(color = c.textPrimary),
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
+                            trailingIcon = { if (state.searchBusy) androidx.compose.material3.CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 3.dp, color = c.accent) },
+                            colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = c.accent, unfocusedBorderColor = c.elevated, cursorColor = c.accent,
+                                focusedContainerColor = c.surface, unfocusedContainerColor = c.surface,
+                            ),
+                            modifier = Modifier.padding(start = OmniSpacing.focusEdge, top = OmniSpacing.s).widthIn(max = 760.dp).fillMaxWidth().focusRequester(field)
+                                .onPreviewKeyEvent { e ->
+                                    if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown) { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down); true }
+                                    else if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionUp) { runCatching { tabFocus.requestFocus() }; true }
+                                    else false
+                                },
+                        )
+                        if (state.searchBusy) androidx.compose.material3.LinearProgressIndicator(
+                            modifier = Modifier.padding(start = OmniSpacing.focusEdge, top = OmniSpacing.xs).widthIn(max = 760.dp).fillMaxWidth().height(3.dp),
+                            color = c.accent, trackColor = c.elevated,
+                        )
+                        Text(
+                            when {
+                                state.searchQuery.isBlank() -> "Searches only the Anime page, never the rest of your library."
+                                state.searchBusy -> "Searching " + scopeLabel + "…"
+                                total == 0 -> "Nothing in " + scopeLabel + " matches “" + state.searchQuery.trim() + "”."
+                                else -> "$total in $scopeLabel"
+                            },
+                            style = OmniTheme.type.body, color = c.textSecondary, maxLines = 1,
+                            modifier = Modifier.padding(start = OmniSpacing.focusEdge, top = OmniSpacing.xs),
+                        )
+                    }
+                }
+                if (series.isNotEmpty()) item(key = "r-series") {
+                    CrunchyrollShelf("Series · ${series.size}", compact = true) {
+                        itemsIndexed(series, key = { _, r -> "s-" + r.uid() }) { i, row -> RankedPoster(row, null, names, leftEdge(i), {}) { onOpen(row.key) } }
+                    }
+                }
+                if (movies.isNotEmpty()) item(key = "r-movies") {
+                    CrunchyrollShelf("Movies · ${movies.size}", compact = true) {
+                        itemsIndexed(movies, key = { _, r -> "m-" + r.uid() }) { i, row -> RankedPoster(row, null, names, leftEdge(i), {}) { onOpen(row.key) } }
+                    }
+                }
+                if (channels.isNotEmpty()) item(key = "r-channels") {
+                    CrunchyrollShelf("Live channels · ${channels.size}", compact = true) {
+                        itemsIndexed(channels, key = { _, ch -> "c-" + ch.row.uidKey() }) { i, ch ->
+                            ChannelTile(ch, leftEdge(i).width(LocalCrunchCardWidths.current.second * 1.25f)) { onWatch(ch.row.key, ch.row.categoryId) }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

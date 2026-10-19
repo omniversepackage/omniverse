@@ -154,6 +154,17 @@ internal fun HorizontalBrowseRoute(
                     }
                 }
             }
+            // Task 143: this section's own search (Movies searches only movies, Shows only shows).
+            if (onSearch != null) item(key = "__search") {
+                CategoryTab(
+                    onClick = { onSearch() },
+                    modifier = Modifier.widthIn(min = 64.dp, max = 184.dp).width(IntrinsicSize.Max).height(32.dp),
+                ) {
+                    Box(Modifier.fillMaxSize().padding(horizontal = OmniSpacing.m), contentAlignment = Alignment.CenterStart) {
+                        androidx.tv.material3.Text("🔍 Search", style = OmniTheme.type.body, color = OmniTheme.colors.textPrimary)
+                    }
+                }
+            }
             items(state.categories, key = { it.id ?: "__all" }) { category ->
                 val selected = !state.horizontalHome && category.id == state.selected
                 CategoryTab(

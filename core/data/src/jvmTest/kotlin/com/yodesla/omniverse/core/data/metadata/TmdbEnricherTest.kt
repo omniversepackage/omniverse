@@ -124,7 +124,7 @@ class TmdbEnricherTest {
 
     @Test fun sourceArtWinsAndTmdbFillsOnlyGaps() {
         val db = newDb()
-        db.tmdbQueries.upsertTmdbMeta("550", "MOVIE", "/b.jpg", "/l.png", "/p.jpg", "R", 139L, "Drama", "tag", 1L, "A fight-club synopsis.", "/c.jpg")
+        db.tmdbQueries.upsertTmdbMeta("550", "MOVIE", "/b.jpg", "/l.png", "/p.jpg", "R", 139L, "Drama", "tag", 1L, "A fight-club synopsis.", "/c.jpg", null, null)
         val art = TmdbArt(db)
         val full = art.fill(movieRow())
         assertEquals("https://src/b.jpg", full.backdropUrl) // source backdrop kept
@@ -148,7 +148,7 @@ class TmdbEnricherTest {
     /** Task 84f: the provider's own plot is never overwritten, not even by a blank of its own. */
     @Test fun providerPlotBeatsTheCachedTmdbSynopsis() {
         val db = newDb()
-        db.tmdbQueries.upsertTmdbMeta("550", "MOVIE", "/b.jpg", "/l.png", "/p.jpg", "R", 139L, "Drama", "tag", 1L, "A fight-club synopsis.", null)
+        db.tmdbQueries.upsertTmdbMeta("550", "MOVIE", "/b.jpg", "/l.png", "/p.jpg", "R", 139L, "Drama", "tag", 1L, "A fight-club synopsis.", null, null, null)
         val art = TmdbArt(db)
         assertEquals("Provider plot.", art.fill(movieRow(plot = "Provider plot.")).plot)
         assertEquals("A fight-club synopsis.", art.fill(movieRow(plot = "")).plot)
@@ -163,7 +163,7 @@ class TmdbEnricherTest {
     // with the title logo overlaid (see netflixCardArt / crunchyrollCardArt).
     @Test fun cardArtIsDroppedWhenItWouldDuplicateTheBanner() {
         val db = newDb()
-        db.tmdbQueries.upsertTmdbMeta("550", "MOVIE", "/b.jpg", "/l.png", "/p.jpg", "R", 139L, "Drama", "tag", 1L, null, "/b.jpg")
+        db.tmdbQueries.upsertTmdbMeta("550", "MOVIE", "/b.jpg", "/l.png", "/p.jpg", "R", 139L, "Drama", "tag", 1L, null, "/b.jpg", null, null)
         val filled = TmdbArt(db).fill(movieRow(backdrop = null))
         assertEquals("https://image.tmdb.org/t/p/w1280/b.jpg", filled.backdropUrl)
         assertNull(filled.cardBackdropUrl)

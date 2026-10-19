@@ -83,3 +83,21 @@ class MultiviewLayoutTest {
         assertEquals(listOf(a, c, d, b), MultiviewLayout.toggled(MultiviewLayout.toggled(sel, b), b))
     }
 }
+
+class MultiviewEnlargedLayoutTest {
+    @kotlin.test.Test fun enlargedTileComesFirstAndTheRestKeepOrder() {
+        kotlin.test.assertEquals(listOf(2, 0, 1, 3), MultiviewLayout.displayOrder(4, 2))
+        kotlin.test.assertEquals(listOf(0, 1, 2), MultiviewLayout.displayOrder(3, null))
+        kotlin.test.assertEquals(listOf(0), MultiviewLayout.displayOrder(1, 0))
+    }
+
+    @kotlin.test.Test fun focusMovesBetweenTheBigScreenAndTheSmallRow() {
+        kotlin.test.assertEquals(1, MultiviewLayout.enlargedNeighbor(0, 3, PadDirection.DOWN))
+        kotlin.test.assertEquals(null, MultiviewLayout.enlargedNeighbor(0, 3, PadDirection.LEFT))
+        kotlin.test.assertEquals(0, MultiviewLayout.enlargedNeighbor(2, 3, PadDirection.UP))
+        kotlin.test.assertEquals(1, MultiviewLayout.enlargedNeighbor(2, 3, PadDirection.LEFT))
+        kotlin.test.assertEquals(null, MultiviewLayout.enlargedNeighbor(1, 3, PadDirection.LEFT))
+        kotlin.test.assertEquals(2, MultiviewLayout.enlargedNeighbor(1, 3, PadDirection.RIGHT))
+        kotlin.test.assertEquals(null, MultiviewLayout.enlargedNeighbor(2, 3, PadDirection.RIGHT))
+    }
+}

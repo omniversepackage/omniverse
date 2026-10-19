@@ -19,6 +19,9 @@ CREATE TABLE tmdb_meta (
     fetched_ms INTEGER NOT NULL,
     overview TEXT,
     card_backdrop_path TEXT,
+    -- TMDB audience score (0-10) and vote count (v17). NULL = not fetched since v17.
+    vote_average REAL,
+    vote_count INTEGER,
     PRIMARY KEY (tmdb_id, kind)
 );
 
@@ -36,8 +39,8 @@ tmdbMeta:
 SELECT * FROM tmdb_meta WHERE tmdb_id = :tmdbId AND kind = :kind;
 
 upsertTmdbMeta:
-INSERT OR REPLACE INTO tmdb_meta(tmdb_id, kind, backdrop_path, logo_path, poster_path, certification, runtime_min, genres, tagline, fetched_ms, overview, card_backdrop_path)
-VALUES (:tmdbId, :kind, :backdropPath, :logoPath, :posterPath, :certification, :runtimeMin, :genres, :tagline, :fetchedMs, :overview, :cardBackdropPath);
+INSERT OR REPLACE INTO tmdb_meta(tmdb_id, kind, backdrop_path, logo_path, poster_path, certification, runtime_min, genres, tagline, fetched_ms, overview, card_backdrop_path, vote_average, vote_count)
+VALUES (:tmdbId, :kind, :backdropPath, :logoPath, :posterPath, :certification, :runtimeMin, :genres, :tagline, :fetchedMs, :overview, :cardBackdropPath, :voteAverage, :voteCount);
 
 -- Failed/empty attempt: seed an all-null row so the 1-day backoff applies to a title never seen.
 insertTmdbMetaMiss:

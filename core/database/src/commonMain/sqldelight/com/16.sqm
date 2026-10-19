@@ -1,0 +1,5 @@
+-- v16 -> v17: real TMDB ratings. tmdb_meta gains the TMDB audience score (0-10) and its vote
+-- count, so posters can show TMDB's rating instead of provider placeholders (e.g. an IPTV source
+-- that rates every anime 8.0). Additive; existing rows are re-fetched once to fill them in.
+ALTER TABLE tmdb_meta ADD COLUMN vote_average REAL;
+ALTER TABLE tmdb_meta ADD COLUMN vote_count INTEGER;

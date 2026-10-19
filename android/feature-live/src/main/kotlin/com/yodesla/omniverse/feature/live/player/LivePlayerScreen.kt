@@ -102,6 +102,8 @@ fun LivePlayerRoute(
     /** App-level live engine (see LiveSession): it keeps playing in the mini player after Back. */
     engine: Media3ExoEngine,
     onExit: () -> Unit,
+    /** "Multiview" in the channel options: this channel goes straight into Multiview (null = hidden). */
+    onMultiview: ((ContentKey) -> Unit)? = null,
     /** Task 91: app-level Now Playing holder (AppGraph); null in tests/dev screens. */
     nowPlaying: MutableStateFlow<NowPlaying?>? = null,
     nowPlayingControls: MutableStateFlow<NowPlayingControls?>? = null,
@@ -267,6 +269,10 @@ fun LivePlayerRoute(
             Text("Channel options", style = OmniTheme.type.title, color = OmniTheme.colors.textPrimary)
             ui.channelKey?.let { key ->
                 ChannelFavoriteButton(FavoriteChannel(key.sourceId.value, key.remoteId.value, ui.banner?.name ?: "Channel"), Modifier.focusRequester(firstSource))
+            }
+            // Channel options: straight into Multiview with this channel (add more screens from there).
+            if (onMultiview != null) ui.channelKey?.let { key ->
+                OmniButton(androidx.compose.ui.res.stringResource(R.string.multiview_player_option), { showSources = false; onMultiview(key) }, Modifier.fillMaxWidth())
             }
             ui.channelSources.forEach { choice ->
                 OmniButton("${choice.sourceName} · ${choice.name}", { showSources = false; viewModel.switchChannel(choice.key) },

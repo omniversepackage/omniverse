@@ -11,6 +11,11 @@
     <string name="multiview_cancel">Cancel</string>
     <string name="multiview_group_too_few">Not enough channels left in this group to watch together.</string>
     <string name="multiview_swap_channel">Swap channel</string>
+    <string name="multiview_enlarge">Enlarge this screen</string>
+    <string name="multiview_unenlarge">Equal screens</string>
+    <string name="multiview_add_screen">Add a screen</string>
+    <string name="multiview_player_option">Multiview</string>
+    <string name="multiview_pick_hint">Pick a channel to add to Multiview  ·  Back cancels</string>
     <string name="multiview_retry">Retry</string>
     <string name="multiview_tile_options">Tile options</string>
     <string name="multiview_speaker">Audio is on this channel</string>

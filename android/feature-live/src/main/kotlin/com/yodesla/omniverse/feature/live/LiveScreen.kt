@@ -83,6 +83,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 
 @Composable
@@ -107,8 +108,15 @@ fun LiveRoute(
     onOpenLanguageFilter: () -> Unit = {},
     /** Still-playing live channel (Back from fullscreen), shown at the top of the preview pane. */
     miniPlayer: (@Composable (Modifier) -> Unit)? = null,
+    /** Settings › Display "Horizontal categories": categories along the top instead of the left rail. */
+    topCategories: Boolean = false,
 ) {
-    val state by viewModel.state.collectAsStateWithLifecycle()
+    // Now/next arrives in bursts while scrolling; it is a separate stream read only by the rows and
+    // the preview, so an EPG update no longer recomposes the whole screen (rail, header, list).
+    val state by remember(viewModel) { viewModel.state.map { it.copy(nowNext = emptyMap()) }.distinctUntilChanged() }
+        .collectAsStateWithLifecycle(viewModel.state.value.copy(nowNext = emptyMap()))
+    val nowNext = remember(viewModel) { viewModel.state.map { it.nowNext }.distinctUntilChanged() }
+        .collectAsStateWithLifecycle(viewModel.state.value.nowNext)
     LaunchedEffect(viewModel) {
         viewModel.eventFlow.collect { e ->
             when (e) {
@@ -122,10 +130,10 @@ fun LiveRoute(
         return
     }
     if (LocalCompact.current) {
-        LiveScreenCompact(state, viewModel, playingKey)
+        LiveScreenCompact(state, viewModel, playingKey, nowNext)
         return
     }
-    LiveScreen(state, viewModel, playingKey, onOpenGuide, onOpenNavigation, miniPlayer, onSearch, onMultiview, session, onOpenMultiview, onOpenLanguageFilter)
+    LiveScreen(state, nowNext, viewModel, playingKey, onOpenGuide, onOpenNavigation, miniPlayer, onSearch, onMultiview, session, onOpenMultiview, onOpenLanguageFilter, topCategories)
 }
 
 /**
@@ -139,7 +147,7 @@ internal fun liveRailFocusIndex(hasSearch: Boolean, hasMultiview: Boolean, categ
 
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalFoundationApi::class)
 @Composable
-private fun LiveScreen(state: LiveUiState, vm: LiveViewModel, playingKey: ContentKey?, onOpenGuide: () -> Unit, onOpenNavigation: () -> Unit, miniPlayer: (@Composable (Modifier) -> Unit)? = null, onSearch: (() -> Unit)? = null, onMultiview: ((List<ContentKey>) -> Unit)? = null, session: com.yodesla.omniverse.feature.live.multiview.MultiviewSession? = null, onOpenMultiview: () -> Unit = {}, onOpenLanguageFilter: () -> Unit = {}) {
+private fun LiveScreen(state: LiveUiState, nowNext: androidx.compose.runtime.State<Map<String, NowNextUi>>, vm: LiveViewModel, playingKey: ContentKey?, onOpenGuide: () -> Unit, onOpenNavigation: () -> Unit, miniPlayer: (@Composable (Modifier) -> Unit)? = null, onSearch: (() -> Unit)? = null, onMultiview: ((List<ContentKey>) -> Unit)? = null, session: com.yodesla.omniverse.feature.live.multiview.MultiviewSession? = null, onOpenMultiview: () -> Unit = {}, onOpenLanguageFilter: () -> Unit = {}, topCategories: Boolean = false) {
     val c = OmniTheme.colors
     val context = LocalContext.current
     val channels = vm.channels.collectAsLazyPagingItems()
@@ -149,7 +157,9 @@ private fun LiveScreen(state: LiveUiState, vm: LiveViewModel, playingKey: Conten
     // Task 107: the rail's own scroll state (hoisted here so it survives the brand cross-fade):
     // the selected chip must stay composed, or Left from the channel list has nothing to land on.
     val railListState = rememberLazyListState()
-    var focused by remember { mutableStateOf<ChannelRow?>(null) }
+    // Read only inside FocusedPreview: focusing a row must not recompose the whole screen (rail
+    // included) on every D-pad press.
+    val focusedState = remember { mutableStateOf<ChannelRow?>(null) }
     var showPicker by remember { mutableStateOf(false) }
     var groupNotice by remember { mutableStateOf<String?>(null) }
     var menuRow by remember { mutableStateOf<ChannelRow?>(null) }
@@ -157,8 +167,15 @@ private fun LiveScreen(state: LiveUiState, vm: LiveViewModel, playingKey: Conten
     var movingCat by remember { mutableStateOf<String?>(null) }
     // The release of the hold that picked the category up must not drop it again.
     var dropArmed by remember { mutableStateOf(false) }
-    val groups by vm.groups.groups.collectAsStateWithLifecycle(initialValue = emptyList())
+    // Top category bar (Settings: Horizontal categories): visible on arrival, slides away once a
+    // category is picked or the viewer moves into the list; Back or Up from the first channel
+    // brings it back.
+    var barVisible by remember { mutableStateOf(true) }
     val pickerScope = rememberCoroutineScope()
+    fun hideBar() { if (barVisible) { barVisible = false; pickerScope.launch { delay(250); runCatching { firstChannel.requestFocus() } } } }
+    fun showBar() { barVisible = true; pickerScope.launch { delay(220); runCatching { categoryFocus.requestFocus() } } }
+    androidx.activity.compose.BackHandler(enabled = topCategories && !barVisible && movingCat == null && !showPicker && menuRow == null) { showBar() }
+    val groups by vm.groups.groups.collectAsStateWithLifecycle(initialValue = emptyList())
 
     // Task 107: keep the selected category in view (and composed) so Left from the channel list
     // always lands on it. Only scrolls when it is off-screen, so dwell-select never jumps the rail.
@@ -205,6 +222,27 @@ private fun LiveScreen(state: LiveUiState, vm: LiveViewModel, playingKey: Conten
             }
             Text(rememberTimeText(), style = OmniTheme.type.numeric, color = c.textSecondary)
         }
+        if (topCategories) androidx.compose.animation.AnimatedVisibility(
+            barVisible,
+            enter = androidx.compose.animation.expandVertically() + androidx.compose.animation.fadeIn(),
+            exit = androidx.compose.animation.shrinkVertically() + androidx.compose.animation.fadeOut(),
+        ) {
+            LiveCategoryBar(
+                categories = state.categories,
+                selectedId = state.selectedCategoryId,
+                onSelect = { id -> vm.selectCategory(id); hideBar() },
+                selectedFocus = categoryFocus,
+                onSearch = onSearch,
+                onMultiview = if (onMultiview != null) ({ groupNotice = null; showPicker = true }) else null,
+                onLongPress = { vm.openCategoryMenu(it) },
+                movingId = movingCat,
+                onMove = { id, d -> vm.moveCategory(id, d) },
+                onDrop = { movingCat = null; vm.finishMove() },
+                modifier = Modifier.onPreviewKeyEvent { e ->
+                    if (movingCat == null && e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown) { hideBar(); true } else false
+                },
+            )
+        }
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val previewMinWidth = 420.dp
             val effectiveListWeight = if (maxWidth > 0.dp) {
@@ -213,6 +251,8 @@ private fun LiveScreen(state: LiveUiState, vm: LiveViewModel, playingKey: Conten
             } else listWeight
             Row(Modifier.fillMaxSize()) {
             // Categories: focusing one selects it after a short dwell, so D-pad scrolling stays cheap.
+            // Hidden when Settings puts the categories along the top (LiveCategoryBar above).
+            if (!topCategories)
             FocusPivot(parentFraction = 0.3f, leading = 0.dp) {
                 LazyColumn(
                     state = railListState,
@@ -305,10 +345,14 @@ private fun LiveScreen(state: LiveUiState, vm: LiveViewModel, playingKey: Conten
                         modifier = Modifier
                             .fillMaxSize()
                             .focusRestorer(firstChannel)
-                            .focusProperties { left = categoryFocus }
+                            .focusProperties { if (topCategories) up = categoryFocus else left = categoryFocus }
                             .onPreviewKeyEvent { e ->
                                 // Nothing focusable to the right of the list: Right opens the guide.
-                                if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionRight) { onOpenGuide(); true } else false
+                                if (topCategories && e.type == KeyEventType.KeyDown && e.key == Key.DirectionUp && !barVisible && focusedState.value != null && focusedState.value == channels.peek(0)) { showBar(); true }
+                                else if (topCategories && barVisible && e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown) { barVisible = false; false }
+                                else                                 if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionRight) { onOpenGuide(); true }
+                                // Top-bar layout: nothing to the left of the list but the main menu.
+                                else if (topCategories && e.type == KeyEventType.KeyDown && e.key == Key.DirectionLeft) { onOpenNavigation(); true } else false
                             },
                         contentPadding = PaddingValues(start = OmniSpacing.tvSide, top = OmniSpacing.focusEdge, end = OmniSpacing.tvSide, bottom = OmniSpacing.xxl),
                         verticalArrangement = Arrangement.spacedBy(OmniSpacing.s),
@@ -318,7 +362,7 @@ private fun LiveScreen(state: LiveUiState, vm: LiveViewModel, playingKey: Conten
                         }
                         items(channels.itemCount, key = channels.itemKey { "${it.key.sourceId.value}/${it.key.remoteId.value}" }) { index ->
                             val row = channels[index] ?: return@items
-                            val nn = liveEpgKey(row)?.let { state.nowNext[it] }
+                            val nn = liveEpgKey(row)?.let { nowNext.value[it] }
                             val fav = row.key in state.favorites
                             val ui = remember(row, nn, fav, playingKey) { row.toUi(nn, fav, row.key == playingKey) }
                             ChannelRow(
@@ -326,7 +370,7 @@ private fun LiveScreen(state: LiveUiState, vm: LiveViewModel, playingKey: Conten
                                 onClick = { vm.onChannelClick(row) },
                                 onLongClick = { menuRow = row },
                                 modifier = (if (index == 0) Modifier.focusRequester(firstChannel) else Modifier)
-                                    .onFocusChanged { if (it.isFocused) focused = row },
+                                    .onFocusChanged { if (it.isFocused) focusedState.value = row },
                                 showNext = false,
                             )
                         }
@@ -340,9 +384,9 @@ private fun LiveScreen(state: LiveUiState, vm: LiveViewModel, playingKey: Conten
                 }
             }
             // Preview of the focused channel: see what's on before switching.
-            LivePreviewPane(
-                row = focused,
-                nn = focused?.let(::liveEpgKey)?.let { state.nowNext[it] },
+            FocusedPreview(
+                focusedState = focusedState,
+                nowNext = nowNext,
                 modifier = Modifier.weight(1f - effectiveListWeight).fillMaxHeight().widthIn(min = previewMinWidth).padding(start = OmniSpacing.s, end = OmniSpacing.tvSide, bottom = OmniSpacing.m),
                 video = miniPlayer,
             )
@@ -382,7 +426,7 @@ private fun LiveScreen(state: LiveUiState, vm: LiveViewModel, playingKey: Conten
         val sourceChoices by androidx.compose.runtime.produceState<List<Pair<String, ChannelRow>>>(emptyList(), menu.key) {
             value = vm.sourceChoices(menu)
         }
-        val nn = liveEpgKey(menu)?.let { state.nowNext[it] }
+        val nn = liveEpgKey(menu)?.let { nowNext.value[it] }
         val actions = channelMenuActions(
             ChannelMenuState(
                 favorite = menu.key in state.favorites,
@@ -450,12 +494,23 @@ private fun LiveScreen(state: LiveUiState, vm: LiveViewModel, playingKey: Conten
     }
 
     // Never leave the previous category's programme in the preview while a new page loads.
-    LaunchedEffect(state.selectedCategoryId) { focused = null }
+    LaunchedEffect(state.selectedCategoryId) { focusedState.value = null }
 
     // Land on the first channel once loaded (no "dead" first key press).
     var focusedOnce by remember { mutableStateOf(false) }
     LaunchedEffect(channels.itemCount > 0) {
         if (channels.itemCount > 0 && !focusedOnce) focusedOnce = runCatching { firstChannel.requestFocus() }.isSuccess
+    }
+
+    // Opening on Favorites whose channels are all gone/hidden left an empty, unfocusable page.
+    // On the first visit only, fall back to All channels when Favorites shows nothing.
+    var fallbackChecked by remember { mutableStateOf(false) }
+    LaunchedEffect(state.selectedCategoryId) {
+        if (fallbackChecked || state.selectedCategoryId == null) return@LaunchedEffect
+        if (state.selectedCategoryId != LiveViewModel.FAVORITES) { fallbackChecked = true; return@LaunchedEffect }
+        delay(1_500)
+        fallbackChecked = true
+        if (channels.itemCount == 0) vm.selectCategory(LiveViewModel.ALL)
     }
 
     // Ask for now/next of rows entering the viewport (the VM debounces).
@@ -470,7 +525,7 @@ private fun LiveScreen(state: LiveUiState, vm: LiveViewModel, playingKey: Conten
 /** Phone layout: "Live" title, a horizontal rail of category chips, full-width channel list. */
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalFoundationApi::class)
 @Composable
-private fun LiveScreenCompact(state: LiveUiState, vm: LiveViewModel, playingKey: ContentKey?) {
+private fun LiveScreenCompact(state: LiveUiState, vm: LiveViewModel, playingKey: ContentKey?, nowNext: androidx.compose.runtime.State<Map<String, NowNextUi>>) {
     val c = OmniTheme.colors
     val channels = vm.channels.collectAsLazyPagingItems()
     val firstChannel = remember { FocusRequester() }
@@ -528,7 +583,7 @@ private fun LiveScreenCompact(state: LiveUiState, vm: LiveViewModel, playingKey:
                 }
                 items(channels.itemCount, key = channels.itemKey { "${it.key.sourceId.value}/${it.key.remoteId.value}" }) { index ->
                     val row = channels[index] ?: return@items
-                    val nn = liveEpgKey(row)?.let { state.nowNext[it] }
+                    val nn = liveEpgKey(row)?.let { nowNext.value[it] }
                     val fav = row.key in state.favorites
                     val ui = remember(row, nn, fav, playingKey) { row.toUi(nn, fav, row.key == playingKey) }
                     CompactChannelRow(
@@ -585,6 +640,23 @@ private fun CompactChannelRow(ui: ChannelRowUi, onClick: () -> Unit, onLongClick
             }
         }
     }
+}
+
+/** The preview pane is the only reader of the focused row, so a focus move recomposes just this. */
+@OptIn(kotlinx.coroutines.FlowPreview::class)
+@Composable
+private fun FocusedPreview(
+    focusedState: androidx.compose.runtime.State<ChannelRow?>,
+    nowNext: androidx.compose.runtime.State<Map<String, NowNextUi>>,
+    modifier: Modifier,
+    video: (@Composable (Modifier) -> Unit)?,
+) {
+    // Follow focus once it rests (~150 ms): holding Down no longer rebuilds the pane (logo load,
+    // headline layout) for every channel it passes.
+    val row by remember(focusedState) {
+        snapshotFlow { focusedState.value }.debounce { if (it == null) 0L else 150L }
+    }.collectAsStateWithLifecycle(focusedState.value)
+    LivePreviewPane(row = row, nn = row?.let(::liveEpgKey)?.let { nowNext.value[it] }, modifier = modifier, video = video)
 }
 
 /** Selects a category once focus has rested on it for 300 ms. */

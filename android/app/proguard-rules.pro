@@ -9,3 +9,11 @@
 # WorkManager builds its Room database reflectively (WorkDatabase_Impl.<init>). R8 full mode
 # stripped the no-arg constructor and the release build crashed at startup (2026-09-27).
 -keep class * extends androidx.room.RoomDatabase { <init>(); }
+
+# JNI exports in the bundled Media3 FFmpeg audio decoder use these exact class/method names.
+-keep,includedescriptorclasses class androidx.media3.decoder.ffmpeg.** {
+    native <methods>;
+}
+-keep,includedescriptorclasses class androidx.media3.decoder.ffmpeg.FfmpegAudioDecoder {
+    private java.nio.ByteBuffer growOutputBuffer(androidx.media3.decoder.SimpleDecoderOutputBuffer, int);
+}

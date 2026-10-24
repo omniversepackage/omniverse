@@ -36,3 +36,4 @@ qwen-queue-b/*.txt
 build-*.log
 qa-20*/
 *tmp-check.txt
+/.audio-build/

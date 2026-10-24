@@ -30,14 +30,14 @@ class EpisodeQueueTest {
         assertEquals("a", queue.key.remoteId.value)
         assertEquals("The Show · S1E9", queue.title)
         assertEquals("b", queue.next?.key?.remoteId?.value)
-        assertEquals(42_000, queue.next?.resumeMs)
+        assertEquals(0, queue.next?.resumeMs) // auto-next starts fresh
         assertEquals("c", queue.next?.next?.key?.remoteId?.value)
         assertEquals("Original Provider Title", queue.next?.next?.seriesLookupTitle)
         assertEquals(2013, queue.next?.next?.seriesYear)
         assertNull(queue.next?.next?.next)
     }
 
-    @Test fun startOverRestartsOnlyTheChosenEpisode() {
+    @Test fun startOverRestartsChosenEpisodeAndQueuedOnesStartFresh() {
         val first = episode("a", 1, 12)
         val second = episode("b", 1, 13)
         fun p(id: String) = Progress(ContentKey(source, ContentKind.EPISODE, RemoteId(id)), series, 300_000, 1_440_000, 1)
@@ -45,6 +45,6 @@ class EpisodeQueueTest {
             mapOf("a" to p("a"), "b" to p("b")), fromStart = true)
 
         assertEquals(0, queue.resumeMs)
-        assertEquals(300_000, queue.next?.resumeMs)
+        assertEquals(0, queue.next?.resumeMs)
     }
 }

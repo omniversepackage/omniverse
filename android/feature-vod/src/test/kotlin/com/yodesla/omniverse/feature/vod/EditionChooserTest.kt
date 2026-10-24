@@ -117,12 +117,12 @@ class EditionChooserTest {
         assertEquals(listOf("k:apple:m4", "k:plex:m3", "k:iptv:m2", "self"), editionCopiesRanked(copies, null).map { it.id })
     }
 
-    @Test fun playFollowsWatchProgressThenSavedPickThenTheBestCopy() {
+    @Test fun playFollowsExplicitPickThenWatchProgressThenTheBestCopy() {
         val watchedElsewhere = ecCopies(
             buildPlayOptions(ecKey, "Plex", null, emptyList(), listOf(ecAlt(ecIptv, "IPTV", "1080p"))),
             copyProgress = mapOf(ecIptv to Progress(ecIptv, null, 120_000L, 540_000L, 9L)),
         )
-        assertEquals("k:iptv:m2", chosenEditionCopy(watchedElsewhere, "self")?.id)
+        assertEquals("self", chosenEditionCopy(watchedElsewhere, "self")?.id)
         assertEquals("k:iptv:m2", chosenEditionCopy(watchedElsewhere, null)?.id)
 
         val pickedElsewhere = ecCopies(
@@ -139,6 +139,39 @@ class EditionChooserTest {
             buildPlayOptions(ecKey, "Plex", null, emptyList(), listOf(ecAlt(ecIptv, "IPTV", "1080p"))),
             currentProgress = Progress(ecKey, null, 120_000L, 540_000L, 9L)), null)?.id)
         assertNull(chosenEditionCopy(emptyList(), null))
+    }
+
+    @Test fun selectedSourceSurvivesOpeningItsDetailWithVersionsAndManyAlternatives() {
+        val alternatives = (1..8).map { index ->
+            ecAlt(ContentKey(SourceId("other$index"), ContentKind.VOD, RemoteId("movie$index")), "Other $index", "4K")
+        }
+        val before = buildPlayOptions(ecIptv, "IPTV", null, emptyList(),
+            alternatives + ecAlt(ecKey, "Korys Theatre", null))
+        val selected = before.single { it.key == ecKey }
+        val saved = editionItemPickId(selected.key)
+        val options = buildPlayOptions(ecKey, "Korys Theatre", null,
+            listOf(MediaVersion("file1", 0, "1080p MP4")), alternatives + ecAlt(ecIptv, "IPTV", "4K"))
+        val copies = ecCopies(options, copyProgress = mapOf(ecIptv to Progress(ecIptv, null, 60_000, 540_000, 100)))
+        val chosen = chosenEditionCopy(copies, saved)!!
+        assertEquals(ecKey, chosen.key)
+        assertEquals("file1", chosen.versionId)
+        assertEquals(ecKey, editionCopiesRanked(copies, saved).first().key)
+        assertTrue(visiblePlayOptions(options, chosen.id).first.any { it.key == ecKey })
+    }
+
+    @Test fun savedFileChoiceIsScopedToItsSourceAndItem() {
+        val versions = listOf(MediaVersion("same-id", 0, "1080p"), MediaVersion("best", 1, "4K"))
+        val pick = editionVersionPickId(ecKey, "same-id")
+        assertEquals("same-id", defaultEditionVersionId(versions, pick, ecKey))
+        assertEquals("best", defaultEditionVersionId(versions, pick, ecIptv))
+        val copies = ecCopies(buildPlayOptions(ecKey, "Korys Theatre", null, versions, emptyList()))
+        assertEquals("same-id", chosenEditionCopy(copies, pick)?.versionId)
+        val fromAnotherPage = buildEditionCopies(
+            buildPlayOptions(ecIptv, "IPTV", null, emptyList(), listOf(ecAlt(ecKey, "Korys Theatre", null))),
+            ecIptv, null, null, emptyMap(), emptyMap(), emptyMap(), emptyMap())
+        val chosen = chosenEditionCopy(fromAnotherPage, pick)!!
+        assertEquals(ecKey, chosen.key)
+        assertEquals(pick, chosen.pickForNavigation(pick))
     }
 
     @Test fun aFinishedWatchLeadsNeitherPlayNorTheChooser() {

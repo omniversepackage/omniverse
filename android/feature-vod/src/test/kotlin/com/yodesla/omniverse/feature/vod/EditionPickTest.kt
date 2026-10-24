@@ -30,6 +30,8 @@ import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.test.assertFalse
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -94,8 +96,37 @@ class EditionPickTest {
         vm.selectVersion("v2")
         advanceUntilIdle()
 
-        assertEquals("v:v2", vm.state.value.lastEditionPick)
-        assertEquals("v:v2", user.settings["edition_pick_603"])
+        assertEquals(editionVersionPickId(epKey, "v2"), vm.state.value.lastEditionPick)
+        assertEquals(editionVersionPickId(epKey, "v2"), user.settings["edition_pick_603"])
+    }
+
+    @Test fun navigationWaitsUntilTheDestinationCanReadTheNewSource() = runTest(dispatcher) {
+        val user = EpFakeUserData()
+        val vm = newVm(user)
+        advanceUntilIdle()
+        user.writeBarrier = CompletableDeferred()
+        var navigated = false
+        vm.rememberEditionPick("k:plex:casino") {
+            assertEquals("k:plex:casino", user.settings["edition_pick_603"])
+            navigated = true
+        }
+        advanceUntilIdle()
+        assertFalse(navigated)
+        user.writeBarrier!!.complete(Unit)
+        advanceUntilIdle()
+        assertTrue(navigated)
+    }
+
+    @Test fun anExplicitFileWinsOverAnotherFilesWatchOnReload() = runTest(dispatcher) {
+        val user = EpFakeUserData()
+        val versions = listOf(MediaVersion("v1", 0, "4K"), MediaVersion("v2", 1, "1080p"))
+        user.settings["edition_pick_603"] = editionVersionPickId(epKey, "v2")
+        val progressKey = com.yodesla.omniverse.core.model.mediaProgressKey(epKey, "v1")
+        user.rows[progressKey.remoteId.value] = Progress(progressKey, epKey.remoteId, 30_000, 120_000, 50)
+        val vm = newVm(user, versions)
+        advanceUntilIdle()
+        assertEquals("v2", vm.state.value.selectedVersionId)
+        assertEquals("v2", (vm.moviePlayItem(false)!!.request as PlaybackRequest.Vod).versionId)
     }
 
     @Test fun aTitleWithNoCatalogIdRemembersNothing() = runTest(dispatcher) {
@@ -122,6 +153,7 @@ class EditionPickTest {
 }
 
 private class EpFakeUserData : UserDataRepository {
+    var writeBarrier: CompletableDeferred<Unit>? = null
     val rows = mutableMapOf<String, Progress>()
     val settings = mutableMapOf<String, String>()
 
@@ -140,7 +172,7 @@ private class EpFakeUserData : UserDataRepository {
     override fun recentChannels(limit: Int): Flow<List<ContentKey>> = flowOf(emptyList())
     override suspend fun setHidden(key: ContentKey, hidden: Boolean) = Unit
     override fun setting(key: String): Flow<String?> = flowOf(settings[key])
-    override suspend fun putSetting(key: String, value: String) { settings[key] = value }
+    override suspend fun putSetting(key: String, value: String) { writeBarrier?.await(); settings[key] = value }
 }
 
 private class EpFakeSourceRepository(private val source: ContentSource) : SourceRepository {

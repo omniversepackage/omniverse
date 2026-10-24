@@ -33,6 +33,22 @@ internal const val MAX_EDITION_ALTS = 4
 internal fun editionPickSettingKey(tmdbId: String?): String? =
     tmdbId?.trim()?.takeIf { it.isNotEmpty() }?.let { "edition_pick_$it" }
 
+/** Persistent choices identify the source/item, independent of which detail page is open. */
+internal fun editionItemPickId(key: ContentKey): String = "k:${key.sourceId.value}:${key.remoteId.value}"
+
+internal fun editionVersionPickId(key: ContentKey, versionId: String): String =
+    "${editionItemPickId(key)}:v:$versionId"
+
+internal fun EditionCopy.savedPickId(): String =
+    versionId?.let { editionVersionPickId(key, it) } ?: editionItemPickId(key)
+
+private fun EditionCopy.matchesPick(pick: String?): Boolean = pick != null &&
+    (pick == savedPickId() || pick == editionItemPickId(key) || pick == id ||
+        (versionId == null && pick.startsWith("${editionItemPickId(key)}:v:")))
+
+internal fun EditionCopy.pickForNavigation(previousPick: String?): String =
+    previousPick?.takeIf { matchesPick(it) } ?: savedPickId()
+
 private val resolutionToken = Regex("""(?i)\b(8k|8 k|4320p?|4k|4 k|uhd|2160p?|1440p?|qhd|2k|2 k|1080p?|fhd|720p?|hd)\b""")
 private val dolbyVisionToken = Regex("""(?i)dolby\s*vision|hdr10\+|\bdv\b""")
 private val hdrToken = Regex("""(?i)\bhdr\b|\bhdr10\b""")
@@ -104,15 +120,15 @@ internal fun buildEditionCopies(
 }
 
 /**
- * List order: the copy holding an unfinished watch (newest first), then this profile's saved pick,
+ * List order: this profile's explicit pick, then an unfinished watch (newest first),
  * then the best resolution, then the more trustworthy source when quality ties, then name.
  * A finished watch leads nothing — it is a reason to rewatch, not a reason to default.
  */
 internal fun editionCopiesRanked(copies: List<EditionCopy>, lastPickId: String?): List<EditionCopy> =
     copies.sortedWith(
-        compareByDescending<EditionCopy> { it.progress != null && !isWatchedProgress(it.progress) }
+        compareByDescending<EditionCopy> { it.matchesPick(lastPickId) }
+            .thenByDescending { it.progress != null && !isWatchedProgress(it.progress) }
             .thenByDescending { it.progress?.takeIf { p -> !isWatchedProgress(p) }?.updatedMs ?: 0L }
-            .thenByDescending { if (it.id == lastPickId) 1 else 0 }
             .thenByDescending { resolutionRank(it.resolution) }
             .thenByDescending { sourceReliability(it.sourceName) }
             .thenBy { it.sourceName.lowercase() }
@@ -121,12 +137,11 @@ internal fun editionCopiesRanked(copies: List<EditionCopy>, lastPickId: String?)
     )
 
 /**
- * The copy Play will use: the one holding an unfinished watch, else this profile's saved pick,
+ * The copy Play will use: this profile's explicit pick, else an unfinished watch,
  * else the best copy standing — highest resolution, Plex before IPTV when quality ties.
  */
 internal fun chosenEditionCopy(copies: List<EditionCopy>, lastPickId: String?): EditionCopy? {
-    val watched = copies.filter { it.progress != null && !isWatchedProgress(it.progress) }.maxByOrNull { it.progress!!.updatedMs }
-    return watched ?: copies.firstOrNull { it.id == lastPickId } ?: editionCopiesRanked(copies, lastPickId).firstOrNull()
+    return editionCopiesRanked(copies, lastPickId).firstOrNull()
 }
 
 /** One copy needs no chooser at all: Play stays a single button press. */
@@ -153,7 +168,10 @@ internal fun editionResumeMinutes(copy: EditionCopy): Long? {
 }
 
 /** The file Play should open inside the item being viewed when nothing watched or saved says otherwise. */
-internal fun defaultEditionVersionId(versions: List<com.yodesla.omniverse.core.model.MediaVersion>, lastPickId: String?): String? {
+internal fun pickedEditionVersionId(versions: List<com.yodesla.omniverse.core.model.MediaVersion>, lastPickId: String?, key: ContentKey? = null): String? {
     val picked = lastPickId?.takeIf { it.startsWith("v:") }?.removePrefix("v:")?.takeIf { id -> versions.any { it.id == id } }
-    return picked ?: versions.maxByOrNull { qualityRank(it.label) }?.id ?: versions.firstOrNull()?.id
+    return versions.firstOrNull { key != null && editionVersionPickId(key, it.id) == lastPickId }?.id ?: picked
 }
+
+internal fun defaultEditionVersionId(versions: List<com.yodesla.omniverse.core.model.MediaVersion>, lastPickId: String?, key: ContentKey? = null): String? =
+    pickedEditionVersionId(versions, lastPickId, key) ?: versions.maxByOrNull { qualityRank(it.label) }?.id ?: versions.firstOrNull()?.id

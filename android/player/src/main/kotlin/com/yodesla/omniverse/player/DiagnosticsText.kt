@@ -14,15 +14,25 @@ fun PlaybackDiagnostics.lines(): List<String> {
         DeliveryMode.TRANSCODE -> "Transcoding"
         DeliveryMode.UNKNOWN -> "Unknown"
     }
-    return listOf(
+    // A whole-file average (size ÷ duration) beats the codec field, which MKV/MP4 usually leave blank.
+    val bitrate = when {
+        averageBitrate > 0 -> "${mbps(averageBitrate)} (whole-file average)"
+        encodedBitrate > 0 -> "${mbps(encodedBitrate.toLong())} video"
+        else -> "Unknown"
+    }
+    return listOfNotNull(
         "Playback  $delivery",
         "Video  ${if (width > 0 && height > 0) "${width}×$height" else "Unknown"}  ·  ${if (frameRate > 0) "${"%.2f".format(frameRate)} source fps" else "Source FPS unknown"}",
         "Aspect ratio  $ratio",
         "Codecs  ${videoCodec ?: "Unknown"} video  ·  ${audioCodec ?: "Unknown"} audio",
-        "Encoded video bitrate  ${if (encodedBitrate > 0) "${"%.1f".format(encodedBitrate / 1_000_000.0)} Mb/s" else "Unknown"}",
+        "Bitrate  $bitrate",
+        if (networkBitrate > 0) "Download speed now  ${mbps(networkBitrate)}" else null,
+        sourceHost?.let { "Server  $it" },
         "Buffered  ${bufferedMs / 1000} s",
     )
 }
+
+private fun mbps(bps: Long) = "${"%.1f".format(bps / 1_000_000.0)} Mb/s"
 
 private fun gcd(a: Int, b: Int): Int {
     var x = a

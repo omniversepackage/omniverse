@@ -3,6 +3,8 @@ package com.yodesla.omniverse.feature.vod
 import com.yodesla.omniverse.core.model.Episode
 import com.yodesla.omniverse.core.model.Season
 import com.yodesla.omniverse.core.model.SeriesDetail
+import com.yodesla.omniverse.core.model.ContentKey
+import com.yodesla.omniverse.core.model.ContentKind
 
 /** One playable copy of an episode. The source and parent series are carried by [episode]. */
 data class EpisodeSource(val episode: Episode, val sourceName: String)
@@ -48,3 +50,11 @@ internal fun episodeSlot(episode: Episode): Pair<Int, Int> = episode.season to e
 
 internal fun episodeProgressId(episode: Episode): String =
     "${episode.sourceId.value}|${episode.remoteId.value}"
+
+/** Continue keeps the episode number, but honors the source the viewer explicitly selected. */
+internal fun episodeFromPickedSource(episode: Episode, options: List<EpisodeSource>, savedPick: String?): Episode =
+    options.firstOrNull { option ->
+        val candidate = option.episode
+        episodeSlot(candidate) == episodeSlot(episode) &&
+            editionItemPickId(ContentKey(candidate.sourceId, ContentKind.SERIES, candidate.seriesId)) == savedPick
+    }?.episode ?: episode

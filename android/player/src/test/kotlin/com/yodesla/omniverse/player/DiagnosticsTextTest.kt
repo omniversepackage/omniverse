@@ -39,4 +39,19 @@ class DiagnosticsTextTest {
     @Test fun transcodeModeIsShownWhenReportedByTheSource() {
         assertContains(PlaybackDiagnostics(deliveryMode = DeliveryMode.TRANSCODE).lines()[0], "Transcoding")
     }
+
+    @Test fun averageBitrateNetworkSpeedAndServerAreShownWhenKnown() {
+        val lines = PlaybackDiagnostics(averageBitrate = 24_500_000, encodedBitrate = 8_000_000,
+            networkBitrate = 95_000_000, sourceHost = "plex.example.com").lines()
+        assertContains(lines[4], "24.5 Mb/s (whole-file average)")
+        assertTrue(lines.any { it == "Download speed now  95.0 Mb/s" })
+        assertTrue(lines.any { it == "Server  plex.example.com" })
+        assertTrue(lines.last().contains("Buffered"))
+    }
+
+    @Test fun totalFileBytesPrefersContentRangeTotal() {
+        kotlin.test.assertEquals(5_000_000_000, totalFileBytes(mapOf("content-range" to listOf("bytes 0-1023/5000000000"), "Content-Length" to listOf("1024"))))
+        kotlin.test.assertEquals(2048, totalFileBytes(mapOf("Content-Length" to listOf("2048"))))
+        kotlin.test.assertEquals(null, totalFileBytes(mapOf("Content-Range" to listOf("bytes 0-1023/*"))))
+    }
 }

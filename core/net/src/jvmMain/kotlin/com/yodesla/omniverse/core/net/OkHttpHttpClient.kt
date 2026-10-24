@@ -64,6 +64,10 @@ class OkHttpHttpClient(
 
     companion object {
         fun defaultOkHttp(): OkHttpClient = OkHttpClient.Builder()
+            // Plex encodes the connection IP in this TLS hostname. Some router DNS services
+            // reject its private-address answer. Dial that encoded IP while retaining the
+            // original hostname for SNI and normal certificate/hostname verification.
+            .dns { host -> plexDirectAddress(host)?.let { listOf(it) } ?: okhttp3.Dns.SYSTEM.lookup(host) }
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .followRedirects(true)
@@ -71,6 +75,15 @@ class OkHttpHttpClient(
             .retryOnConnectionFailure(true)
             .build()
     }
+}
+
+internal fun plexDirectAddress(host: String): java.net.InetAddress? {
+    val labels = host.lowercase().split('.')
+    if (labels.size != 4 || labels[2] != "plex" || labels[3] != "direct") return null
+    if (!Regex("[a-z0-9-]+").matches(labels[1])) return null
+    val octets = labels[0].split('-').map { it.toIntOrNull() ?: return null }
+    if (octets.size != 4 || octets.any { it !in 0..255 }) return null
+    return java.net.InetAddress.getByAddress(host, octets.map { it.toByte() }.toByteArray())
 }
 
 private class OkHttpResponse(

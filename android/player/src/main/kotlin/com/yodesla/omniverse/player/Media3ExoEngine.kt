@@ -20,13 +20,12 @@ import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.video.MediaCodecVideoRenderer
 import androidx.media3.exoplayer.video.VideoRendererEventListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.extractor.DefaultExtractorsFactory
-import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import com.yodesla.omniverse.core.model.MimeHint
 import com.yodesla.omniverse.core.model.PlaybackSpec
 import kotlinx.coroutines.CoroutineScope
@@ -94,22 +93,63 @@ class Media3ExoEngine(
 
     fun skipAnalysisLatestPositionMs(): Long? = audioFeatures.latestPositionMs()
 
+    private val transferListener = object : androidx.media3.datasource.TransferListener {
+            override fun onTransferInitializing(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) {}
+            override fun onTransferStart(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) {
+                if (totalBytes > 0) return
+                val size = totalFileBytes(source.responseHeaders) ?: return
+                mainHandler.post { if (totalBytes == 0L && player.currentManifest == null) { totalBytes = size; publishDiagnostics() } }
+            }
+            override fun onBytesTransferred(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean, bytesTransferred: Int) {}
+            override fun onTransferEnd(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) {}
+        }
+
     private val http = DefaultHttpDataSource.Factory()
         .setUserAgent(userAgent)
         .setAllowCrossProtocolRedirects(true)
         .setConnectTimeoutMs(8_000)
         .setReadTimeoutMs(15_000)
+        .setTransferListener(transferListener)
 
-    private val extractors = DefaultExtractorsFactory()
-        .setTsExtractorFlags(
-            DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or
-                DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS,
-        )
+    private val extractors = OmniverseExtractorsFactory()
+
+    private val plexHttp = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(
+        com.yodesla.omniverse.core.net.OkHttpHttpClient.defaultOkHttp().newBuilder()
+            .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .build(),
+    ).setUserAgent(userAgent).setTransferListener(transferListener)
+
+    private val mediaSources = DefaultMediaSourceFactory(http, extractors)
+
+    private fun configureHttp(spec: PlaybackSpec) {
+        http.setDefaultRequestProperties(spec.headers)
+        plexHttp.setDefaultRequestProperties(spec.headers)
+        val host = android.net.Uri.parse(spec.url).host.orEmpty()
+        mediaSources.setDataSourceFactory(if (host.endsWith(".plex.direct", ignoreCase = true)) plexHttp else http)
+    }
 
     /** Exposed only for the surface composable; feature code talks to [PlayerEngine]. */
     val player: ExoPlayer = ExoPlayer.Builder(
         context,
         object : DefaultRenderersFactory(context) {
+            override fun buildAudioRenderers(
+                context: Context,
+                extensionRendererMode: Int,
+                mediaCodecSelector: MediaCodecSelector,
+                enableDecoderFallback: Boolean,
+                audioSink: AudioSink,
+                eventHandler: Handler,
+                eventListener: androidx.media3.exoplayer.audio.AudioRendererEventListener,
+                out: ArrayList<Renderer>,
+            ) {
+                // Keep hardware decoding and HDMI passthrough first. The bundled decoder handles
+                // formats missing from devices such as Onn (notably DTS/DTS-HD), emitting PCM.
+                super.buildAudioRenderers(context, EXTENSION_RENDERER_MODE_OFF, mediaCodecSelector,
+                    enableDecoderFallback, audioSink, eventHandler, eventListener, out)
+                out.add(androidx.media3.decoder.ffmpeg.FfmpegAudioRenderer(eventHandler, eventListener, audioSink))
+            }
+
             override fun buildVideoRenderers(
                 context: Context,
                 extensionRendererMode: Int,
@@ -162,7 +202,7 @@ class Media3ExoEngine(
                 .setPrioritizeTimeOverSizeThresholds(false)
                 .build(),
         )
-        .setMediaSourceFactory(DefaultMediaSourceFactory(http, extractors))
+        .setMediaSourceFactory(mediaSources)
         .setHandleAudioBecomingNoisy(true)
         .build()
 
@@ -178,6 +218,11 @@ class Media3ExoEngine(
     private var primeWatchdog: Job? = null
     private var reconnectJob: Job? = null
     private var frameRateDrivenBySurface = false
+    // Playback info panel: the file's full size (from HTTP headers) gives a direct-play title's true
+    // average bitrate; bandwidth is the live download-speed estimate.
+    @Volatile private var totalBytes = 0L
+    private val mainHandler = Handler(android.os.Looper.getMainLooper())
+    private var bandwidthBps = 0L
 
     /**
      * Task 100: with "Always" the player drives the display itself through [VideoFrameRateApplier]
@@ -235,6 +280,12 @@ class Media3ExoEngine(
             override fun onTracksChanged(tracks: Tracks) = publishTracks(tracks)
             override fun onVideoSizeChanged(videoSize: VideoSize) = publishTracks(player.currentTracks)
         })
+        player.addAnalyticsListener(object : AnalyticsListener {
+            override fun onBandwidthEstimate(eventTime: AnalyticsListener.EventTime, totalLoadTimeMs: Int, totalBytesLoaded: Long, bitrateEstimate: Long) {
+                bandwidthBps = bitrateEstimate
+                publishDiagnostics()
+            }
+        })
     }
 
     override fun play(spec: PlaybackSpec, startPositionMs: Long) = open(spec, startPositionMs, resetAttempts = true)
@@ -250,9 +301,10 @@ class Media3ExoEngine(
             retryPolicy.reset()
         }
         current = spec
-        _diagnostics.value = PlaybackDiagnostics(deliveryMode = spec.deliveryMode)
+        totalBytes = 0L; bandwidthBps = 0L
+        _diagnostics.value = PlaybackDiagnostics(deliveryMode = spec.deliveryMode, sourceHost = hostOf(spec))
         wantPlaying = true
-        http.setDefaultRequestProperties(spec.headers)
+        configureHttp(spec)
         player.videoChangeFrameRateStrategy =
             if (spec.isLive || frameRateDrivenBySurface) C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF
             else C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_ONLY_IF_SEAMLESS
@@ -281,9 +333,10 @@ class Media3ExoEngine(
         attempt = 1
         retryPolicy.reset()
         current = spec
-        _diagnostics.value = PlaybackDiagnostics(deliveryMode = spec.deliveryMode)
+        totalBytes = 0L; bandwidthBps = 0L
+        _diagnostics.value = PlaybackDiagnostics(deliveryMode = spec.deliveryMode, sourceHost = hostOf(spec))
         wantPlaying = false
-        http.setDefaultRequestProperties(spec.headers)
+        configureHttp(spec)
         player.videoChangeFrameRateStrategy =
             if (spec.isLive) C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF
             else C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_ONLY_IF_SEAMLESS
@@ -343,6 +396,7 @@ class Media3ExoEngine(
         reconnectJob?.cancel()
         player.stop()
         current = null
+        totalBytes = 0L; bandwidthBps = 0L
         _diagnostics.value = PlaybackDiagnostics()
         _state.value = PlayerState.Idle
     }
@@ -475,8 +529,15 @@ class Media3ExoEngine(
             encodedBitrate = video?.bitrate?.takeIf { it > 0 } ?: 0,
             bufferedMs = player.totalBufferedDuration.coerceAtLeast(0),
             deliveryMode = current?.deliveryMode ?: com.yodesla.omniverse.core.model.DeliveryMode.UNKNOWN,
+            averageBitrate = player.duration
+                .takeIf { totalBytes > 0 && it != C.TIME_UNSET && it > 0 && current?.isLive != true }
+                ?.let { totalBytes * 8_000 / it } ?: 0L,
+            networkBitrate = bandwidthBps,
+            sourceHost = current?.let(::hostOf),
         )
     }
+
+    private fun hostOf(spec: PlaybackSpec): String? = runCatching { android.net.Uri.parse(spec.url).host }.getOrNull()
 
     private fun handleError(error: PlaybackException) {
         val spec = current ?: return
@@ -609,3 +670,11 @@ private fun bufferBytes(context: Context, override: Int): Int {
  */
 internal fun shouldReleasePrime(wantPlaying: Boolean, isPlaying: Boolean, primed: Boolean): Boolean =
     primed && !wantPlaying && !isPlaying
+
+/** Full size of the resource from `Content-Range: bytes a-b/TOTAL`, else from a whole-file `Content-Length`. */
+internal fun totalFileBytes(headers: Map<String, List<String>>): Long? {
+    fun header(name: String) = headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value?.firstOrNull()
+    // A partial response's Content-Length is only the chunk, so never fall back to it here.
+    header("Content-Range")?.let { return it.substringAfterLast('/', "").trim().toLongOrNull()?.takeIf { n -> n > 0 } }
+    return header("Content-Length")?.trim()?.toLongOrNull()?.takeIf { it > 0 }
+}

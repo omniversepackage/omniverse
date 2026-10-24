@@ -81,7 +81,9 @@ class PlexLink(
             // A server's LAN addresses only mean something on its own network (Plex's clients gate them
             // on publicAddressMatches). Elsewhere, e.g. a friend's shared server, they point at whatever
             // device happens to own that IP on the viewer's network.
-            val conns = if (r.bool("publicAddressMatches") == false) all.filter { it.bool("local") != true } else all
+            // A VPN can change an owned server's public address while its LAN remains reachable.
+            // The app probes identity without credentials before selecting any candidate.
+            val conns = if (r.bool("publicAddressMatches") == false && r.bool("owned") != true) all.filter { it.bool("local") != true } else all
             val localFirst = conns.filter { it.bool("local") == true } + conns.filter { it.bool("local") != true }
             // Plain http://LAN-IP:port first for local connections: *.plex.direct names can fail to
             // resolve behind DNS-rebinding protection (Pi-hole, many routers).

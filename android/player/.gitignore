@@ -1,0 +1,2 @@
+# Optional private media for device tests; excluded from source control and the app APK.
+/src/androidTest/assets/pokemon-prefix.mkv

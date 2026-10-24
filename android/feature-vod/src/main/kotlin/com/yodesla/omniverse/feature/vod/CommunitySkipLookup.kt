@@ -15,3 +15,8 @@ data class CommunitySkipQuery(
 fun interface CommunitySkipLookup {
     suspend fun lookup(query: CommunitySkipQuery): List<SkipMarker>
 }
+
+/** Unverified episode credits must fit in the final fifth, capped at five minutes. */
+fun plausibleCommunityCredits(marker: SkipMarker, durationMs: Long, episode: Boolean): Boolean =
+    marker.type != "credits" || !episode ||
+        (durationMs > 0 && marker.startMs >= durationMs - minOf(durationMs / 5, 300_000L))

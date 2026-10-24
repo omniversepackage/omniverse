@@ -165,6 +165,7 @@ class AppGraph(context: Context, val brand: BrandConfig) {
             userData.clearStaleSyncStages()
             currentProfileCache = profiles.currentProfile().id
             StartupTrace.mark("profiles ready")
+            sources.sources().first().forEach { reconnectPlex(it.id) }
         }
         appScope.launch { profiles.current().collect { currentProfileCache = it.id } }
     }
@@ -335,7 +336,9 @@ class AppGraph(context: Context, val brand: BrandConfig) {
     val searchExcludedCategoryKeys: kotlinx.coroutines.flow.Flow<Set<String>> by lazy {
         kotlinx.coroutines.flow.combine(vodExcludedCategoryKeys, userData.hiddenCategoryKeys()) { off, hidden -> off + hidden }
     }
-    val plexLinker: AppPlexLinker by lazy { AppPlexLinker(http, userData, secrets = secretBox) }
+    val plexLinker: AppPlexLinker by lazy {
+        AppPlexLinker(http, userData, secrets = secretBox, localConnections = ::discoverLocalPlexConnections)
+    }
     /** Task 91: app-level Now Playing holder. The active player publishes a snapshot here (at most
      *  every 1 s; null when nothing plays) and registers its control hooks while it plays. */
     val nowPlaying = MutableStateFlow<com.yodesla.omniverse.core.model.NowPlaying?>(null)
@@ -499,7 +502,27 @@ class AppGraph(context: Context, val brand: BrandConfig) {
     suspend fun syncSourceNow(id: SourceId, scope: SyncScope = SyncScope.ALL, force: Boolean = true): Boolean =
         runSync(id, scope, force)
 
+    private suspend fun reconnectPlex(id: SourceId) {
+        val current = sources.config(id) as? SourceConfig.Plex ?: return
+        try {
+            val refreshed = plexLinker.reconnect(current) ?: run {
+                Log.w(TAG, "Plex discovery found no verified connection for ${current.displayName}")
+                return
+            }
+            if (refreshed.server != current.server || refreshed.token != current.token) {
+                sources.update(refreshed)
+                Log.i(TAG, "Plex connection rediscovered for ${current.displayName}")
+                StartupTrace.mark("Plex connection repaired: ${current.displayName}")
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            Log.w(TAG, "Plex connection discovery unavailable for ${current.displayName}")
+        }
+    }
+
     private suspend fun runSync(id: SourceId, scope: SyncScope = SyncScope.ALL, force: Boolean = false): Boolean {
+        reconnectPlex(id)
         val t0 = android.os.SystemClock.elapsedRealtime()
         var stage: Any? = null
         var sawSeriesStage = false

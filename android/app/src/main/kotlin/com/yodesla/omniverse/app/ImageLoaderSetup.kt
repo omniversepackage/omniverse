@@ -35,6 +35,11 @@ object ImageCacheConfig {
  *  picked up automatically from coil-network-okhttp's ServiceLoader registration. */
 fun newAppImageLoader(context: Context): ImageLoader =
     ImageLoader.Builder(context)
+        .components {
+            add(coil3.network.okhttp.OkHttpNetworkFetcherFactory(
+                callFactory = { com.yodesla.omniverse.core.net.OkHttpHttpClient.defaultOkHttp() },
+            ))
+        }
         .diskCache {
             DiskCache.Builder()
                 .directory((context.cacheDir.absolutePath + "/" + ImageCacheConfig.DISK_DIR_NAME).toPath())

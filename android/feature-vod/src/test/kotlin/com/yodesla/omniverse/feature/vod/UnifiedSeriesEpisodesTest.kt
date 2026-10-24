@@ -13,6 +13,15 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 class UnifiedSeriesEpisodesTest {
+    @Test fun continueUsesTheExplicitSourceEvenWhenAnotherCopyHoldsTheWatch() {
+        val watched = episode("iptv", "i", 1, 4, "i4")
+        val selected = episode("plex", "p", 1, 4, "p4")
+        val options = listOf(EpisodeSource(watched, "IPTV"), EpisodeSource(selected, "Korys Theatre"))
+        val pick = editionItemPickId(ContentKey(selected.sourceId, ContentKind.SERIES, selected.seriesId))
+        assertEquals(selected, episodeFromPickedSource(watched, options, pick))
+        assertEquals(watched, episodeFromPickedSource(watched, options, null))
+        assertEquals(watched, episodeFromPickedSource(watched, listOf(options.first()), pick))
+    }
     private fun episode(source: String, series: String, season: Int, number: Int, id: String) = Episode(
         SourceId(source), RemoteId(id), RemoteId(series), season, number, "Episode $number", null, 1200,
         null, "mkv", null,

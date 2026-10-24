@@ -478,7 +478,9 @@ class DetailViewModel(
                         // as the Continue Watching resume point instead of being marked watched.
                         if (legacyDuration != null) userData.saveProgress(key, null, legacyDuration, legacyDuration)
                     }
-                    val selected = versionProgress.maxByOrNull { it.value.updatedMs }?.key ?: defaultEditionVersionId(d.versions, lastPick)
+                    val selected = pickedEditionVersionId(d.versions, lastPick, key)
+                        ?: versionProgress.maxByOrNull { it.value.updatedMs }?.key
+                        ?: defaultEditionVersionId(d.versions, lastPick, key)
                     val p = selected?.let(versionProgress::get) ?: if (d.versions.size > 1) null else legacyProgress
                     _state.update {
                         it.copy(
@@ -637,10 +639,10 @@ class DetailViewModel(
         if (_state.value.movie?.versions?.any { it.id == id } == true) {
             _state.update { state ->
                 val primaryId = state.movie?.versions?.firstOrNull()?.id
-                state.copy(selectedVersionId = id, lastEditionPick = "v:$id",
+                state.copy(selectedVersionId = id, lastEditionPick = editionVersionPickId(key, id),
                     progress = state.versionProgress[id] ?: if (id == primaryId) state.legacyMovieProgress else null)
             }
-            rememberEditionPick("v:$id")
+            rememberEditionPick(editionVersionPickId(key, id))
         }
     }
 
@@ -649,10 +651,15 @@ class DetailViewModel(
      * next time the title opens Play and the Version chip follow it. Blank/absent id = nothing to
      * remember (a source with no trustworthy catalog id cannot be merged with another anyway).
      */
-    fun rememberEditionPick(optionId: String) {
-        val settingKey = editionPickSettingKey(_state.value.tmdbId) ?: return
+    fun rememberEditionPick(optionId: String, onRemembered: () -> Unit = {}) {
+        val settingKey = editionPickSettingKey(_state.value.tmdbId)
         _state.update { it.copy(lastEditionPick = optionId) }
-        viewModelScope.launch { userData.putSetting(settingKey, optionId) }
+        viewModelScope.launch {
+            if (settingKey != null) userData.putSetting(settingKey, optionId)
+            // Navigate only after the destination page can read the choice. Otherwise disposing
+            // this ViewModel can cancel the write, or the new page can load the previous value.
+            onRemembered()
+        }
     }
 
     fun moviePlayItem(fromStart: Boolean): PlayItem? {
@@ -775,7 +782,8 @@ internal fun buildEpisodeQueue(ep: Episode, all: List<Episode>, seriesKey: Conte
         return PlayItem(
             PlaybackRequest.EpisodeItem(seriesKey.sourceId, e.remoteId, e.containerExt), k, seriesKey.remoteId,
             label,
-            progress[e.remoteId.value]?.positionMs?.takeIf { !(fromStart && e.remoteId == ep.remoteId) } ?: 0L, next,
+            // Only the chosen episode resumes; auto-next episodes always start fresh.
+            progress[e.remoteId.value]?.positionMs?.takeIf { e.remoteId == ep.remoteId && !fromStart } ?: 0L, next,
             tmdbId = tmdbId, season = e.season, episode = e.number, durationMs = e.durationSec?.times(1000L),
             seriesLookupTitle = seriesLookupTitle, seriesYear = seriesYear,
         )
@@ -905,15 +913,15 @@ fun DetailRoute(viewModel: DetailViewModel, visibility: kotlinx.coroutines.flow.
     fun pickPlayOption(option: PlayOption) {
         when {
             option.key == currentKey && option.versionId != null -> viewModel.selectVersion(option.versionId)
-            option.key != currentKey -> { viewModel.rememberEditionPick(option.id); onOpen(option.key) }
+            option.key != currentKey -> viewModel.rememberEditionPick(editionItemPickId(option.key)) { onOpen(option.key) }
+            else -> viewModel.rememberEditionPick(editionItemPickId(option.key))
         }
     }
     /** Play follows the copy the viewer last watched or picked; with neither, the best copy standing. */
     fun playChosenCopy(fromStart: Boolean) {
         val copy = chosenCopy
         if (copy != null && copy.key != currentKey) {
-            if (copy.id != s.lastEditionPick) viewModel.rememberEditionPick(copy.id)
-            onOpen(copy.key)
+            viewModel.rememberEditionPick(copy.pickForNavigation(s.lastEditionPick)) { onOpen(copy.key) }
         } else viewModel.moviePlayItem(fromStart)?.let(onPlay)
     }
     val chips: @Composable () -> Unit = { PlayOptionChips(playOptions, selectedOptionId, ::pickPlayOption, { showSources = true }) }
@@ -1028,8 +1036,9 @@ fun DetailRoute(viewModel: DetailViewModel, visibility: kotlinx.coroutines.flow.
             chosenId = chosenCopy?.id,
             onPick = { copy ->
                 showSources = false
-                if (copy.key != currentKey) { viewModel.rememberEditionPick(copy.id); onOpen(copy.key) }
+                if (copy.key != currentKey) viewModel.rememberEditionPick(copy.savedPickId()) { onOpen(copy.key) }
                 else if (copy.versionId != null) viewModel.selectVersion(copy.versionId)
+                else viewModel.rememberEditionPick(copy.savedPickId())
             },
             onDismiss = { showSources = false },
         )
@@ -1400,7 +1409,8 @@ private fun SeriesActions(s: DetailState, vm: DetailViewModel, onPlay: (PlayItem
     val copies = s.episodeSources.values.flatten().map { it.episode }.ifEmpty { all }
     val last = lastProg?.let { p -> copies.firstOrNull { it.sourceId == p.key.sourceId && it.remoteId == p.key.remoteId } }
     val focus = s.focusEpisodeId?.let { id -> all.firstOrNull { it.remoteId == id } }
-    val start = focus ?: (if (lastProg?.completed == true && last != null) all.getOrNull(all.indexOfFirst { it.season == last.season && it.number == last.number } + 1) ?: last else last ?: all.firstOrNull())
+    val resumeEpisode = focus ?: (if (lastProg?.completed == true && last != null) all.getOrNull(all.indexOfFirst { it.season == last.season && it.number == last.number } + 1) ?: last else last ?: all.firstOrNull())
+    val start = resumeEpisode?.let { episodeFromPickedSource(it, s.episodeSources[episodeSlot(it)].orEmpty(), s.lastEditionPick) }
     FlowRow(Modifier.padding(horizontal = OmniSpacing.tvSide), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (start != null) {
             DetailActionButton(
@@ -1408,7 +1418,8 @@ private fun SeriesActions(s: DetailState, vm: DetailViewModel, onPlay: (PlayItem
                 { onPlay(vm.episodePlayItem(start)) }, Modifier.focusRequester(primary), primary = true,
             )
             if (last != null && (s.progressFor(last)?.positionMs ?: 0L) > 0L) {
-                DetailActionButton("Start over", { onPlay(vm.episodePlayItem(last, fromStart = true)) })
+                DetailActionButton("Start over", { onPlay(vm.episodePlayItem(
+                    episodeFromPickedSource(last, s.episodeSources[episodeSlot(last)].orEmpty(), s.lastEditionPick), fromStart = true)) })
             }
         }
         DetailActionButton(if (s.favorite) "In My List" else "+ My List", { vm.toggleFavorite() })

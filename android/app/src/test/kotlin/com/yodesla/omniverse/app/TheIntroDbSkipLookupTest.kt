@@ -34,6 +34,15 @@ private class RoutedHttpClient(private val responseFor: (String) -> FakeHttpResp
 }
 
 class TheIntroDbSkipLookupTest {
+    @Test fun rejectsActualMushokuEarlyCreditsForEpisodesFiveSixAndSeven() = runBlocking {
+        for ((episode, start, end) in listOf(Triple(5, 971727L, 1415083L), Triple(6, 971697L, 1415042L), Triple(7, 971758L, 1415125L))) {
+            val response = FakeHttpResponse(200,
+                """{"tmdb_id":94664,"type":"tv","season":1,"episode":$episode,"credits":[{"start_ms":$start,"end_ms":$end}]}""")
+            assertTrue(TheIntroDbSkipLookup(FakeHttpClient(response))
+                .lookup(CommunitySkipQuery("94664", 1, episode, 1_421_010)).isEmpty())
+        }
+    }
+
     @Test fun iptvSeriesWithoutCatalogIdUsesUniqueExactTvmazeMatchThenImdbLookup() = runBlocking {
         val http = RoutedHttpClient { url ->
             if (url.contains("tvmaze.com")) FakeHttpResponse(200, """[
@@ -121,7 +130,7 @@ class TheIntroDbSkipLookupTest {
         val response = FakeHttpResponse(200, """
             {"tmdb_id":1396,"type":"tv","season":1,"episode":1,
              "intro":[{"end_ms":500000},{"end_ms":90000}],
-             "credits":[{"start_ms":100000,"end_ms":150000},{"start_ms":3500000,"end_ms":3800000},{"start_ms":2900000,"end_ms":null}]}
+             "credits":[{"start_ms":100000,"end_ms":150000},{"start_ms":3500000,"end_ms":3800000},{"start_ms":2900000,"end_ms":null},{"start_ms":3431000,"end_ms":null}]}
         """.trimIndent())
         val lookup = TheIntroDbSkipLookup(FakeHttpClient(response))
         val markers = lookup.lookup(CommunitySkipQuery("1396", 1, 1, 3_600_000))

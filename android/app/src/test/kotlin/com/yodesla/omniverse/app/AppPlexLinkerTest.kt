@@ -2,6 +2,8 @@ package com.yodesla.omniverse.app
 
 import com.yodesla.omniverse.core.data.UserDataRepository
 import com.yodesla.omniverse.core.data.Progress
+import com.yodesla.omniverse.core.model.SourceId
+import com.yodesla.omniverse.core.source.SourceConfig
 import com.yodesla.omniverse.core.model.ContentKey
 import com.yodesla.omniverse.core.model.ContentKind
 import com.yodesla.omniverse.core.model.RemoteId
@@ -17,6 +19,48 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 
 class AppPlexLinkerTest {
+    @Test
+    fun reconnectUsesVerifiedLocalDiscoveryBeforeCloud() = runBlocking {
+        val http = PlexLinkHttpFixture()
+        val linker = AppPlexLinker(http, PlexLinkUserData(),
+            localConnections = { listOf("https://own.plex.direct:32400") })
+        val original = SourceConfig.Plex(SourceId("existing"), "Theatre", "https://stale-public:32400",
+            "saved-token", "own-machine", "existing-client")
+        val repaired = assertNotNull(linker.reconnect(original))
+        assertEquals("https://own.plex.direct:32400", repaired.server)
+        assertEquals("saved-token", repaired.token)
+        assertEquals(original.id, repaired.id)
+        assertEquals(listOf("https://own.plex.direct:32400/identity"), http.identityProbes.map { it.first })
+        assertEquals(emptyList(), http.identityProbes.mapNotNull { it.second })
+    }
+
+    @Test
+    fun localDiscoveryCannotSubstituteAnotherServer() = runBlocking {
+        val http = PlexLinkHttpFixture()
+        val linker = AppPlexLinker(http, PlexLinkUserData(),
+            localConnections = { listOf("https://friend.plex.direct:32400") })
+        val original = SourceConfig.Plex(SourceId("existing"), "Theatre", "https://stale-public:32400",
+            "saved-token", "own-machine", "existing-client")
+        val repaired = assertNotNull(linker.reconnect(original))
+        assertEquals("http://192.168.1.10:32400", repaired.server)
+        assertEquals(emptyList(), http.identityProbes.mapNotNull { it.second })
+    }
+
+    @Test
+    fun reconnectOwnerBehindVpnPreservesSourceIdentityAndUsesVerifiedLan() = runBlocking {
+        val http = PlexLinkHttpFixture(ownerSameNetwork = false)
+        val linker = AppPlexLinker(http, PlexLinkUserData())
+        val original = SourceConfig.Plex(SourceId("existing-source"), "My Theatre", "https://old-public:32400",
+            "owner-server-token", "own-machine", "existing-client")
+        val repaired = assertNotNull(linker.reconnect(original))
+        assertEquals(original.id, repaired.id)
+        assertEquals(original.displayName, repaired.displayName)
+        assertEquals(original.clientId, repaired.clientId)
+        assertEquals(original.machineId, repaired.machineId)
+        assertEquals("http://192.168.1.10:32400", repaired.server)
+        assertEquals(emptyList(), http.identityProbes.mapNotNull { it.second })
+    }
+
     @Test
     fun keepsEveryReachableOwnerAndSharedFriendServerSelectable() = runBlocking {
         val http = PlexLinkHttpFixture()
@@ -52,6 +96,7 @@ class AppPlexLinkerTest {
 }
 
 private class PlexLinkHttpFixture(
+    private val ownerSameNetwork: Boolean = true,
     /** publicAddressMatches for the friend's server; null = field absent. */
     private val friendSameNetwork: Boolean? = false,
     /** Hosts that answer /identity as some other Plex server (a different box on the viewer's LAN). */
@@ -74,7 +119,7 @@ private class PlexLinkHttpFixture(
         url.contains("/api/v2/resources?") -> response(200, """
             [
               {"name":"Kory's Server","provides":"server","clientIdentifier":"own-machine","accessToken":"owner-server-token",
-               "publicAddressMatches":true,
+               "owned":true,"publicAddressMatches":$ownerSameNetwork,
                "connections":[{"address":"192.168.1.10","port":32400,"uri":"https://own.plex.direct:32400","local":true}]},
               {"name":"Friend's Server","provides":"server","clientIdentifier":"friend-machine","accessToken":"shared-server-token",
                ${friendSameNetwork?.let { "\"publicAddressMatches\":$it," } ?: ""}

@@ -131,7 +131,10 @@ internal class TheIntroDbSkipLookup(private val http: HttpClient) : CommunitySki
             val maxLength = if (type == "intro") 5 * 60_000L else 12 * 60_000L
             if (end - start > maxLength) return@mapNotNull null
             if (type == "credits" && runtime != null && start < runtime / 2) return@mapNotNull null
-            SkipMarker(type, start, end.coerceAtMost(runtime ?: end))
+            val marker = SkipMarker(type, start, end.coerceAtMost(runtime ?: end))
+            marker.takeIf {
+                com.yodesla.omniverse.feature.vod.plausibleCommunityCredits(it, runtime ?: 0L, media.string("type") == "tv")
+            }
         }
     }
 

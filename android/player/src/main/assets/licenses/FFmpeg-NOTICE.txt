@@ -1,0 +1,12 @@
+Omniverse bundles an audio-only FFmpeg 6.0.1 decoder in libffmpegJNI.so.
+FFmpeg is Copyright (c) the FFmpeg developers and licensed under LGPL 2.1 or later.
+No GPL or nonfree components are enabled. The library is a separately replaceable shared library.
+License: FFmpeg-LGPL-2.1.txt in this directory.
+Unmodified FFmpeg source: https://ffmpeg.org/releases/ffmpeg-6.0.1.tar.xz
+JNI wrapper and Java decoder: AndroidX Media3 1.11.1, Apache 2.0.
+https://github.com/androidx/media/tree/1.11.1/libraries/decoder_ffmpeg
+Java-only adaptation: replace Checker Framework MonotonicNonNull with AndroidX Nullable.
+Native source is unchanged; 16 KB page alignment is added at link time.
+Rebuild instructions: tools/build-audio-decoder.sh in the corresponding Omniverse source.
+The corresponding source bundle and build script accompany this APK distribution.
+Reverse engineering for debugging modifications to this LGPL library is permitted.

@@ -31,6 +31,7 @@ class AppPlexLinker(
     private val io: CoroutineDispatcher = Dispatchers.IO,
     /** Hard cap on one /identity probe: headers AND the streaming body must answer within this. */
     private val probeTimeoutMs: Long = 3_000,
+    private val localConnections: suspend (String) -> List<String> = { emptyList() },
 ) : PlexLinker {
     private var link: PlexLink? = null
     private var pin: PlexLink.Pin? = null
@@ -64,6 +65,27 @@ class AppPlexLinker(
         val token = savedToken() ?: return null
         val cid = userData.setting(CLIENT_ID_KEY).first() ?: newId().also { userData.putSetting(CLIENT_ID_KEY, it) }
         return resolve(PlexLink(http, cid), token, cid)
+    }
+
+    /** Rediscover an existing source without replacing its catalog or watch history. */
+    suspend fun reconnect(config: SourceConfig.Plex): SourceConfig.Plex? {
+        val local = try { localConnections(config.machineId) }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) { emptyList() }
+        local.firstOrNull { reachable(it, config.machineId, config.clientId) }?.let { uri ->
+            return SourceConfig.Plex(config.id, config.displayName, uri, config.token, config.machineId, config.clientId)
+        }
+        for (token in listOfNotNull(savedToken(), config.token).distinct()) {
+            val server = try {
+                PlexLink(http, config.clientId).servers(token).firstOrNull { it.machineId == config.machineId }
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { null }
+            if (server == null) continue
+            val uri = server.connections.firstOrNull { reachable(it, config.machineId, config.clientId) } ?: continue
+            return SourceConfig.Plex(config.id, config.displayName, uri.trimEnd('/'), server.token,
+                config.machineId, config.clientId)
+        }
+        return null
     }
 
     /** Forget the remembered Plex sign-in (servers already added keep working). */

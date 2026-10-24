@@ -92,4 +92,10 @@ data class PlaybackDiagnostics(
     val encodedBitrate: Int = 0,
     val bufferedMs: Long = 0,
     val deliveryMode: com.yodesla.omniverse.core.model.DeliveryMode = com.yodesla.omniverse.core.model.DeliveryMode.UNKNOWN,
+    /** Whole-title average in bits/s (file size × 8 ÷ duration); 0 for live, HLS or no size header. */
+    val averageBitrate: Long = 0,
+    /** Current download-speed estimate in bits/s. */
+    val networkBitrate: Long = 0,
+    /** Host the stream is served from, without credentials. */
+    val sourceHost: String? = null,
 )

@@ -116,6 +116,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import kotlin.math.ceil
@@ -175,6 +176,9 @@ fun VodPlayerRoute(
     val engine = remember { Media3ExoEngine(context, userAgent) }
     val state by engine.state.collectAsStateWithLifecycle()
     val diagnostics by engine.diagnostics.collectAsStateWithLifecycle()
+    // Playback info panel: which of the user's sources this copy is playing from.
+    val sourceName by remember(item.key.sourceId) { sources.sources().map { list -> list.firstOrNull { it.id == item.key.sourceId }?.name } }
+        .collectAsStateWithLifecycle(initialValue = null)
     // Task 106: the Kids clock for the active profile (limits + today's usage). Empty when no clock.
     val kids by (kidsTime?.state ?: flowOf(KidsTimeState())).collectAsStateWithLifecycle(initialValue = KidsTimeState())
     var showDiagnostics by remember { mutableStateOf(false) }
@@ -677,23 +681,16 @@ fun VodPlayerRoute(
             ?.takeIf { effectiveDuration > 0 && it in 5_000 until effectiveDuration }
             ?.let { add(SkipMarker("credits", it, effectiveDuration)) }
     }
-    val activeLocalSkip = localMarkers.firstOrNull {
-        isUsableSkipMarker(it, effectiveDuration) && position >= it.startMs && position < it.endMs
-    }
-    val activeSourceSkip = openedSpec?.skipMarkers.orEmpty().map { fitToDuration(it, effectiveDuration) }.firstOrNull {
-        isUsableSkipMarker(it, effectiveDuration) && position >= it.startMs && position < it.endMs
-    }
-    val activeCommunitySkip = communityMarkers.map { fitToDuration(it, effectiveDuration) }.firstOrNull {
-        isUsableSkipMarker(it, effectiveDuration) && position >= it.startMs && position < it.endMs
-    }
-    val activeSkip = activeLocalSkip ?: activeSourceSkip ?: activeCommunitySkip
+    val activeSkip = preferredSkipMarkers(localMarkers, openedSpec?.skipMarkers.orEmpty(), communityMarkers,
+        effectiveDuration, item.key.kind == ContentKind.EPISODE)
+        .firstOrNull { position >= it.startMs && position < it.endMs }
     val activeSkipMode = skipModeForType(activeSkip?.type, introMode, creditsMode)
     var autoSkippedMarkers by remember(item.key) { mutableStateOf(emptySet<String>()) }
     // Skipping end credits on a series goes straight to the next episode (Netflix-style) instead of
     // seeking to the very end and waiting out the Up-next countdown.
     val skipTo: (SkipMarker) -> Unit = { marker ->
         val next = item.next
-        if (marker.type == "credits" && next != null) {
+        if (creditsFinishItem(marker, effectiveDuration) && next != null) {
             // Decide + write the completion before navigating; the disposal save that navigation
             // triggers is then a no-op, so it can't overwrite it with the pre-skip position.
             finalizeCompleted()
@@ -914,6 +911,7 @@ fun VodPlayerRoute(
                 .clip(RoundedCornerShape(12.dp)).background(Color.Black.copy(alpha = 0.86f)).verticalScroll(rememberScrollState()).padding(20.dp)) {
                 Text("PLAYBACK INFO  ·  BACK TO CLOSE", style = OmniTheme.type.overline, color = OmniTheme.colors.accent)
                 Spacer(Modifier.height(12.dp))
+                sourceName?.let { Text("Source  $it", style = OmniTheme.type.body, color = Color.White) }
                 diagnostics.lines().forEach { Text(it, style = OmniTheme.type.body, color = Color.White) }
             }
         }
@@ -1234,6 +1232,26 @@ internal fun skipModeForType(type: String?, introMode: String?, creditsMode: Str
 internal fun fitToDuration(marker: SkipMarker, durationMs: Long): SkipMarker =
     if (durationMs > 0 && marker.endMs > durationMs && marker.startMs < durationMs && marker.endMs - durationMs <= 90_000L)
         marker.copy(endMs = durationMs) else marker
+
+/** Choose the authoritative set for each kind before checking the current playback position. */
+internal fun preferredSkipMarkers(
+    local: List<SkipMarker>, source: List<SkipMarker>, community: List<SkipMarker>,
+    durationMs: Long, episode: Boolean,
+): List<SkipMarker> {
+    fun valid(markers: List<SkipMarker>) = markers.map { fitToDuration(it, durationMs) }
+        .filter { isUsableSkipMarker(it, durationMs) }
+    val trusted = listOf(valid(local), valid(source), valid(community).filter {
+        plausibleCommunityCredits(it, durationMs, episode)
+    })
+    return listOf("intro", "credits").flatMap { kind ->
+        trusted.firstOrNull { markers -> markers.any { it.type == kind } }
+            ?.filter { it.type == kind }.orEmpty()
+    }.sortedBy { it.startMs }
+}
+
+/** Mid-episode credits may be followed by story scenes: skip only their interval. */
+internal fun creditsFinishItem(marker: SkipMarker, durationMs: Long): Boolean =
+    marker.type == "credits" && durationMs > 0 && marker.endMs >= durationMs - 1_000L
 
 /** Reject malformed/out-of-runtime markers instead of letting a stale timestamp seek past the item. */
 internal fun isUsableSkipMarker(marker: SkipMarker, durationMs: Long): Boolean =

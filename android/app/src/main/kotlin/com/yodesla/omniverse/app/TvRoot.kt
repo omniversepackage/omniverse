@@ -134,7 +134,8 @@ internal sealed interface Screen {
      *  leaving and re-entering resumes the same grid. Each tile runs its own engine inside the screen. */
     data object Multiview : Screen
     /** [autoPlay]: null = just show; false = resume playback at once; true = start over at once. */
-    data class Detail(val key: ContentKey, val autoPlay: Boolean? = null, val focusEpisode: RemoteId? = null) : Screen
+    data class Detail(val key: ContentKey, val autoPlay: Boolean? = null, val focusEpisode: RemoteId? = null,
+        val explicitlySelectedSource: Boolean = false) : Screen
     data class VodPlay(val item: PlayItem) : Screen
     /** Add-a-provider flow. [firstRun] = the app has no sources yet (it is the root screen).
      *  [editSourceId] non-null = re-entering the login of that existing source (L3): the same form,
@@ -607,8 +608,8 @@ fun TvRoot(brand: BrandConfig, graph: AppGraph, mobile: Boolean = false) {
                                 kidsTime = graph.kidsTime, kidsPinEnabled = pinEnabled, onRequestKidsPin = ::requestKidsExtension)
                         }
                         is Screen.Detail -> {
-                            val vm = viewModel(key = "detail-${top.key}") { DetailViewModel(top.key, graph.sources, graph.userData, graph.catalog, graph.parental.visibility, graph.metadataEnricher, graph.rottenTomatoes, tmdb = graph.tmdbEnricher, focusEpisode = top.focusEpisode) }
-                            DetailRoute(vm, graph.parental.visibility, onOpen = { push(Screen.Detail(it)) }) { item -> push(Screen.VodPlay(item)) }
+                            val vm = viewModel(key = "detail-${top.key}-${top.explicitlySelectedSource}") { DetailViewModel(top.key, graph.sources, graph.userData, graph.catalog, graph.parental.visibility, graph.metadataEnricher, graph.rottenTomatoes, tmdb = graph.tmdbEnricher, focusEpisode = top.focusEpisode, explicitlySelectedSource = top.explicitlySelectedSource) }
+                            DetailRoute(vm, graph.parental.visibility, onOpen = { key, start -> push(Screen.Detail(key, autoPlay = start, explicitlySelectedSource = true)) }) { item -> push(Screen.VodPlay(item)) }
                             LaunchedEffect(Unit) { vm.load() } // refresh resume points after playback
                             // Hold-menu Resume / Start over: play as soon as the title has loaded. The flag is
                             // cleared first so Back from the player lands on this detail page, not a replay.

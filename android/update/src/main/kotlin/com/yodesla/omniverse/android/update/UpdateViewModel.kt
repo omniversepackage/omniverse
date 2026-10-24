@@ -66,6 +66,10 @@ class UpdateViewModel(
                 installer.download(m) { p -> _state.value = UpdateUiState.Downloading(p) }
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: UpdateIdentityException) {
+                Log.w(TAG, "Update signing identity mismatch", e)
+                _state.value = UpdateUiState.Error(R.string.update_error_identity)
+                return@launch
             } catch (e: SourceException) {
                 Log.w(TAG, "Update download failed", e)
                 _state.value = UpdateUiState.Error(

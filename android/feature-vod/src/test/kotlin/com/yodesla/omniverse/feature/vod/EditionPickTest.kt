@@ -62,8 +62,29 @@ class EditionPickTest {
     @BeforeTest fun setUp() = Dispatchers.setMain(dispatcher)
     @AfterTest fun tearDown() = Dispatchers.resetMain()
 
-    private fun newVm(user: EpFakeUserData, versions: List<MediaVersion> = emptyList(), tmdb: String? = "603") =
-        DetailViewModel(epKey, EpFakeSourceRepository(EpFakeContentSource(epDetail(versions, tmdb))), user, null, ShowEverything)
+    private fun newVm(user: EpFakeUserData, versions: List<MediaVersion> = emptyList(), tmdb: String? = "603", explicit: Boolean = false) =
+        DetailViewModel(epKey, EpFakeSourceRepository(EpFakeContentSource(epDetail(versions, tmdb))), user, null, ShowEverything,
+            explicitlySelectedSource = explicit)
+
+    @Test fun explicitSourceSurvivesMissingCatalogIdAndDetailReload() = runTest(dispatcher) {
+        val user = EpFakeUserData()
+        val vm = newVm(user, tmdb = null, explicit = true)
+        advanceUntilIdle()
+        assertEquals(editionItemPickId(epKey), vm.state.value.lastEditionPick)
+        vm.load()
+        advanceUntilIdle()
+        assertEquals(editionItemPickId(epKey), vm.state.value.lastEditionPick)
+        assertEquals(epSrc, vm.moviePlayItem(false)!!.request.sourceId)
+    }
+
+    @Test fun explicitSourceOverridesAnotherSourcesStoredTitleChoice() = runTest(dispatcher) {
+        val user = EpFakeUserData()
+        user.settings["edition_pick_603"] = "k:other:movie"
+        val vm = newVm(user, explicit = true)
+        advanceUntilIdle()
+        assertEquals(editionItemPickId(epKey), vm.state.value.lastEditionPick)
+        assertEquals(epSrc, vm.moviePlayItem(false)!!.request.sourceId)
+    }
 
     @Test fun theCopyThisProfileLastChoseLoadsWithTheTitle() = runTest(dispatcher) {
         val user = EpFakeUserData()

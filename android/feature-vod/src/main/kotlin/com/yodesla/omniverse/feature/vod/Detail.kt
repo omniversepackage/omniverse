@@ -250,6 +250,7 @@ class DetailViewModel(
     private val tmdb: com.yodesla.omniverse.core.data.metadata.TmdbEnricher? = null,
     /** Episode to open the show ready on (task 71 "New episodes" card). */
     private val focusEpisode: RemoteId? = null,
+    private val explicitlySelectedSource: Boolean = false,
 ) : ViewModel() {
     private val _state = MutableStateFlow(DetailState())
     val state: StateFlow<DetailState> = _state.asStateFlow()
@@ -414,7 +415,9 @@ class DetailViewModel(
                     } ?: unified.seasons.firstOrNull()?.number ?: 1
                     // Task 86: the chooser lists show copies too; only their saved watch is worth a lookup.
                     val tmdb = d.record.tmdbId?.trim()?.takeIf { it.isNotEmpty() }
-                    val lastPick = editionPickSettingKey(tmdb)?.let { k -> userData.setting(k).first()?.takeIf { v -> v.isNotBlank() } }
+                    val lastPick = detailSourcePick(key,
+                        editionPickSettingKey(tmdb)?.let { k -> userData.setting(k).first()?.takeIf { v -> v.isNotBlank() } },
+                        explicitlySelectedSource)
                     val altProgress = related.filter { row ->
                         row.poster.categoryId?.let { allowed("SERIES", row.poster.key.sourceId.value, it.value) } ?: true
                     }.map { it.poster.key }.distinct().take(MAX_EDITION_ALTS)
@@ -452,7 +455,9 @@ class DetailViewModel(
                     // Task 86: what the version chooser needs about the OTHER copies — this profile's
                     // saved pick, each copy's saved watch, and each copy's runtime when the source states one.
                     val tmdb = d.record.tmdbId?.trim()?.takeIf { it.isNotEmpty() }
-                    val lastPick = editionPickSettingKey(tmdb)?.let { k -> userData.setting(k).first()?.takeIf { v -> v.isNotBlank() } }
+                    val lastPick = detailSourcePick(key,
+                        editionPickSettingKey(tmdb)?.let { k -> userData.setting(k).first()?.takeIf { v -> v.isNotBlank() } },
+                        explicitlySelectedSource)
                     val altKeys = related.filter { row ->
                         row.poster.categoryId?.let { allowed("VOD", row.poster.key.sourceId.value, it.value) } ?: true
                     }.map { it.poster.key }.distinct().take(MAX_EDITION_ALTS)
@@ -795,7 +800,7 @@ internal fun buildEpisodeQueue(ep: Episode, all: List<Episode>, seriesKey: Conte
 }
 
 @Composable
-fun DetailRoute(viewModel: DetailViewModel, visibility: kotlinx.coroutines.flow.Flow<Visibility>, onOpen: (ContentKey) -> Unit, onPlay: (PlayItem) -> Unit) {
+fun DetailRoute(viewModel: DetailViewModel, visibility: kotlinx.coroutines.flow.Flow<Visibility>, onOpen: (ContentKey, Boolean?) -> Unit, onPlay: (PlayItem) -> Unit) {
     val context = LocalContext.current
     var artworkError by remember { mutableStateOf<String?>(null) }
     val posterPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -913,7 +918,7 @@ fun DetailRoute(viewModel: DetailViewModel, visibility: kotlinx.coroutines.flow.
     fun pickPlayOption(option: PlayOption) {
         when {
             option.key == currentKey && option.versionId != null -> viewModel.selectVersion(option.versionId)
-            option.key != currentKey -> viewModel.rememberEditionPick(editionItemPickId(option.key)) { onOpen(option.key) }
+            option.key != currentKey -> viewModel.rememberEditionPick(editionItemPickId(option.key)) { onOpen(option.key, null) }
             else -> viewModel.rememberEditionPick(editionItemPickId(option.key))
         }
     }
@@ -921,7 +926,7 @@ fun DetailRoute(viewModel: DetailViewModel, visibility: kotlinx.coroutines.flow.
     fun playChosenCopy(fromStart: Boolean) {
         val copy = chosenCopy
         if (copy != null && copy.key != currentKey) {
-            viewModel.rememberEditionPick(copy.pickForNavigation(s.lastEditionPick)) { onOpen(copy.key) }
+            viewModel.rememberEditionPick(copy.pickForNavigation(s.lastEditionPick)) { onOpen(copy.key, fromStart) }
         } else viewModel.moviePlayItem(fromStart)?.let(onPlay)
     }
     val chips: @Composable () -> Unit = { PlayOptionChips(playOptions, selectedOptionId, ::pickPlayOption, { showSources = true }) }
@@ -1036,7 +1041,7 @@ fun DetailRoute(viewModel: DetailViewModel, visibility: kotlinx.coroutines.flow.
             chosenId = chosenCopy?.id,
             onPick = { copy ->
                 showSources = false
-                if (copy.key != currentKey) viewModel.rememberEditionPick(copy.savedPickId()) { onOpen(copy.key) }
+                if (copy.key != currentKey) viewModel.rememberEditionPick(copy.savedPickId()) { onOpen(copy.key, null) }
                 else if (copy.versionId != null) viewModel.selectVersion(copy.versionId)
                 else viewModel.rememberEditionPick(copy.savedPickId())
             },

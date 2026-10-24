@@ -14,4 +14,5 @@
     <string name="update_close">Close</string>
     <string name="update_error_generic">The update could not be completed. Try again later.</string>
     <string name="update_error_damaged">The downloaded file is damaged. Try again.</string>
+    <string name="update_error_identity">This update uses a different app signing key. This installation needs a one-time migration before it can update.</string>
 </resources>

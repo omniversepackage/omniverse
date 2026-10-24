@@ -39,6 +39,13 @@ internal fun editionItemPickId(key: ContentKey): String = "k:${key.sourceId.valu
 internal fun editionVersionPickId(key: ContentKey, versionId: String): String =
     "${editionItemPickId(key)}:v:$versionId"
 
+/** A source-chip navigation is authoritative even when the provider omits its catalog ID. */
+internal fun detailSourcePick(key: ContentKey, savedPick: String?, explicitlySelected: Boolean): String? {
+    if (!explicitlySelected) return savedPick
+    val item = editionItemPickId(key)
+    return savedPick?.takeIf { it == item || it.startsWith("$item:v:") } ?: item
+}
+
 internal fun EditionCopy.savedPickId(): String =
     versionId?.let { editionVersionPickId(key, it) } ?: editionItemPickId(key)
 

@@ -4,6 +4,7 @@ plugins {
 
 android {
     namespace = "com.yodesla.omniverse.android.update"
+    defaultConfig.testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     testOptions { unitTests.isReturnDefaultValues = true }
 }
 
@@ -22,4 +23,6 @@ dependencies {
     debugImplementation(libs.compose.ui.tooling)
     testImplementation(kotlin("test-junit"))
     testImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation(libs.test.ext.junit)
+    androidTestImplementation(libs.test.runner)
 }

@@ -16,6 +16,10 @@ import okio.source
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+/** The bytes are intact, but the APK does not belong to this app/signing identity. */
+class UpdateIdentityException : Exception("Update does not match this app's signing identity")
+
+
 /**
  * Downloads, verifies and hands off the APK for sideloading (PLAN.md P3.7).
  * Kept thin on purpose: no unit tests here, the logic lives in the core module.
@@ -72,7 +76,7 @@ open class ApkInstaller(
         }
         if (!isSameAppAndSigner(target)) {
             target.delete()
-            throw SourceException.BadResponse("Update file is not a genuine Omniverse build")
+            throw UpdateIdentityException()
         }
         return target
     }
@@ -93,7 +97,9 @@ open class ApkInstaller(
         fun certs(info: android.content.pm.PackageInfo): Set<String> {
             val sigs = if (Build.VERSION.SDK_INT >= 28) {
                 val si = info.signingInfo ?: return emptySet()
-                if (si.hasMultipleSigners()) si.apkContentsSigners else si.signingCertificateHistory
+                // A migrated installation retains its old signing history, while a normal release
+                // may contain only today's certificate. Compare current identities, not history.
+                si.apkContentsSigners
             } else info.signatures
             return sigs.orEmpty().map { it.toCharsString() }.toSet()
         }

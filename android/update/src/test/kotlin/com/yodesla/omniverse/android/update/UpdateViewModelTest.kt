@@ -203,6 +203,17 @@ class UpdateViewModelTest {
     }
 
     @Test
+    fun signerMismatchExplainsMigrationInsteadOfClaimingDamagedBytes() = runTest(dispatcher) {
+        val installer = FakeInstaller(download = { _, _ -> throw UpdateIdentityException() })
+        val vm = vm(fakeChecker(UpdateCheck.Available(manifest())), installer)
+        vm.checkNow()
+        advanceUntilIdle()
+        vm.accept()
+        advanceUntilIdle()
+        assertEquals(R.string.update_error_identity, assertIs<UpdateUiState.Error>(vm.state.value).messageRes)
+    }
+
+    @Test
     fun downloadProgressIsReportedThenReadyToInstall() = runTest(dispatcher) {
         val installer = FakeInstaller(
             download = { _, onProgress ->

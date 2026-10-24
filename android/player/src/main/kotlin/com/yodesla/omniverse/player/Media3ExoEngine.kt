@@ -145,7 +145,11 @@ class Media3ExoEngine(
             ) {
                 // Keep hardware decoding and HDMI passthrough first. The bundled decoder handles
                 // formats missing from devices such as Onn (notably DTS/DTS-HD), emitting PCM.
-                super.buildAudioRenderers(context, EXTENSION_RENDERER_MODE_OFF, mediaCodecSelector,
+                val compatibleAudio = MediaCodecSelector { mime, secure, tunneling ->
+                    mediaCodecSelector.getDecoderInfos(mime, secure, tunneling)
+                        .filterNot { unreliableDtsDecoder(mime, it.name) }
+                }
+                super.buildAudioRenderers(context, EXTENSION_RENDERER_MODE_OFF, compatibleAudio,
                     enableDecoderFallback, audioSink, eventHandler, eventListener, out)
                 out.add(androidx.media3.decoder.ffmpeg.FfmpegAudioRenderer(eventHandler, eventListener, audioSink))
             }
@@ -281,6 +285,10 @@ class Media3ExoEngine(
             override fun onVideoSizeChanged(videoSize: VideoSize) = publishTracks(player.currentTracks)
         })
         player.addAnalyticsListener(object : AnalyticsListener {
+            override fun onAudioDecoderInitialized(eventTime: AnalyticsListener.EventTime, decoderName: String,
+                initializedTimestampMs: Long, initializationDurationMs: Long) {
+                android.util.Log.i("OmniverseAudio", "Audio decoder: $decoderName")
+            }
             override fun onBandwidthEstimate(eventTime: AnalyticsListener.EventTime, totalLoadTimeMs: Int, totalBytesLoaded: Long, bitrateEstimate: Long) {
                 bandwidthBps = bitrateEstimate
                 publishDiagnostics()

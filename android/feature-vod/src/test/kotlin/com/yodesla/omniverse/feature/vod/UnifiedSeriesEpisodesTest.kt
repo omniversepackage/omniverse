@@ -9,10 +9,33 @@ import com.yodesla.omniverse.core.model.Season
 import com.yodesla.omniverse.core.model.SeriesDetail
 import com.yodesla.omniverse.core.model.SeriesRecord
 import com.yodesla.omniverse.core.model.SourceId
+import com.yodesla.omniverse.core.model.VideoInfo
+import com.yodesla.omniverse.core.model.DynamicRange
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
 class UnifiedSeriesEpisodesTest {
+    @Test fun episodeSourceChoiceShowsVerifiedQualityAndRuntime() {
+        val probed = episode("plex", "p", 1, 1, "p1").copy(video = VideoInfo(3840, 2160, DynamicRange.DOLBY_VISION))
+        assertEquals("Korys Theatre  ·  4K DV  ·  20m", episodeSourceLabel(EpisodeSource(probed, "Korys Theatre")))
+        val unknown = probed.copy(video = null, durationSec = null)
+        assertEquals("Gem Ruby", episodeSourceLabel(EpisodeSource(unknown, "Gem Ruby")))
+    }
+
+    @Test fun homeAndDetailShareNextEpisodeAndStartOverSelection() {
+        val first = episode("plex", "p", 1, 1, "p1")
+        val next = episode("plex", "p", 2, 1, "p2")
+        val progress = com.yodesla.omniverse.core.data.Progress(
+            ContentKey(first.sourceId, ContentKind.EPISODE, first.remoteId), first.seriesId,
+            1_200_000L, 1_200_000L, 100L, completed = true,
+        )
+        val state = DetailState(series = detail("plex", "p", first, next), episodeProgress = mapOf("p1" to progress))
+        assertEquals(next, state.primarySeriesEpisode())
+        assertEquals(first, state.primarySeriesEpisode(fromStart = true))
+        assertEquals(first, state.copy(focusEpisodeId = first.remoteId).primarySeriesEpisode())
+        assertEquals(first, state.copy(episodeProgress = mapOf("p1" to progress.copy(completed = false))).primarySeriesEpisode())
+    }
+
     @Test fun continueUsesTheExplicitSourceEvenWhenAnotherCopyHoldsTheWatch() {
         val watched = episode("iptv", "i", 1, 4, "i4")
         val selected = episode("plex", "p", 1, 4, "p4")

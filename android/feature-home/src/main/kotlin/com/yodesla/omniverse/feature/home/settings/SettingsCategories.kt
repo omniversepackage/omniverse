@@ -77,6 +77,8 @@ object SettingsRowKeys {
     const val LEFT_MENU = "left_menu"
     const val MENU_WARNING = "menu_warning"
     const val MOVIES_SHOWS_VIEW = "movies_shows_view"
+    /** For You layout picker: Cinematic / Editorial magazine (Settings › Display, TV-only). */
+    const val FOR_YOU_LAYOUT = "for_you_layout"
     const val MANAGE = "manage_profiles"
     const val GUEST_NOTE = "guest_note"
     const val CREATE_PROFILE = "create_profile"
@@ -143,7 +145,7 @@ fun settingsRows(
         add(SettingsRowKeys.HIDE_SPORTS_SCORES)
         if (hasCustomizeHome) add(SettingsRowKeys.CUSTOMIZE_HOME)
         // Task 203: TV-only, like the screen-saver picker — the phone build browses one pane already.
-        if (!compact) { add(SettingsRowKeys.MOVIES_SHOWS_VIEW); add(SettingsRowKeys.LEFT_MENU); add(SettingsRowKeys.MENU_WARNING) }
+        if (!compact) { add(SettingsRowKeys.MOVIES_SHOWS_VIEW); add(SettingsRowKeys.FOR_YOU_LAYOUT); add(SettingsRowKeys.LEFT_MENU); add(SettingsRowKeys.MENU_WARNING) }
         // TV-only: the phone build has no Android TV screen-saver picker to point at.
         if (!compact) add(SettingsRowKeys.SCREENSAVER)
     }
@@ -216,7 +218,7 @@ fun settingsPaneItemKeys(
             add(SettingsRowKeys.HIDE_SPORTS_SCORES)
             add(SettingsRowKeys.TEXT_SIZE)
             // Task 203: renders between Text size and the screen-saver row in the pane.
-            if (!compact) { add(SettingsRowKeys.MOVIES_SHOWS_VIEW); add(SettingsRowKeys.LEFT_MENU); add(SettingsRowKeys.MENU_WARNING) }
+            if (!compact) { add(SettingsRowKeys.MOVIES_SHOWS_VIEW); add(SettingsRowKeys.FOR_YOU_LAYOUT); add(SettingsRowKeys.LEFT_MENU); add(SettingsRowKeys.MENU_WARNING) }
             if (!compact) add(SettingsRowKeys.SCREENSAVER)
             if (hasSlot) add(SettingsRowKeys.CUSTOMIZE_HOME)
             if (hasHiddenCwRow) add(SettingsRowKeys.HIDDEN_CW)

@@ -138,11 +138,13 @@ class SearchRepositoryImpl(
     private val io: CoroutineDispatcher,
 ) : SearchRepository {
 
-    override suspend fun searchLive(query: String, limit: Int): List<SearchHit> = withContext(io) {
+    override suspend fun searchLive(query: String, limit: Int): List<SearchHit> = searchLiveVisible(query, emptyList(), limit)
+
+    override suspend fun searchLiveVisible(query: String, excludedCategoryKeys: Collection<String>, limit: Int): List<SearchHit> = withContext(io) {
         val match = toMatchExpression(query) ?: return@withContext emptyList()
         val needle = normalize(query)
         val fetch = (limit * 8L).coerceAtMost(400L)
-        val hits = db.readQueries.searchByKind(match, ContentKind.LIVE.name, fetch).executeAsList().mapNotNullTo(ArrayList()) { r ->
+        val hits = db.readQueries.searchLiveEligible(match, excludedCategoryKeys, fetch).executeAsList().mapNotNullTo(ArrayList()) { r ->
             val sid = r.source_id ?: return@mapNotNullTo null
             val rid = r.remote_id ?: return@mapNotNullTo null
             SearchHit(ContentKey(SourceId(sid), ContentKind.LIVE, RemoteId(rid)), r.title.orEmpty())
@@ -151,7 +153,7 @@ class SearchRepositoryImpl(
         val compact = com.yodesla.omniverse.core.data.search.FastTitleSearch.compact(query)
         if (hits.size < limit && compact.length >= 3) {
             val seen = hits.mapTo(HashSet()) { it.key }
-            db.readQueries.searchLiveSubstring(compact.take(2), compact, fetch).executeAsList().forEach { r ->
+            db.readQueries.searchLiveSubstringEligible(compact.take(2), compact, excludedCategoryKeys, fetch).executeAsList().forEach { r ->
                 val key = ContentKey(SourceId(r.source_id), ContentKind.LIVE, RemoteId(r.remote_id))
                 if (seen.add(key)) hits += SearchHit(key, r.name)
             }
@@ -249,7 +251,12 @@ class SearchRepositoryImpl(
         kinds: Collection<ContentKind>,
         excludedCategoryKeys: Collection<String>,
         limitPerKind: Int,
-    ): Map<ContentKind, SearchFilteredPage> = withContext(io) {
+    ): Map<ContentKind, SearchFilteredPage> = titleSearch(query, kinds, excludedCategoryKeys, limitPerKind, true)
+
+    override suspend fun searchTitlePrefixes(query: String, kinds: Collection<ContentKind>, excludedCategoryKeys: Collection<String>, limitPerKind: Int): Map<ContentKind, SearchFilteredPage> =
+        titleSearch(query, kinds, excludedCategoryKeys, limitPerKind, false)
+
+    private suspend fun titleSearch(query: String, kinds: Collection<ContentKind>, excludedCategoryKeys: Collection<String>, limitPerKind: Int, includeSubstring: Boolean): Map<ContentKind, SearchFilteredPage> = withContext(io) {
         val text = query.trim().takeIf { it.isNotEmpty() } ?: return@withContext emptyMap()
         val match = (listOf(text) + com.yodesla.omniverse.core.data.search.SmartTitleSearch.expansions(text))
             .mapNotNull(::toMatchExpression).distinct().joinToString(" OR ") { "($it)" }.takeIf { it.isNotBlank() }
@@ -272,7 +279,7 @@ class SearchRepositoryImpl(
             // Mid-word / punctuation- and accent-blind matches ("ball" in "Dragonball", "yugioh" in
             // "Yu-Gi-Oh!", "pokemon" in "Pokémon"): only when the word-start pass came up short (a full
             // compacted-name scan costs ~3x the FTS pass, so it never runs on every keystroke).
-            if (hits.size < limitPerKind && compact.length >= 3) {
+            if (includeSubstring && hits.size < limitPerKind && compact.length >= 3) {
                 val seen = hits.mapTo(HashSet()) { it.row.key.sourceId.value + ":" + it.row.key.remoteId.value }
                 if (isVod) db.readQueries.searchVodSubstring(compact.take(2), compact, fetch).executeAsList().forEach { r -> if (seen.add(r.source_id + ":" + r.remote_id)) hits += hit(true, r.source_id, r.remote_id, r.name, r.poster_url, r.primary_category_id, r.rating, r.year, r.tmdb_id, r.group_key, r.plex_rank, r.src_sort, r.item_sort) }
                 else db.readQueries.searchSeriesSubstring(compact.take(2), compact, fetch).executeAsList().forEach { r -> if (seen.add(r.source_id + ":" + r.remote_id)) hits += hit(true, r.source_id, r.remote_id, r.name, r.poster_url, r.primary_category_id, r.rating, r.year, r.tmdb_id, r.group_key, r.plex_rank, r.src_sort, r.item_sort) }
@@ -289,7 +296,9 @@ class SearchRepositoryImpl(
         }.mapNotNull { it.decade?.toInt() }.distinct().sortedDescending()
     }
 
-    override suspend fun searchProgrammes(query: String, nowMs: Long, windowMs: Long, limit: Int): List<ProgrammeHit> = withContext(io) {
+    override suspend fun searchProgrammes(query: String, nowMs: Long, windowMs: Long, limit: Int): List<ProgrammeHit> = searchProgrammesVisible(query, nowMs, emptyList(), windowMs, limit)
+
+    override suspend fun searchProgrammesVisible(query: String, nowMs: Long, excludedCategoryKeys: Collection<String>, windowMs: Long, limit: Int): List<ProgrammeHit> = withContext(io) {
         // LIKE wildcards in user text are dropped rather than escaped (no ESCAPE clause needed).
         val needle = query.trim().replace("%", "").replace("_", "").takeIf { it.length >= 2 } ?: return@withContext emptyList()
         // Punctuation/accent-blind like titles and channels ("yugioh" → "Yu-Gi-Oh!").
@@ -301,10 +310,10 @@ class SearchRepositoryImpl(
             // Match in memory first: no matching title → no guide walk at all.
             val hit = titles.entries.filter { it.second.contains(compact) }.map { it.first }.take(GUIDE_MAX_TITLES)
             if (hit.isEmpty()) return@withContext emptyList()
-            db.readQueries.searchProgrammesByTitles(from, nowMs + windowMs, nowMs, hit, limit.toLong()).executeAsList()
+            db.readQueries.searchProgrammesByTitlesEligible(from, nowMs + windowMs, nowMs, hit, excludedCategoryKeys, limit.toLong()).executeAsList()
                 .map { r -> ProgrammeRow(r.title, r.start_ms, r.end_ms, r.source_id, r.remote_id, r.name, r.logo_url, r.primary_category_id) }
         } else {
-            db.readQueries.searchProgrammes(from, nowMs + windowMs, nowMs, compact.take(2), compact, limit.toLong()).executeAsList()
+            db.readQueries.searchProgrammesEligible(from, nowMs + windowMs, nowMs, compact.take(2), compact, excludedCategoryKeys, limit.toLong()).executeAsList()
                 .map { r -> ProgrammeRow(r.title, r.start_ms, r.end_ms, r.source_id, r.remote_id, r.name, r.logo_url, r.primary_category_id) }
         }
         rows.map { r ->

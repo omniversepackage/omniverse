@@ -69,6 +69,25 @@ class DetailLegacyVersionProgressTest {
         DetailViewModel(lvKey, LegacyFakeSourceRepository(LegacyFakeContentSource(versions)), user, null, ShowEverything)
 
     @Test
+    fun retryCancelsThePreviousDetailRequest() = runTest(dispatcher) {
+        var cancelled = false
+        var calls = 0
+        val source = LegacyFakeContentSource(lvTwo, beforeDetail = {
+            if (++calls == 1) {
+                try { kotlinx.coroutines.awaitCancellation() }
+                finally { cancelled = true }
+            }
+        })
+        val vm = DetailViewModel(lvKey, LegacyFakeSourceRepository(source), LegacyFakeUserData(), null, ShowEverything)
+        vm.load()
+        advanceUntilIdle()
+        kotlin.test.assertTrue(cancelled)
+        assertEquals(2, calls)
+        assertFalse(vm.state.value.loading)
+        assertNotNull(vm.state.value.movie)
+    }
+
+    @Test
     fun aMidWatchedFilmOfUnknownLengthKeepsItsSharedResumeRow() = runTest(dispatcher) {
         val user = LegacyFakeUserData()
         user.rows["m1"] = Progress(lvKey, null, 30_000L, null, 1L)
@@ -149,7 +168,7 @@ private class LegacyFakeSourceRepository(private val source: ContentSource) : So
     override suspend fun probe(config: SourceConfig): AccountInfo = TODO()
 }
 
-private class LegacyFakeContentSource(private val versions: List<MediaVersion>) : ContentSource {
+private class LegacyFakeContentSource(private val versions: List<MediaVersion>, private val beforeDetail: suspend () -> Unit = {}) : ContentSource {
     override val id: SourceId = lvSrc
     override val kind: SourceKind = SourceKind.XTREAM
     override val capabilities: Set<Capability> = emptySet()
@@ -160,7 +179,7 @@ private class LegacyFakeContentSource(private val versions: List<MediaVersion>) 
     override fun vodItems(diagnostics: SyncDiagnostics): Flow<VodRecord> = emptyFlow()
     override fun seriesCategories(): Flow<Category> = emptyFlow()
     override fun series(diagnostics: SyncDiagnostics): Flow<SeriesRecord> = emptyFlow()
-    override suspend fun vodDetail(id: RemoteId): VodDetail = lvDetail(versions)
+    override suspend fun vodDetail(id: RemoteId): VodDetail { beforeDetail(); return lvDetail(versions) }
     override suspend fun seriesDetail(id: RemoteId): com.yodesla.omniverse.core.model.SeriesDetail = TODO()
     override fun epg(window: TimeWindow, channelKeys: Set<String>?, diagnostics: SyncDiagnostics): Flow<ProgrammeRecord> = emptyFlow()
     override suspend fun shortEpg(channelId: RemoteId, limit: Int): List<ProgrammeRecord> = emptyList()

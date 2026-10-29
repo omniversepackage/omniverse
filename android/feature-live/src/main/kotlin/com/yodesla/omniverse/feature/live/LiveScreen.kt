@@ -167,6 +167,10 @@ private fun LiveScreen(state: LiveUiState, nowNext: androidx.compose.runtime.Sta
     var movingCat by remember { mutableStateOf<String?>(null) }
     // The release of the hold that picked the category up must not drop it again.
     var dropArmed by remember { mutableStateOf(false) }
+    // Hold-OK › Move on a favourite: the grabbed channel; Up/Down move it, OK or Back drops it.
+    var movingFav by remember { mutableStateOf<ContentKey?>(null) }
+    var favDropArmed by remember { mutableStateOf(false) }
+    val movingFocus = remember { FocusRequester() }
     // Top category bar (Settings: Horizontal categories): visible on arrival, slides away once a
     // category is picked or the viewer moves into the list; Back or Up from the first channel
     // brings it back.
@@ -174,8 +178,22 @@ private fun LiveScreen(state: LiveUiState, nowNext: androidx.compose.runtime.Sta
     val pickerScope = rememberCoroutineScope()
     fun hideBar() { if (barVisible) { barVisible = false; pickerScope.launch { delay(250); runCatching { firstChannel.requestFocus() } } } }
     fun showBar() { barVisible = true; pickerScope.launch { delay(220); runCatching { categoryFocus.requestFocus() } } }
-    androidx.activity.compose.BackHandler(enabled = topCategories && !barVisible && movingCat == null && !showPicker && menuRow == null) { showBar() }
+    androidx.activity.compose.BackHandler(enabled = topCategories && !barVisible && movingCat == null && movingFav == null && !showPicker && menuRow == null) { showBar() }
     val groups by vm.groups.groups.collectAsStateWithLifecycle(initialValue = emptyList())
+
+    // Keep a grabbed favourite on screen while Up/Down carries it past the list's edge.
+    LaunchedEffect(movingFav) {
+        val grabbed = movingFav ?: return@LaunchedEffect
+        // Closing the menu can park focus on the top bar; the first Up/Down must reach the grabbed row.
+        runCatching { movingFocus.requestFocusWhenReady() }
+        androidx.compose.runtime.snapshotFlow { channels.itemSnapshotList.indexOfFirst { it?.key == grabbed } }
+            .collect { i ->
+                val visible = listState.layoutInfo.visibleItemsInfo
+                if (i >= 0 && visible.isNotEmpty() && (i <= visible.first().index || i >= visible.last().index)) {
+                    listState.animateScrollToItem((i - 1).coerceAtLeast(0))
+                }
+            }
+    }
 
     // Task 107: keep the selected category in view (and composed) so Left from the channel list
     // always lands on it. Only scrolls when it is off-screen, so dwell-select never jumps the rail.
@@ -239,7 +257,9 @@ private fun LiveScreen(state: LiveUiState, nowNext: androidx.compose.runtime.Sta
                 onMove = { id, d -> vm.moveCategory(id, d) },
                 onDrop = { movingCat = null; vm.finishMove() },
                 modifier = Modifier.onPreviewKeyEvent { e ->
-                    if (movingCat == null && e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown) { hideBar(); true } else false
+                    // Mid favourite-move: hand any arrow straight back to the grabbed row.
+                    if (movingFav != null) { if (e.type == KeyEventType.KeyDown) runCatching { movingFocus.requestFocus() }; true }
+                    else if (movingCat == null && e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown) { hideBar(); true } else false
                 },
             )
         }
@@ -347,6 +367,22 @@ private fun LiveScreen(state: LiveUiState, nowNext: androidx.compose.runtime.Sta
                             .focusRestorer(firstChannel)
                             .focusProperties { if (topCategories) up = categoryFocus else left = categoryFocus }
                             .onPreviewKeyEvent { e ->
+                                val grabbed = movingFav
+                                if (grabbed != null) {
+                                    // Holding a favourite: Up/Down move it, OK or Back drops it where it is.
+                                    return@onPreviewKeyEvent when (e.key) {
+                                        Key.DirectionUp -> { if (e.type == KeyEventType.KeyDown) vm.moveFavorite(grabbed, -1); true }
+                                        Key.DirectionDown -> { if (e.type == KeyEventType.KeyDown) vm.moveFavorite(grabbed, 1); true }
+                                        Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
+                                            // Only a fresh press drops it: the release of the menu's OK must not.
+                                            if (e.type == KeyEventType.KeyDown && e.nativeKeyEvent.repeatCount == 0) favDropArmed = true
+                                            else if (e.type == KeyEventType.KeyUp && favDropArmed) { movingFav = null; vm.finishFavoriteMove() }
+                                            true
+                                        }
+                                        Key.Back -> { if (e.type == KeyEventType.KeyUp) { movingFav = null; vm.finishFavoriteMove() }; true }
+                                        else -> true
+                                    }
+                                }
                                 // Nothing focusable to the right of the list: Right opens the guide.
                                 if (topCategories && e.type == KeyEventType.KeyDown && e.key == Key.DirectionUp && !barVisible && focusedState.value != null && focusedState.value == channels.peek(0)) { showBar(); true }
                                 else if (topCategories && barVisible && e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown) { barVisible = false; false }
@@ -370,6 +406,7 @@ private fun LiveScreen(state: LiveUiState, nowNext: androidx.compose.runtime.Sta
                                 onClick = { vm.onChannelClick(row) },
                                 onLongClick = { menuRow = row },
                                 modifier = (if (index == 0) Modifier.focusRequester(firstChannel) else Modifier)
+                                    .then(if (row.key == movingFav) Modifier.focusRequester(movingFocus).border(2.dp, c.accent, RoundedCornerShape(12.dp)) else Modifier)
                                     .onFocusChanged { if (it.isFocused) focusedState.value = row },
                                 showNext = false,
                             )
@@ -380,6 +417,12 @@ private fun LiveScreen(state: LiveUiState, nowNext: androidx.compose.runtime.Sta
                     Text(
                         (if (state.selectedCategoryId == LiveViewModel.FAVORITES) "No favourites yet. Hold OK on any channel to add it here." else "No channels in this category"), style = OmniTheme.type.body, color = c.textTertiary,
                         modifier = Modifier.align(Alignment.Center),
+                    )
+                }
+                if (movingFav != null) {
+                    Text(
+                        "↕  Up / Down to move  ·  OK to drop", style = OmniTheme.type.caption, color = c.accent,
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = OmniSpacing.s),
                     )
                 }
             }
@@ -434,11 +477,13 @@ private fun LiveScreen(state: LiveUiState, nowNext: androidx.compose.runtime.Sta
                 canWatch = true,
                 canRemind = (nn?.nextStartMs ?: 0L) > System.currentTimeMillis(),
                 reminded = false,
+                canMove = state.selectedCategoryId == LiveViewModel.FAVORITES && menu.key in state.favorites && channels.itemCount > 1,
             ),
             onWatch = { vm.onChannelClick(menu) },
             onToggleFavorite = { vm.toggleFavorite(menu) },
             onToggleMultiview = { session?.toggle(menu.key) },
             onRemind = { vm.remindNext(menu) },
+            onMove = { movingFav = menu.key; favDropArmed = false },
         )
         com.yodesla.omniverse.designsystem.TitleMenu(
             title = menu.name,

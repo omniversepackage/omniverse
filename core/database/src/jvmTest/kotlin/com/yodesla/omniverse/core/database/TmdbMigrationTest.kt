@@ -20,7 +20,7 @@ class TmdbMigrationTest {
             OmniverseDb.Schema.migrate(driver, 1, OmniverseDb.Schema.version)
             val d = OmniverseDb(driver)
 
-            d.tmdbQueries.upsertTmdbMeta("550", "MOVIE", "/b.jpg", "/l.png", "/p.jpg", "R", 139L, "Drama", "tag", 100L, "A synopsis.", "/c.jpg")
+            d.tmdbQueries.upsertTmdbMeta("550", "MOVIE", "/b.jpg", "/l.png", "/p.jpg", "R", 139L, "Drama", "tag", 100L, "A synopsis.", "/c.jpg", 8.4, 100L)
             val row = assertNotNull(d.tmdbQueries.tmdbMeta("550", "MOVIE").executeAsOneOrNull())
             assertEquals("/b.jpg", row.backdrop_path)
             assertEquals("R", row.certification)
@@ -88,9 +88,9 @@ class TmdbMigrationTest {
     @Test fun freshSchemaIsAtTheTmdbVersion() {
         val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
         OmniverseDb.Schema.create(driver)
-        assertEquals(16L, OmniverseDb.Schema.version) // 12: overview, 13: backdrop, 14: group_key, 15: series regroup
+        assertEquals(18L, OmniverseDb.Schema.version) // 16: votes, 17: Unicode search reindex
         val d = OmniverseDb(driver)
-        d.tmdbQueries.upsertTmdbMeta("1", "SERIES", null, null, null, null, null, null, null, 1L, null, null)
+        d.tmdbQueries.upsertTmdbMeta("1", "SERIES", null, null, null, null, null, null, null, 1L, null, null, null, null)
         assertEquals(1L, d.tmdbQueries.tmdbMeta("1", "SERIES").executeAsOne().fetched_ms)
     }
 }

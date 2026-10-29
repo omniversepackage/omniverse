@@ -39,14 +39,14 @@ data class OmniColors(
     /** Thin stroke around the focused tile (Kory, 2026-10-11): white here, the service colour inside a service section. */
     val focusBorder: Color = Color.White,
     /** HaloWars2.com-inspired layered midnight glass (no runtime background blur on TV). */
-    val glassTop: Color = Color(0xCC122032),
-    val glassBottom: Color = Color(0x94101A2A),
-    val glassFocusTop: Color = Color(0xE62A8BD0),
-    val glassFocusBottom: Color = Color(0xC2101E31),
+    val glassTop: Color = Color(0xEB122032),
+    val glassBottom: Color = Color(0xDE101A2A),
+    val glassFocusTop: Color = Color(0xF02B577A),
+    val glassFocusBottom: Color = Color(0xED13283F),
     val glassEdge: Color = Color(0x2EFFFFFF),
     val glassGlint: Color = Color(0x2EFFFFFF),
     val glassBlueSheen: Color = Color(0x303AC4F4),
-    val glassWineSheen: Color = Color(0x38A8264E),
+    val glassWineSheen: Color = Color(0x206D68BB),
 )
 
 /** Instrument Serif (SIL OFL 1.1, InstrumentSerif-OFL.txt): titles and headings only. */

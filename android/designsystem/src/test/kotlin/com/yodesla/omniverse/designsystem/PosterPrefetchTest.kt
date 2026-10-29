@@ -144,8 +144,7 @@ class PosterPrefetchTest {
         assertEquals(listOf("a", "b"), calls)
         assertEquals(2, prefetcher.pendingCount)
         completes[0]()
-        assertEquals(1, prefetcher.pendingCount)
-        prefetcher.prefetch(listOf("c"))
+        // Completion itself drains the queue without another focus event.
         assertEquals(listOf("a", "b", "c"), calls)
         assertEquals(2, prefetcher.pendingCount)
     }

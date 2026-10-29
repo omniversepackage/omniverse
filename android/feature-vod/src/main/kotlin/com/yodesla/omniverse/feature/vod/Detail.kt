@@ -164,6 +164,8 @@ data class DetailState(
     val year: Int? = null,
     val genre: String? = null,
     val runtimeSec: Int? = null,
+    /** Standard movie runtime from TMDB, kept separate from the selected file's runtime. */
+    val referenceRuntimeSec: Int? = null,
     val ratingValue: Float? = null,
     val plot: String? = null,
     val cast: String? = null,
@@ -181,6 +183,8 @@ data class DetailState(
     val movie: VodDetail? = null,
     val selectedVersionId: String? = null,
     val versionProgress: Map<String, Progress> = emptyMap(),
+    /** Per-file labels the viewer saved, keyed by the source's stable media version id. */
+    val versionLabels: Map<String, String> = emptyMap(),
     val legacyMovieProgress: Progress? = null,
     /** Exact catalog id of this title; the version chooser's memory hangs off it. */
     val tmdbId: String? = null,
@@ -190,6 +194,10 @@ data class DetailState(
     val editionCopyProgress: Map<ContentKey, Progress> = emptyMap(),
     /** Runtime of each alternative copy that the source would state; absent when it would not. */
     val editionCopyRuntimeSec: Map<ContentKey, Int> = emptyMap(),
+    /** Each alternative copy's picture as its source probed it (resolution, HDR, Dolby Vision); absent when it did not. */
+    val editionCopyVideo: Map<ContentKey, com.yodesla.omniverse.core.model.VideoInfo> = emptyMap(),
+    /** Category each copy is filed under ("4K Movies Dolby Vision"): the last hint at what it is. */
+    val copyCategoryNames: Map<ContentKey, String> = emptyMap(),
     val relatedMovies: List<RelatedMovie> = emptyList(),
     val relatedMetadata: RelatedMetadata? = null,
     val itemOverride: ItemOverride? = null,
@@ -228,7 +236,8 @@ internal fun moreMenuLabelsFor(key: ContentKey, s: DetailState, visibility: Visi
         val related = s.relatedMovies.filter { row ->
             row.poster.categoryId?.let { visibility(row.poster.key.kind.name, row.poster.key.sourceId.value, it.value) } ?: true
         }
-        val playOptions = buildPlayOptions(key, s.sourceName, s.itemOverride?.editionLabel, s.movie.versions.orEmpty(), related, s.movie.record.name)
+        val playOptions = buildPlayOptions(key, s.sourceName, s.itemOverride?.editionLabel, s.movie.versions.orEmpty(), related, s.movie.record.name,
+            s.movie.video, s.editionCopyVideo, s.copyCategoryNames, s.runtimeSec, s.editionCopyRuntimeSec, s.tmdbId, s.versionLabels, s.referenceRuntimeSec, s.year)
         val copies = buildEditionCopies(playOptions, key, s.runtimeSec, s.progress, s.versionProgress, s.editionCopyProgress, s.editionCopyRuntimeSec, related.associate { it.poster.key to it.poster.name })
         val ranked = editionCopiesRanked(copies, s.lastEditionPick)
         if (editionChooserNeeded(ranked)) {
@@ -251,6 +260,8 @@ class DetailViewModel(
     /** Episode to open the show ready on (task 71 "New episodes" card). */
     private val focusEpisode: RemoteId? = null,
     private val explicitlySelectedSource: Boolean = false,
+    private val repairSource: suspend (com.yodesla.omniverse.core.model.SourceId) -> Boolean = { false },
+    private val openWorkingCopy: ((ContentKey) -> Unit)? = null,
 ) : ViewModel() {
     private val _state = MutableStateFlow(DetailState())
     val state: StateFlow<DetailState> = _state.asStateFlow()
@@ -299,15 +310,18 @@ class DetailViewModel(
             viewModelScope.launch {
                 val st = _state.first { !it.loading && (it.movie != null || it.series != null) }
                 val id = st.movie?.record?.tmdbId ?: st.series?.record?.tmdbId
+                    ?: runCatching { sources.contentSource(key.sourceId)?.previewArtwork(key.kind, key.remoteId)?.tmdbId }.getOrNull()
                 val kind = if (st.movie != null) com.yodesla.omniverse.core.data.metadata.WikidataMetadata.Kind.MOVIE
                     else com.yodesla.omniverse.core.data.metadata.WikidataMetadata.Kind.SERIES
                 val m = runCatching { t.meta(kind, id) }.getOrNull() ?: return@launch
                 _state.update {
                     it.copy(
-                        backdrop = it.backdrop ?: com.yodesla.omniverse.core.data.metadata.Tmdb.backdropUrl(m.backdropPath),
+                        backdrop = com.yodesla.omniverse.core.data.metadata.landscapeBackdrop(
+                            com.yodesla.omniverse.core.data.metadata.Tmdb.backdropUrl(m.backdropPath), it.backdrop, it.poster),
                         logoUrl = it.logoUrl ?: com.yodesla.omniverse.core.data.metadata.Tmdb.logoUrl(m.logoPath),
                         certification = it.certification ?: m.certification,
                         runtimeSec = it.runtimeSec ?: m.runtimeMin?.times(60),
+                        referenceRuntimeSec = m.runtimeMin?.times(60),
                         // Task 84f: the TMDB synopsis fills the gap the provider left. The opt-in
                         // Wikipedia pass below only gets the plot (and owes attribution) if this is blank.
                         plot = com.yodesla.omniverse.core.data.metadata.pickPlot(it.plot, m.overview),
@@ -351,13 +365,18 @@ class DetailViewModel(
         }.launchIn(viewModelScope)
     }
 
+    private var detailLoadJob: kotlinx.coroutines.Job? = null
+    private var repairAttempted = false
+
     fun load() {
+        detailLoadJob?.cancel()
         _state.update { it.copy(loading = true, error = null) }
-        viewModelScope.launch {
+        detailLoadJob = viewModelScope.launch {
             val source = sources.contentSource(key.sourceId) ?: return@launch _state.update { it.copy(loading = false, error = "This source was removed.") }
             try {
                 val custom = userData.itemOverride(key)
-                val titleIdentity = catalog?.poster(key)?.titleIdentity()
+                val catalogPoster = catalog?.poster(key)
+                val titleIdentity = catalogPoster?.titleIdentity()
                 val titleCustom = titleIdentity?.let { userData.titleOverride(it) }
                 val sourceNames = sources.sources().first().associate { it.id to it.name }
                 val allowed = visibility.first()
@@ -430,7 +449,7 @@ class DetailViewModel(
                             plot = d.record.plot?.takeIf { it.isNotBlank() },
                             cast = d.cast?.takeIf { it.isNotBlank() },
                             sourceName = sourceNames[key.sourceId] ?: "Source",
-                            year = d.record.year, genre = d.record.genre, ratingValue = d.record.rating, // season count lives in the overline
+                            year = d.record.year, genre = d.record.genre, ratingValue = catalogPoster?.rating ?: d.record.rating, // match the catalog card
                             series = unified, season = lastSeason, episodeProgress = prog,
                             episodeCopyProgress = copyProg, episodeSources = merged.sourcesByEpisode,
                             itemOverride = custom,
@@ -448,6 +467,13 @@ class DetailViewModel(
                     val related = catalog?.exactMovieMatches(key).orEmpty().map {
                         RelatedMovie(it, sourceNames[it.key.sourceId] ?: "Source", userData.itemOverride(it.key)?.editionLabel)
                     }
+                    // Providers often file copies under "4K Movies Dolby Vision" while naming them plainly.
+                    val categoryNames = (related.map { it.poster } + listOfNotNull(catalogPoster)).groupBy { it.key.sourceId }
+                        .flatMap { (sourceId, rows) ->
+                            val names = runCatching { catalog?.categories(sourceId, ContentKind.VOD, true)?.first() }.getOrNull()
+                                .orEmpty().associate { it.remoteId to it.name }
+                            rows.mapNotNull { row -> row.categoryId?.let(names::get)?.let { row.key to it } }
+                        }.toMap()
                     val fallback = if (d.record.posterUrl.isNullOrBlank() || d.plot.isNullOrBlank() || d.cast.isNullOrBlank())
                         related.firstOrNull { row -> row.poster.categoryId?.let { allowed("VOD", row.poster.key.sourceId.value, it.value) } ?: true }
                             ?.let { row -> runCatching { sources.contentSource(row.poster.key.sourceId)?.vodDetail(row.poster.key.remoteId) }.getOrNull()?.let { row to it } }
@@ -462,12 +488,13 @@ class DetailViewModel(
                         row.poster.categoryId?.let { allowed("VOD", row.poster.key.sourceId.value, it.value) } ?: true
                     }.map { it.poster.key }.distinct().take(MAX_EDITION_ALTS)
                     val altProgress = altKeys.mapNotNull { alt -> userData.progress(alt)?.let { alt to it } }.toMap()
-                    val altRuntime = altKeys.mapNotNull { alt ->
-                        runCatching { sources.contentSource(alt.sourceId)?.vodDetail(alt.remoteId)?.durationSec }.getOrNull()?.let { alt to it }
-                    }.toMap()
                     val versionProgress = if (d.versions.size > 1) d.versions.mapNotNull { version ->
                         userData.progress(mediaProgressKey(key, version.id))?.let { version.id to it }
                     }.toMap().toMutableMap() else mutableMapOf()
+                    val versionLabels = d.versions.mapNotNull { version ->
+                        userData.setting(editionVersionLabelSettingKey(key, version.id)).first()
+                            ?.takeIf { it.isNotBlank() }?.let { version.id to it }
+                    }.toMap()
                     val legacyProgress = userData.progress(key)
                     val legacyDuration = legacyProgress?.durationMs?.takeIf { it > 0 }
                     if (d.versions.size > 1 && legacyProgress != null && legacyProgress.positionMs > 0 &&
@@ -496,23 +523,76 @@ class DetailViewModel(
                             cast = d.cast?.takeIf { it.isNotBlank() }, movie = d,
                             sourceName = sourceNames[key.sourceId] ?: "Source",
                             year = d.record.year, genre = d.genre ?: d.record.genre,
-                            runtimeSec = d.durationSec, ratingValue = d.record.rating,
+                            runtimeSec = d.durationSec, ratingValue = catalogPoster?.rating ?: d.record.rating,
                             progress = p, durationMs = d.durationSec?.let { s -> s * 1000L },
-                            selectedVersionId = selected, versionProgress = versionProgress,
+                            selectedVersionId = selected, versionProgress = versionProgress, versionLabels = versionLabels,
                             legacyMovieProgress = if (d.versions.size > 1) null else legacyProgress,
                             tmdbId = tmdb, lastEditionPick = lastPick,
-                            editionCopyProgress = altProgress, editionCopyRuntimeSec = altRuntime,
+                            editionCopyProgress = altProgress, editionCopyRuntimeSec = emptyMap(), editionCopyVideo = emptyMap(), copyCategoryNames = categoryNames,
                             relatedMovies = related, itemOverride = custom,
                             relatedMetadata = fallback?.let { (row, detail) -> RelatedMetadata("VOD", row.poster.key.sourceId.value,
                                 row.poster.categoryId?.value, detail.record.posterUrl, detail.backdropUrls.firstOrNull(), detail.plot, detail.cast) },
                             titleIdentity = titleIdentity, titleOverride = titleCustom,
                         )
                     }
+                    // Optional copies must not hold the selected movie's page behind their network calls.
+                    // One detail call per copy gives its runtime and its picture (resolution, HDR, Dolby Vision).
+                    altKeys.chunked(4).forEach { batch ->
+                        val details = coroutineScope {
+                            batch.map { alt -> async {
+                                try {
+                                    kotlinx.coroutines.withTimeoutOrNull(4_000) {
+                                        sources.contentSource(alt.sourceId)?.vodDetail(alt.remoteId)
+                                    }?.let { alt to it }
+                                } catch (e: kotlinx.coroutines.CancellationException) {
+                                    throw e
+                                } catch (_: Exception) { null }
+                            } }.mapNotNull { it.await() }
+                        }
+                        val runtimes = details.mapNotNull { (alt, d) -> d.durationSec?.let { alt to it } }.toMap()
+                        val videos = details.mapNotNull { (alt, d) -> d.video?.let { alt to it } }.toMap()
+                        _state.update { it.copy(editionCopyRuntimeSec = it.editionCopyRuntimeSec + runtimes,
+                            editionCopyVideo = it.editionCopyVideo + videos) }
+                    }
                 }
             } catch (e: SourceException) {
                 // Redacted: provider URLs carry credentials.
                 android.util.Log.w("Omniverse", "detail ${key.kind} failed: ${e::class.simpleName}: ${com.yodesla.omniverse.core.model.Redact.text(e.message.orEmpty())} | cause=${e.cause?.let { it::class.simpleName + ": " + com.yodesla.omniverse.core.model.Redact.text(it.message.orEmpty()) }}")
-                _state.update { it.copy(loading = false, error = "Couldn't load details. ${if (e is SourceException.Network) "Check your connection." else "The provider didn't answer as expected."}") }
+                if (!repairAttempted && (e is SourceException.AuthFailed || e is SourceException.Network)) {
+                    repairAttempted = true
+                    val repaired = try { repairSource(key.sourceId) }
+                        catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                        catch (_: Exception) { false }
+                    if (repaired) { load(); return@launch }
+                }
+                // A Home/Search result names one catalog copy. If that provider failed, try other
+                // exact TMDB copies; never switch when the viewer explicitly chose a source.
+                if (!explicitlySelectedSource && openWorkingCopy != null) {
+                    val identity = catalog?.poster(key)?.titleIdentity()
+                    val candidates = identity?.let { catalog.titleCandidates(it) }.orEmpty()
+                    val allowed = visibility.first()
+                    for (candidate in candidates) {
+                        if (candidate.key == key || candidate.categoryId?.let {
+                                !allowed(candidate.key.kind.name, candidate.key.sourceId.value, it.value)
+                            } == true) continue
+                        val works = try {
+                            kotlinx.coroutines.withTimeoutOrNull(4_000) {
+                                val alternate = sources.contentSource(candidate.key.sourceId) ?: return@withTimeoutOrNull false
+                                if (key.kind == ContentKind.SERIES) alternate.seriesDetail(candidate.key.remoteId)
+                                else alternate.vodDetail(candidate.key.remoteId)
+                                true
+                            } == true
+                        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                        catch (_: Exception) { false }
+                        if (works) { openWorkingCopy(candidate.key); return@launch }
+                    }
+                }
+                val advice = when (e) {
+                    is SourceException.AuthFailed -> "This source rejected its saved sign-in. Reconnect it in Settings > Sources."
+                    is SourceException.Network -> "This source is unreachable. Check its address in Settings > Sources."
+                    else -> "The provider didn't answer as expected."
+                }
+                _state.update { it.copy(loading = false, error = "Couldn't load details. $advice") }
             }
         }
     }
@@ -577,6 +657,25 @@ class DetailViewModel(
         userData.setItemOverride(key, item)
         _state.update { it.copy(itemOverride = item, title = title ?: it.movie?.record?.let { m -> displayTitle(m.name, m.year) }
             ?: it.series?.record?.let { s -> displayTitle(s.name, s.year) } ?: it.title) }
+    }
+
+    /** A local label for one exact playable copy; never edits or renames the provider's file. */
+    fun saveCopyLabel(copy: EditionCopy, value: String) = viewModelScope.launch {
+        val label = value.trim().take(80)
+        if (copy.versionId != null) {
+            userData.putSetting(editionVersionLabelSettingKey(copy.key, copy.versionId), label)
+            _state.update { state -> state.copy(versionLabels = state.versionLabels.toMutableMap().apply {
+                if (label.isEmpty()) remove(copy.versionId) else put(copy.versionId, label)
+            }) }
+        } else {
+            val old = userData.itemOverride(copy.key) ?: ItemOverride()
+            val updated = old.copy(editionLabel = label.ifEmpty { null })
+            userData.setItemOverride(copy.key, updated)
+            _state.update { state -> state.copy(
+                itemOverride = if (copy.key == key) updated else state.itemOverride,
+                relatedMovies = state.relatedMovies.map { if (it.poster.key == copy.key) it.copy(editionLabel = updated.editionLabel) else it },
+            ) }
+        }
     }
 
     fun savePosterUri(uri: String?) = viewModelScope.launch {
@@ -844,6 +943,8 @@ fun DetailRoute(viewModel: DetailViewModel, visibility: kotlinx.coroutines.flow.
     // artwork from a locked source or from a merely similar title.
     val displayPoster = withFallback.poster ?: related.firstNotNullOfOrNull { it.poster.posterUrl } ?: s.poster
     var showSources by remember { mutableStateOf(false) }
+    var labelCopy by remember { mutableStateOf<EditionCopy?>(null) }
+    var copyLabelDraft by remember { mutableStateOf("") }
     var showEdit by remember { mutableStateOf(false) }
     var showCollections by remember { mutableStateOf(false) }
     // Task 90: rarely-used actions (Edit details, Collections, version/source choice) move into a
@@ -852,6 +953,7 @@ fun DetailRoute(viewModel: DetailViewModel, visibility: kotlinx.coroutines.flow.
     var editTitle by remember { mutableStateOf("") }
     var editSort by remember { mutableStateOf("") }
     var editEdition by remember { mutableStateOf("") }
+    var collectionError by remember { mutableStateOf<String?>(null) }
     var newCollection by remember { mutableStateOf("") }
     var pinNewCollection by remember { mutableStateOf(false) }
     var smartMode by remember { mutableStateOf(false) }
@@ -875,6 +977,7 @@ fun DetailRoute(viewModel: DetailViewModel, visibility: kotlinx.coroutines.flow.
     var manageSourceId by remember { mutableStateOf<String?>(null) }
     var confirmCollectionDelete by remember { mutableStateOf(false) }
     fun openCollectionManager(collection: LibraryCollection) {
+        collectionError = null
         managingCollection = collection
         manageName = collection.name
         val filter = SmartCollectionFilter.decode(collection.smartFilterJson) ?: SmartCollectionFilter()
@@ -898,8 +1001,9 @@ fun DetailRoute(viewModel: DetailViewModel, visibility: kotlinx.coroutines.flow.
     // old dialog, which stays behind "More…" when there are too many to show.
     val currentKey = viewModel.currentKey()
     val providerName = s.movie?.record?.name ?: s.series?.record?.name
-    val playOptions = remember(currentKey, s.sourceName, s.itemOverride?.editionLabel, s.movie?.versions, related, providerName) {
-        buildPlayOptions(currentKey, s.sourceName, s.itemOverride?.editionLabel, s.movie?.versions.orEmpty(), related, providerName)
+    val playOptions = remember(currentKey, s.sourceName, s.itemOverride?.editionLabel, s.movie?.versions, related, providerName, s.movie?.video, s.editionCopyVideo, s.copyCategoryNames, s.runtimeSec, s.editionCopyRuntimeSec, s.tmdbId, s.versionLabels, s.referenceRuntimeSec, s.year) {
+        buildPlayOptions(currentKey, s.sourceName, s.itemOverride?.editionLabel, s.movie?.versions.orEmpty(), related, providerName,
+            s.movie?.video, s.editionCopyVideo, s.copyCategoryNames, s.runtimeSec, s.editionCopyRuntimeSec, s.tmdbId, s.versionLabels, s.referenceRuntimeSec, s.year)
     }
     // Task 86: every copy the viewer can actually see, described well enough to choose between.
     // [related] is already re-checked against live visibility above, so a switched-off library, a
@@ -941,22 +1045,6 @@ fun DetailRoute(viewModel: DetailViewModel, visibility: kotlinx.coroutines.flow.
         // Full-bleed artwork dissolving into the page on the left and bottom (Midnight Cinema);
         // with no wide backdrop the poster itself becomes the darkened background.
         DetailBackdrop(s.backdrop, displayPoster)
-        // Task 69: the backdrop's own washes leave the text column too bright over a wide still
-        // (secondary body text needs ≥4.5:1). A dedicated scrim holds the text zone near-opaque
-        // and clears only past the text's right edge; the artwork keeps its full right side.
-        if (!LocalCompact.current && s.error == null && !s.loading) {
-            if (s.series == null) {
-                Box(
-                    Modifier.align(Alignment.BottomStart).fillMaxWidth(0.62f).fillMaxHeight(0.85f)
-                        .background(Brush.verticalGradient(0f to Color.Transparent, 0.45f to c.background.copy(alpha = 0.88f), 1f to c.background.copy(alpha = 0.98f))),
-                )
-            } else {
-                Box(
-                    Modifier.align(Alignment.TopStart).fillMaxWidth(0.75f).fillMaxHeight(0.62f)
-                        .background(Brush.horizontalGradient(0f to c.background, 0.85f to c.background.copy(alpha = 0.92f), 1f to Color.Transparent)),
-                )
-            }
-        }
         if (displayPoster != null && !LocalCompact.current) {
             // The portrait is the reliable focal point even when supplied wide art
             // is only an abstract blur. Keep it clear of the series episode column.
@@ -1001,7 +1089,7 @@ fun DetailRoute(viewModel: DetailViewModel, visibility: kotlinx.coroutines.flow.
             else -> BoxWithConstraints {
                 val heroMaxHeight = maxHeight * DetailSeriesHeroWeight
                 Column(
-                Modifier.fillMaxHeight().fillMaxWidth(if (LocalCompact.current) 1f else 0.72f)
+                Modifier.fillMaxHeight().width(if (LocalCompact.current) maxWidth else (maxWidth - 324.dp).coerceAtLeast(280.dp))
                     .padding(top = OmniSpacing.m),
             ) {
                 // Task 119: the series hero (title/logo/meta/actions/season tabs) is now a bounded,
@@ -1045,8 +1133,28 @@ fun DetailRoute(viewModel: DetailViewModel, visibility: kotlinx.coroutines.flow.
                 else if (copy.versionId != null) viewModel.selectVersion(copy.versionId)
                 else viewModel.rememberEditionPick(copy.savedPickId())
             },
+            onLabel = { copy ->
+                showSources = false
+                labelCopy = copy
+                copyLabelDraft = editionWords(copy.editionLabel).orEmpty()
+            },
             onDismiss = { showSources = false },
         )
+    }
+    labelCopy?.let { copy ->
+        Dialog(onDismissRequest = { labelCopy = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            Column(Modifier.width(520.dp).background(c.background, RoundedCornerShape(18.dp)).padding(OmniSpacing.xl),
+                verticalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
+                Text("Label this copy", style = OmniTheme.type.title, color = c.textPrimary)
+                Text("Saved only in Omniverse. Leave blank to use the automatic label.",
+                    style = OmniTheme.type.caption, color = c.textSecondary)
+                DetailTextField(copyLabelDraft, { copyLabelDraft = it }, "Cut or version name")
+                Row(horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
+                    OmniButton("Save", { viewModel.saveCopyLabel(copy, copyLabelDraft); labelCopy = null })
+                    OmniButton("Cancel", { labelCopy = null })
+                }
+            }
+        }
     }
     if (showEdit) {
         Dialog(onDismissRequest = { showEdit = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -1057,9 +1165,9 @@ fun DetailRoute(viewModel: DetailViewModel, visibility: kotlinx.coroutines.flow.
                 Text("Saved only in Omniverse; your provider is unchanged.", style = OmniTheme.type.caption, color = c.textSecondary)
                 // Documented exception (task 69): these are text inputs, not tiles — material3's own
                 // focus treatment (border + cursor) is the right one here.
-                OutlinedTextField(editTitle, { editTitle = it }, label = { Text("Display title") }, singleLine = true)
-                OutlinedTextField(editSort, { editSort = it }, label = { Text("Sort title") }, singleLine = true)
-                OutlinedTextField(editEdition, { editEdition = it }, label = { Text("Edition label") }, singleLine = true)
+                DetailTextField(editTitle, { editTitle = it }, "Display title")
+                DetailTextField(editSort, { editSort = it }, "Sort title")
+                DetailTextField(editEdition, { editEdition = it }, "Edition label")
                 OmniButton("Choose poster from this device", {
                     try { posterPicker.launch(arrayOf("image/*")) }
                     catch (_: android.content.ActivityNotFoundException) { artworkError = "No image picker is installed on this device." }
@@ -1097,14 +1205,14 @@ fun DetailRoute(viewModel: DetailViewModel, visibility: kotlinx.coroutines.flow.
                         }
                     }
                 }
-                OutlinedTextField(newCollection, { newCollection = it }, label = { Text("New collection name") }, singleLine = true)
+                DetailTextField(newCollection, { newCollection = it }, "New collection name")
                 OmniButton(if (smartMode) "Smart filter ✓" else "Smart filter", { smartMode = !smartMode })
                 if (smartMode) {
-                    OutlinedTextField(smartKeyword, { smartKeyword = it }, label = { Text("Title contains") }, singleLine = true)
-                    OutlinedTextField(smartYear, { smartYear = it }, label = { Text("From year") }, singleLine = true)
-                    OutlinedTextField(smartYearTo, { smartYearTo = it }, label = { Text("Through year") }, singleLine = true)
-                    OutlinedTextField(smartRating, { smartRating = it }, label = { Text("Minimum rating /10") }, singleLine = true)
-                    OutlinedTextField(smartGenre, { smartGenre = it }, label = { Text("Genre contains") }, singleLine = true)
+                    DetailTextField(smartKeyword, { smartKeyword = it }, "Title contains")
+                    DetailTextField(smartYear, { smartYear = it }, "From year")
+                    DetailTextField(smartYearTo, { smartYearTo = it }, "Through year")
+                    DetailTextField(smartRating, { smartRating = it }, "Minimum rating /10")
+                    DetailTextField(smartGenre, { smartGenre = it }, "Genre contains")
                     OmniButton(when (smartStarted) { 1 -> "Started titles"; 2 -> "Not started titles"; else -> "Any watch state" },
                         { smartStarted = (smartStarted + 1) % 3 })
                     OmniButton(when (smartEditionLabel) { 1 -> "Labeled editions"; 2 -> "Unlabeled editions"; else -> "Any edition label" },
@@ -1112,8 +1220,10 @@ fun DetailRoute(viewModel: DetailViewModel, visibility: kotlinx.coroutines.flow.
                     OmniButton(if (smartSourceOnly) "This source only ✓" else "All sources", { smartSourceOnly = !smartSourceOnly })
                 }
                 OmniButton(if (pinNewCollection) "Pinned on Home ✓" else "Pin on Home", { pinNewCollection = !pinNewCollection })
+                collectionError?.let { Text(it, style = OmniTheme.type.body, color = c.live) }
                 OmniButton(if (smartMode) "Create smart collection" else "Create and add", {
-                    if (newCollection.isNotBlank()) {
+                    collectionError = collectionInputError(newCollection, if (smartMode) smartYear else "", if (smartMode) smartYearTo else "", if (smartMode) smartRating else "")
+                    if (collectionError == null) {
                         if (smartMode) viewModel.createSmartCollection(newCollection,
                             SmartCollectionFilter(smartKeyword.trim().ifEmpty { null }, smartYear.toIntOrNull(), smartYearTo.toIntOrNull(),
                                 ratingAtLeast = smartRating.toFloatOrNull(),
@@ -1134,13 +1244,13 @@ fun DetailRoute(viewModel: DetailViewModel, visibility: kotlinx.coroutines.flow.
                 .verticalScroll(rememberScrollState()).padding(OmniSpacing.xl),
                 verticalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
                 Text("Manage collection", style = OmniTheme.type.title, color = c.textPrimary)
-                OutlinedTextField(manageName, { manageName = it }, label = { Text("Name") }, singleLine = true)
+                DetailTextField(manageName, { manageName = it }, "Name")
                 if (collection.mode == "smart") {
-                    OutlinedTextField(manageKeyword, { manageKeyword = it }, label = { Text("Title contains") }, singleLine = true)
-                    OutlinedTextField(manageGenre, { manageGenre = it }, label = { Text("Genre contains") }, singleLine = true)
-                    OutlinedTextField(manageYearFrom, { manageYearFrom = it }, label = { Text("From year") }, singleLine = true)
-                    OutlinedTextField(manageYearTo, { manageYearTo = it }, label = { Text("Through year") }, singleLine = true)
-                    OutlinedTextField(manageRating, { manageRating = it }, label = { Text("Minimum rating /10") }, singleLine = true)
+                    DetailTextField(manageKeyword, { manageKeyword = it }, "Title contains")
+                    DetailTextField(manageGenre, { manageGenre = it }, "Genre contains")
+                    DetailTextField(manageYearFrom, { manageYearFrom = it }, "From year")
+                    DetailTextField(manageYearTo, { manageYearTo = it }, "Through year")
+                    DetailTextField(manageRating, { manageRating = it }, "Minimum rating /10")
                     OmniButton(when (manageStarted) { 1 -> "Started titles"; 2 -> "Not started titles"; else -> "Any watch state" },
                         { manageStarted = (manageStarted + 1) % 3 })
                     OmniButton(when (manageEditionLabel) { 1 -> "Labeled editions"; 2 -> "Unlabeled editions"; else -> "Any edition label" },
@@ -1156,8 +1266,10 @@ fun DetailRoute(viewModel: DetailViewModel, visibility: kotlinx.coroutines.flow.
                     OmniButton("Move up", { viewModel.moveCollection(collection.id, -1) })
                     OmniButton("Move down", { viewModel.moveCollection(collection.id, 1) })
                 }
+                collectionError?.let { Text(it, style = OmniTheme.type.body, color = c.live) }
                 OmniButton("Save changes", {
-                    if (manageName.isNotBlank()) {
+                    collectionError = collectionInputError(manageName, if (collection.mode == "smart") manageYearFrom else "", if (collection.mode == "smart") manageYearTo else "", if (collection.mode == "smart") manageRating else "")
+                    if (collectionError == null) {
                         val rule = if (collection.mode == "smart") SmartCollectionFilter(
                             manageKeyword.trim().ifEmpty { null }, manageYearFrom.toIntOrNull(), manageYearTo.toIntOrNull(),
                             manageRating.toFloatOrNull(), manageSourceId,
@@ -1242,6 +1354,7 @@ private fun EditionSourceChooser(
     copies: List<EditionCopy>,
     chosenId: String?,
     onPick: (EditionCopy) -> Unit,
+    onLabel: (EditionCopy) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val c = OmniTheme.colors
@@ -1269,6 +1382,7 @@ private fun EditionSourceChooser(
         ) {
             Text(stringResource(R.string.editions_sources_title), style = t.title, color = c.textPrimary)
             Text(stringResource(R.string.editions_sources_hint), style = t.caption, color = c.textSecondary)
+            Text("Hold OK on a copy to give it a name.", style = t.caption, color = c.textSecondary)
             LazyColumn(
                 modifier = Modifier.height(listHeight),
                 contentPadding = PaddingValues(horizontal = OmniSpacing.tvSide, vertical = OmniSpacing.focusEdge),
@@ -1278,6 +1392,7 @@ private fun EditionSourceChooser(
                     val chosen = copy.id == chosenId
                     FocusCard(
                         onClick = { onPick(copy) },
+                        onLongClick = { onLabel(copy) },
                         modifier = Modifier.fillMaxWidth().height(72.dp)
                             .then(if (copy.isCurrent) Modifier.focusRequester(first) else Modifier),
                     ) {
@@ -1306,7 +1421,11 @@ private fun EditionSourceChooser(
 @Composable
 private fun DetailHeader(s: DetailState, overline: String, big: Boolean, chips: @Composable () -> Unit = {}) {
     val c = OmniTheme.colors
-    val t = OmniTheme.type
+    val textShadow = androidx.compose.ui.graphics.Shadow(Color.Black.copy(alpha = 0.95f), androidx.compose.ui.geometry.Offset(0f, 2f), 6f)
+    val baseType = OmniTheme.type
+    val t = baseType.copy(overline = baseType.overline.copy(shadow = textShadow),
+        display = baseType.display.copy(shadow = textShadow), headline = baseType.headline.copy(shadow = textShadow),
+        caption = baseType.caption.copy(shadow = textShadow), body = baseType.body.copy(shadow = textShadow))
     val edition = s.itemOverride?.editionLabel?.takeIf { it.isNotBlank() }
     Text((if (edition == null) overline else "$overline  ·  $edition").uppercase(),
         style = t.overline, color = c.accent, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -1323,7 +1442,7 @@ private fun DetailHeader(s: DetailState, overline: String, big: Boolean, chips: 
     }
     DetailMetaRow(s.year, s.runtimeSec, s.genre, s.ratingValue, s.rt, certification = s.certification)
     chips()
-    s.plot?.let { Text(it, style = t.caption, color = c.textSecondary, maxLines = if (big) 3 else 2, overflow = TextOverflow.Ellipsis) }
+    s.plot?.let { Text(it, style = t.caption, color = c.textPrimary, maxLines = if (big) 3 else 2, overflow = TextOverflow.Ellipsis) }
     s.plotAttribution?.let { label ->
         val uriHandler = LocalUriHandler.current
         Row(horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m), verticalAlignment = Alignment.CenterVertically) {
@@ -1399,6 +1518,21 @@ private fun DetailState.progressFor(episode: Episode): Progress? =
     episodeCopyProgress[episodeProgressId(episode)]
         ?: if (episodeCopyProgress.isEmpty()) episodeProgress[episode.remoteId.value] else null
 
+
+/** Same episode/source selection for the detail CTA and automatic Home/queue actions. */
+fun DetailState.primarySeriesEpisode(fromStart: Boolean = false): Episode? {
+    val all = series?.seasons.orEmpty().sortedBy { it.number }.flatMap { it.episodes.sortedBy { e -> e.number } }
+    if (all.isEmpty()) return null
+    val progress = (episodeCopyProgress.ifEmpty { episodeProgress }).values.maxByOrNull { it.updatedMs }
+    val copies = episodeSources.values.flatten().map { it.episode }.ifEmpty { all }
+    val last = progress?.let { p -> copies.firstOrNull { it.sourceId == p.key.sourceId && it.remoteId == p.key.remoteId } }
+    val focused = focusEpisodeId?.let { id -> all.firstOrNull { it.remoteId == id } }
+    val target = focused ?: if (progress?.completed == true && last != null && !fromStart) {
+        all.getOrNull(all.indexOfFirst { it.season == last.season && it.number == last.number } + 1) ?: last
+    } else last ?: all.first()
+    return episodeFromPickedSource(target, episodeSources[episodeSlot(target)].orEmpty(), lastEditionPick)
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SeriesActions(s: DetailState, vm: DetailViewModel, onPlay: (PlayItem) -> Unit, primary: FocusRequester,
@@ -1415,7 +1549,7 @@ private fun SeriesActions(s: DetailState, vm: DetailViewModel, onPlay: (PlayItem
     val last = lastProg?.let { p -> copies.firstOrNull { it.sourceId == p.key.sourceId && it.remoteId == p.key.remoteId } }
     val focus = s.focusEpisodeId?.let { id -> all.firstOrNull { it.remoteId == id } }
     val resumeEpisode = focus ?: (if (lastProg?.completed == true && last != null) all.getOrNull(all.indexOfFirst { it.season == last.season && it.number == last.number } + 1) ?: last else last ?: all.firstOrNull())
-    val start = resumeEpisode?.let { episodeFromPickedSource(it, s.episodeSources[episodeSlot(it)].orEmpty(), s.lastEditionPick) }
+    val start = s.primarySeriesEpisode()
     FlowRow(Modifier.padding(horizontal = OmniSpacing.tvSide), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (start != null) {
             DetailActionButton(
@@ -1498,12 +1632,12 @@ private fun ColumnScope.SeriesEpisodes(s: DetailState, vm: DetailViewModel, onPl
         val options = s.episodeSources[episodeSlot(ep)].orEmpty()
         val choiceFocus = remember { FocusRequester() }
         Dialog(onDismissRequest = { sourceChoice = null }) {
-            Column(Modifier.width(460.dp).clip(RoundedCornerShape(16.dp)).background(c.background).padding(OmniSpacing.xl),
+            Column(Modifier.width(560.dp).clip(RoundedCornerShape(16.dp)).background(c.background).padding(OmniSpacing.xl),
                 verticalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
                 Text("Choose source · S${ep.season}E${ep.number}", style = t.title, color = c.textPrimary)
                 options.forEachIndexed { index, option ->
                     OmniButton(
-                        "Play from ${option.sourceName}",
+                        "Play · ${episodeSourceLabel(option)}",
                         {
                             sourceChoice = null
                             if ((s.progressFor(option.episode)?.positionMs ?: 0L) > 0L) resumeChoice = option.episode
@@ -1560,11 +1694,11 @@ private fun ColumnScope.SeriesEpisodes(s: DetailState, vm: DetailViewModel, onPl
                         else onPlay(vm.episodePlayItem(ep))
                     },
                     onLongClick = { menuEpisode = ep },
-                    modifier = Modifier.fillMaxWidth().height(DetailEpisodeCardHeightDp.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = DetailEpisodeCardHeightDp.dp),
                 ) {
-                    Row(Modifier.fillMaxSize().padding(OmniSpacing.s), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.fillMaxWidth().padding(OmniSpacing.s), verticalAlignment = Alignment.CenterVertically) {
                         Box(
-                            Modifier.aspectRatio(16f / 9f).clip(RoundedCornerShape(8.dp))
+                            Modifier.height(80.dp).aspectRatio(16f / 9f).clip(RoundedCornerShape(8.dp))
                                 .background(if (hidden && !supportsRuntimeBlur()) c.background else c.elevated),
                         ) {
                             // Task 95: blurred still on API 31+, plain dark placeholder below it.
@@ -1639,4 +1773,39 @@ internal fun isWatchedProgress(p: Progress?): Boolean {
     if (p.completed) return true
     val dur = p.durationMs?.takeIf { it > 0 }
     return if (dur != null) p.positionMs >= dur else p.positionMs == 1L
+}
+
+
+
+
+
+
+
+
+
+
+internal fun collectionInputError(name: String, from: String, to: String, rating: String): String? {
+    if (name.isBlank()) return "Enter a collection name."
+    val start = from.trim().takeIf { it.isNotEmpty() }?.toIntOrNull()
+    val end = to.trim().takeIf { it.isNotEmpty() }?.toIntOrNull()
+    if ((from.isNotBlank() && (start == null || start !in 1800..3000)) ||
+        (to.isNotBlank() && (end == null || end !in 1800..3000))) return "Enter years between 1800 and 3000."
+    if (start != null && end != null && start > end) return "From year must be before or equal to Through year."
+    val score = rating.trim().toFloatOrNull()
+    if (rating.isNotBlank() && (score == null || !score.isFinite() || score !in 0f..10f)) return "Enter a rating from 0 to 10."
+    return null
+}
+
+
+@Composable
+private fun DetailTextField(value: String, onChange: (String) -> Unit, label: String) {
+    val c = OmniTheme.colors
+    OutlinedTextField(value = value, onValueChange = onChange, singleLine = true,
+        modifier = Modifier.fillMaxWidth(), textStyle = OmniTheme.type.body.copy(color = c.textPrimary),
+        label = { Text(label, style = OmniTheme.type.caption, color = c.textSecondary) },
+        colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+            focusedTextColor = c.textPrimary, unfocusedTextColor = c.textPrimary,
+            focusedLabelColor = c.accent, unfocusedLabelColor = c.textSecondary,
+            focusedBorderColor = c.accent, unfocusedBorderColor = c.textTertiary,
+            focusedContainerColor = c.surface, unfocusedContainerColor = c.surface, cursorColor = c.accent))
 }

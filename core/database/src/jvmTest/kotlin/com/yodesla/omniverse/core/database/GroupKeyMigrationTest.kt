@@ -50,7 +50,7 @@ class GroupKeyMigrationTest {
     @Test fun freshSchemaCarriesGroupKeyOnBothCatalogTables() {
         val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
         OmniverseDb.Schema.create(driver)
-        assertEquals(16L, OmniverseDb.Schema.version) // 14: group_key, 15: conflicting series IDs
+        assertEquals(18L, OmniverseDb.Schema.version) // includes votes and Unicode search
         val db = OmniverseDb(driver)
         db.storeQueries.upsertSeries("s", "1", "Dark Matter", null, null, "c", null, null, null, 2024L, null, 0, 1, "darkmatter|2024", "550254")
         db.storeQueries.upsertSeries("s", "2", "EN - Dark Matter (2024)", null, null, "c", null, null, null, 2024L, null, 0, 1, "darkmatter|2024", null)

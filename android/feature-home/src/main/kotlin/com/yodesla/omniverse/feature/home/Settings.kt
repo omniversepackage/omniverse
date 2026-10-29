@@ -180,6 +180,8 @@ data class SettingsState(
     val leftOpensMenu: Boolean = true,
     val warnBeforeMainMenu: Boolean = true,
     val moviesShowsView: String = com.yodesla.omniverse.core.data.MoviesShowsView.CLASSIC,
+    /** For You layout ("cinematic" / "magazine"); the page has the same switch. */
+    val forYouLayout: String = com.yodesla.omniverse.core.data.ForYouLayout.CINEMATIC,
 )
 
 /** Task 84h: one row of the "Choose…" dialog — a language group present in this profile's sources. */
@@ -298,6 +300,9 @@ class SettingsViewModel(
         // Task 203: the Movies & Shows layout (Settings › Display), default Classic.
         userData.setting(com.yodesla.omniverse.core.data.MoviesShowsView.KEY).onEach { value ->
             _state.update { it.copy(moviesShowsView = com.yodesla.omniverse.core.data.MoviesShowsView.parse(value)) }
+        }.launchIn(viewModelScope)
+        userData.setting(com.yodesla.omniverse.core.data.ForYouLayout.KEY).onEach { value ->
+            _state.update { it.copy(forYouLayout = com.yodesla.omniverse.core.data.ForYouLayout.parse(value)) }
         }.launchIn(viewModelScope)
         // Task 84h: the category-language filter (Settings > Sources).
         userData.setting(com.yodesla.omniverse.core.data.categories.CATEGORY_LANG_FILTER_KEY).onEach { value ->
@@ -525,6 +530,10 @@ class SettingsViewModel(
     fun setWarnBeforeMenu(enabled: Boolean) = viewModelScope.launch { userData.putSetting("warn_main_menu", enabled.toString()) }
     fun setMoviesShowsView(value: String) = viewModelScope.launch {
         if (value in moviesShowsViews) userData.putSetting(com.yodesla.omniverse.core.data.MoviesShowsView.KEY, value)
+    }
+
+    fun setForYouLayout(value: String) = viewModelScope.launch {
+        userData.putSetting(com.yodesla.omniverse.core.data.ForYouLayout.KEY, com.yodesla.omniverse.core.data.ForYouLayout.parse(value))
     }
 
     fun setMetadataLookup(enabled: Boolean) = viewModelScope.launch {
@@ -771,6 +780,7 @@ private fun SettingsSearchField(
     onQuery: (String) -> Unit,
 ) {
     val c = OmniTheme.colors
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     OutlinedTextField(
         value = query,
         onValueChange = onQuery,
@@ -782,7 +792,7 @@ private fun SettingsSearchField(
             focusedBorderColor = c.accent, unfocusedBorderColor = c.elevated, cursorColor = c.accent,
             focusedContainerColor = c.surface, unfocusedContainerColor = c.surface,
         ),
-        modifier = modifier.focusRequester(field),
+        modifier = modifier.focusRequester(field).onFocusChanged { if (!it.isFocused) keyboard?.hide() },
     )
 }
 

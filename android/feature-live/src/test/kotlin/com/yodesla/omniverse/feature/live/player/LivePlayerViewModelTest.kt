@@ -85,6 +85,18 @@ class LivePlayerViewModelTest {
         clock = { 0L }, visibility = visibility, preloadEnabled = preloadEnabled,
     )
 
+    @Test fun favoritesCannotTuneOrPreloadHiddenCategories() = runTest(dispatcher) {
+        favs = listOf(channels[0].key, altChannels[0].key, channels[1].key)
+        val visible: Visibility = { _, source, _ -> source != src2.value }
+        val vm = vm(visibility = flowOf(visible), preloadEnabled = flowOf(true))
+        vm.start(channels[0].key, RemoteId(com.yodesla.omniverse.feature.live.LiveViewModel.FAVORITES))
+        advanceUntilIdle()
+        vm.zapNext()
+        advanceUntilIdle()
+        assertEquals(channels[1].key, vm.state.value.channelKey)
+        assertFalse(openedAt.any { it.startsWith("s2:") })
+    }
+
     @Test
     fun rapidSurfingOpensOnlyTheFinalChannel() = runTest(dispatcher) {
         val vm = vm()

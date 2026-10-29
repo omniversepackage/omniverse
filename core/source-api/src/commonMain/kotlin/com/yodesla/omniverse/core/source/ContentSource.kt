@@ -29,6 +29,8 @@ import kotlinx.coroutines.flow.Flow
  *  - Never log credentials (use Redact).
  *  - Open no media connections: [playback] only BUILDS a spec; the player opens it.
  */
+data class PreviewArtwork(val tmdbId: String?, val backdropUrl: String?)
+
 interface ContentSource {
     val id: SourceId
     val kind: SourceKind
@@ -36,6 +38,9 @@ interface ContentSource {
 
     /** Validates credentials and returns account state. Throws [SourceException.AuthFailed] on bad login. */
     suspend fun accountInfo(): AccountInfo
+
+    /** Lightweight background/identity lookup; never loads episodes or media. */
+    suspend fun previewArtwork(kind: ContentKind, id: RemoteId): PreviewArtwork? = null
 
     fun liveCategories(): Flow<Category>
     fun liveChannels(diagnostics: SyncDiagnostics = SyncDiagnostics.None): Flow<ChannelRecord>
@@ -111,3 +116,4 @@ interface SyncDiagnostics {
         override fun skipped(what: String, reason: String) = Unit
     }
 }
+

@@ -182,16 +182,16 @@ internal fun BrandLayout(
         val shelves = brandShelves(p, pool)
         if (popular.isEmpty()) shelves else listOf(BrandShelf("popular", "Popular on ${brand.name.replace("_PLUS", "+").replace("_", " ").lowercase().replaceFirstChar { it.uppercase() }} · TMDB / US", popular, false)) + shelves
     }
-    var focused by remember(brand) { mutableStateOf<PosterRow?>(null) }
-    val shown = focused ?: pool.firstOrNull { !it.posterUrl.isNullOrBlank() } ?: pool.firstOrNull()
+    val focused = remember(brand) { mutableStateOf<PosterRow?>(null) }
+    val fallback = pool.firstOrNull { !it.posterUrl.isNullOrBlank() } ?: pool.firstOrNull()
     val rank: Int? = null
     var inTopRow by remember(brand) { mutableStateOf(true) }
-    val onTopFocus: (PosterRow) -> Unit = { focused = it; inTopRow = true }
-    val onFocus: (PosterRow) -> Unit = { focused = it; inTopRow = false }
+    val onTopFocus: (PosterRow) -> Unit = remember(brand) { { focused.value = it; inTopRow = true } }
+    val onFocus: (PosterRow) -> Unit = remember(brand) { { focused.value = it; inTopRow = false } }
     val spotlightHeight by androidx.compose.animation.core.animateDpAsState(
         (if (inTopRow) SpotlightHeight else SpotlightCompactHeight) * com.yodesla.omniverse.designsystem.LocalTextScale.current,
         tween(260), label = "spotlightHeight")
-    var posterFocus by remember(brand) { mutableStateOf<PosterFocus?>(null) }
+    val posterFocus = remember(brand) { mutableStateOf<PosterFocus?>(null) }
     PosterPrefetch(
         rows = remember(shelves) { shelves.map { shelf -> shelf.rows.map { it.posterUrl } } },
         focus = posterFocus,
@@ -199,11 +199,13 @@ internal fun BrandLayout(
     )
 
     Column(Modifier.fillMaxSize()) {
-        Spotlight(shown, brand, p, rank, Modifier.fillMaxWidth().height(spotlightHeight), scores, compact = !inTopRow, onLibrary = onLibrary)
+        SettledPosterPreview(focused, fallback) { shown ->
+            Spotlight(shown, brand, p, rank, Modifier.fillMaxWidth().height(spotlightHeight), scores, compact = !inTopRow, onLibrary = onLibrary)
+        }
         // Rows scroll under the fixed spotlight; the focused row sits at the top of the list.
         Box(Modifier.fillMaxWidth().weight(1f)) {
             // Leading space keeps the focused row's title (and the focus-scaled poster) in view.
-            FocusPivot(parentFraction = 0f, leading = 64.dp) {
+            FocusPivot(parentFraction = 0f, leading = 64.dp, trailing = 48.dp) {
                 LazyColumn(
                     Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(start = OmniSpacing.s, top = OmniSpacing.s, bottom = OmniSpacing.xxl),
@@ -216,7 +218,7 @@ internal fun BrandLayout(
                         ) {
                             itemsIndexed(shelf.rows, key = { _, row -> shelf.key + "-" + row.uid() }) { cardIndex, row ->
                                 val mod = (if (shelfIndex == 0 && cardIndex == 0) Modifier.focusRequester(firstFocus) else Modifier)
-                                    .onFocusChanged { if (it.isFocused) posterFocus = PosterFocus(shelfIndex, cardIndex) }
+                                    .onFocusChanged { if (it.isFocused) posterFocus.value = PosterFocus(shelfIndex, cardIndex) }
                                 if (shelf.ranked) RankedCard(cardIndex + 1, row, mod, onTopFocus) { onOpen(row.key) }
                                 else BrandPoster(row, mod, if (shelfIndex == 0) onTopFocus else onFocus) { onOpen(row.key) }
                             }
@@ -266,31 +268,14 @@ private fun Spotlight(row: PosterRow?, brand: CategoryBrand, p: BrandPlan, rank:
     Crossfade(row, animationSpec = tween(320), label = "spotlight", modifier = modifier) { r ->
         Box(Modifier.fillMaxSize().padding(end = OmniSpacing.tvSide)) {
             if (r == null) return@Box
-            if (!compact && !r.posterUrl.isNullOrBlank()) {
-                // Wide crop of the key art on the right, melted into the stage on the left and bottom.
-                // The art fades itself out (alpha mask), so it melts into whatever stage is behind it
-                // (gradients, glow) instead of sitting in a solid box.
-                AsyncImage(
-                    model = r.posterUrl, contentDescription = null, contentScale = ContentScale.Crop, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt,
-                    alignment = Alignment.TopCenter,
-                    modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight().fillMaxWidth(0.62f)
-                        .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-                        .drawWithContent {
-                            drawContent()
-                            drawRect(Brush.horizontalGradient(0f to Color.Transparent, 0.45f to Color.Black, 0.9f to Color.Black, 1f to Color.Transparent), blendMode = BlendMode.DstIn)
-                            drawRect(Brush.verticalGradient(0f to Color.Transparent, 0.18f to Color.Black, 0.5f to Color.Black, 1f to Color.Transparent), blendMode = BlendMode.DstIn)
-                        },
-                )
-                // Task 69: the spotlight's overline/title/meta sit over this art. The art's own
-                // left fade is not enough (still ~78% alpha where the meta row ends), so a scrim
-                // holds the text column near-opaque and only clears past the text's right edge.
-                Box(
-                    Modifier.fillMaxSize()
-                        .background(Brush.horizontalGradient(0f to c.background, 0.62f to c.background.copy(alpha = 0.92f), 0.8f to Color.Transparent)),
+            if (!compact) {
+                com.yodesla.omniverse.designsystem.HeroArtwork(
+                    r.backdropUrl, r.posterUrl,
+                    Modifier.align(Alignment.CenterEnd).fillMaxHeight().fillMaxWidth(0.65f),
                 )
             }
             Column(
-                Modifier.align(Alignment.CenterStart).padding(start = OmniSpacing.tvSide).widthIn(max = 560.dp),
+                Modifier.align(Alignment.CenterStart).padding(start = OmniSpacing.tvSide).widthIn(max = 460.dp),
                 verticalArrangement = Arrangement.spacedBy(OmniSpacing.s),
             ) {
                 if (!compact) Row(verticalAlignment = Alignment.CenterVertically) {
@@ -381,7 +366,7 @@ internal fun RankedCard(rank: Int, row: PosterRow, modifier: Modifier, onFocus: 
     // glyph's bottom pinned to the poster's bottom edge (trimmed line box), and text-only posters
     // indent their title past the overlap.
     val numeral = TextStyle(
-        fontFamily = OmniTheme.type.family, fontWeight = FontWeight.Bold, fontSize = 128.sp, lineHeight = 128.sp,
+        fontFamily = OmniTheme.type.family, fontWeight = FontWeight.Bold, fontSize = (128f * com.yodesla.omniverse.designsystem.LocalTextScale.current).sp, lineHeight = (128f * com.yodesla.omniverse.designsystem.LocalTextScale.current).sp,
         letterSpacing = (-6).sp,
         platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false),
         lineHeightStyle = androidx.compose.ui.text.style.LineHeightStyle(

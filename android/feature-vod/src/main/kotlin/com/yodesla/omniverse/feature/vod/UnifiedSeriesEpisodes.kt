@@ -5,9 +5,18 @@ import com.yodesla.omniverse.core.model.Season
 import com.yodesla.omniverse.core.model.SeriesDetail
 import com.yodesla.omniverse.core.model.ContentKey
 import com.yodesla.omniverse.core.model.ContentKind
+import com.yodesla.omniverse.core.model.explicitEditionLabel
 
 /** One playable copy of an episode. The source and parent series are carried by [episode]. */
 data class EpisodeSource(val episode: Episode, val sourceName: String)
+
+/** State only what the provider actually supplied; a source name alone never implies picture quality. */
+internal fun episodeSourceLabel(option: EpisodeSource): String = listOfNotNull(
+    option.sourceName,
+    copyQuality(option.episode.video, option.episode.title).label,
+    explicitEditionLabel(option.episode.title),
+    fmtRuntime(option.episode.durationSec),
+).distinct().joinToString("  ·  ")
 
 data class UnifiedSeriesEpisodes(
     val detail: SeriesDetail,

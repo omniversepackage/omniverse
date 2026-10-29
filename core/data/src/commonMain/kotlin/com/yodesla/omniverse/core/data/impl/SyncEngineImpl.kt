@@ -143,12 +143,14 @@ class SyncEngineImpl(
             if (doLive) {
                 val cats = stage(SyncStage.LIVE_CATEGORIES, { source.liveCategories() }) { writeCategories(it, ContentKind.LIVE, gen) }
                 if (cats == Outcome.Fatal) return finishFatal()
-                if (cats == Outcome.Ok) st.markMissingCategoriesRemoved(now, id, ContentKind.LIVE.name, gen)
+                val catsTrusted = cats == Outcome.Ok && plausible(SyncStage.LIVE_CATEGORIES,
+                    db.readQueries.allCategories(id, ContentKind.LIVE.name).executeAsList().size.toLong())
                 val chans = stage(SyncStage.LIVE_CHANNELS, { source.liveChannels(it) }) { writeChannels(it, gen) }
                 if (chans == Outcome.Fatal) return finishFatal()
                 val chansTrusted = chans == Outcome.Ok && plausible(SyncStage.LIVE_CHANNELS, cq.countChannels(id).executeAsOne())
+                if (catsTrusted && chansTrusted) st.markMissingCategoriesRemoved(now, id, ContentKind.LIVE.name, gen)
                 if (chansTrusted) cq.markMissingChannelsRemoved(now = now, sourceId = id, gen = gen)
-                liveDone = cats == Outcome.Ok && chansTrusted
+                liveDone = catsTrusted && chansTrusted
                 liveWritten = true // channels were stored (maybe partially): they must still be searchable
             }
 
@@ -170,24 +172,28 @@ class SyncEngineImpl(
             if (doVod) {
                 val cats = stage(SyncStage.VOD_CATEGORIES, { source.vodCategories() }) { writeCategories(it, ContentKind.VOD, gen) }
                 if (cats == Outcome.Fatal) return finishFatal()
-                if (cats == Outcome.Ok) st.markMissingCategoriesRemoved(now, id, ContentKind.VOD.name, gen)
+                val catsTrusted = cats == Outcome.Ok && plausible(SyncStage.VOD_CATEGORIES,
+                    db.readQueries.allCategories(id, ContentKind.VOD.name).executeAsList().size.toLong())
                 val items = stage(SyncStage.VOD, { source.vodItems(it) }) { writeVod(it, gen) }
                 if (items == Outcome.Fatal) return finishFatal()
                 val itemsTrusted = items == Outcome.Ok && plausible(SyncStage.VOD, db.readQueries.countVod(id, null).executeAsOne())
+                if (catsTrusted && itemsTrusted) st.markMissingCategoriesRemoved(now, id, ContentKind.VOD.name, gen)
                 if (itemsTrusted) st.markMissingVodRemoved(now = now, sourceId = id, gen = gen)
-                vodDone = cats == Outcome.Ok && itemsTrusted
+                vodDone = catsTrusted && itemsTrusted
                 vodWritten = true
             }
 
             if (doSeries) {
                 val cats = stage(SyncStage.SERIES_CATEGORIES, { source.seriesCategories() }) { writeCategories(it, ContentKind.SERIES, gen) }
                 if (cats == Outcome.Fatal) return finishFatal()
-                if (cats == Outcome.Ok) st.markMissingCategoriesRemoved(now, id, ContentKind.SERIES.name, gen)
+                val catsTrusted = cats == Outcome.Ok && plausible(SyncStage.SERIES_CATEGORIES,
+                    db.readQueries.allCategories(id, ContentKind.SERIES.name).executeAsList().size.toLong())
                 val items = stage(SyncStage.SERIES, { source.series(it) }) { writeSeries(it, gen) }
                 if (items == Outcome.Fatal) return finishFatal()
                 val itemsTrusted = items == Outcome.Ok && plausible(SyncStage.SERIES, db.readQueries.countSeries(id, null).executeAsOne())
+                if (catsTrusted && itemsTrusted) st.markMissingCategoriesRemoved(now, id, ContentKind.SERIES.name, gen)
                 if (itemsTrusted) st.markMissingSeriesRemoved(now = now, sourceId = id, gen = gen)
-                seriesDone = cats == Outcome.Ok && itemsTrusted
+                seriesDone = catsTrusted && itemsTrusted
                 seriesWritten = true
             }
 

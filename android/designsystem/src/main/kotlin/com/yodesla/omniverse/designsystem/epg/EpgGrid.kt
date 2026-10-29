@@ -145,9 +145,9 @@ fun EpgGrid(
     val cache = remember(data) { mutableStateMapOf<Long, List<GridProgramme>>() }
     // Text layouts keyed by (programme, style variant). Measured at the FULL cell width once, then
     // drawn clipped, so scrolling never re-measures (the draw pass was the jank source).
-    val layouts = remember(data) { HashMap<Long, androidx.compose.ui.text.TextLayoutResult>() }
-    val channelLayouts = remember(data) { HashMap<Long, androidx.compose.ui.text.TextLayoutResult>() }
-    val headerLayouts = remember { HashMap<Long, androidx.compose.ui.text.TextLayoutResult>() }
+    val layouts = remember(data, density.density, density.fontScale, type, c) { HashMap<Long, androidx.compose.ui.text.TextLayoutResult>() }
+    val channelLayouts = remember(data, density.density, density.fontScale, type, c) { HashMap<Long, androidx.compose.ui.text.TextLayoutResult>() }
+    val headerLayouts = remember(density.density, density.fontScale, type, c, com.yodesla.omniverse.designsystem.ClockFormat.use24h) { HashMap<Long, androidx.compose.ui.text.TextLayoutResult>() }
 
     var selRow by remember(data) { mutableIntStateOf(initialRow.coerceIn(0, (data.channelCount - 1).coerceAtLeast(0))) }
     var selTime by remember(data) { mutableLongStateOf(nowMs) }
@@ -159,6 +159,7 @@ fun EpgGrid(
     val origin = remember(data) { floorToHalfHour(nowMs) }
     val viewOffset = remember(data) { Animatable(0f) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val scrollJobs = remember(data) { arrayOfNulls<kotlinx.coroutines.Job>(2) }
 
     fun programmeAt(row: Int, t: Long): GridProgramme? =
         cache[blockKey(row, t)]?.firstOrNull { t >= it.startMs && t < it.endMs }
@@ -173,9 +174,9 @@ fun EpgGrid(
         val pxPerMs = gridWidthPx / spanMs
         val padPx = with(density) { OmniSpacing.m.toPx() }
         // Wide enough for 4-digit provider numbers (e.g. 8863); only longer numbers drop the logo.
-        val numColPx = with(density) { 60.dp.toPx() }
+        val numColPx = with(density) { 44.dp.toPx() }
         // Narrower logo slot (Kory picked "both": narrower logo + names on up to two lines).
-        val logoWPx = with(density) { 64.dp.toPx() }
+        val logoWPx = with(density) { 36.dp.toPx() }
         // Logo box nearly fills the row; logos scale up to touch its edges, never stretched.
         val logoHPx = (rowPx - with(density) { 6.dp.toPx() }).coerceAtLeast(with(density) { 24.dp.toPx() })
 
@@ -199,7 +200,7 @@ fun EpgGrid(
         }
 
         // Keep the selection on screen: rows pivot 2 rows from the top edge; time pages by half hours.
-        fun ensureVisible() {
+        fun ensureVisible(snap: Boolean = false) {
             val targetTop = when {
                 selRow < topRow.targetValue + 1 -> (selRow - 1).coerceAtLeast(0).toFloat()
                 selRow > topRow.targetValue + visibleRows - 2 -> (selRow - visibleRows + 2).toFloat()
@@ -211,12 +212,20 @@ fun EpgGrid(
                 selTime >= vs + spanMs - HALF_HOUR -> floorToHalfHour(selTime) - spanMs + 2 * HALF_HOUR
                 else -> vs
             }
-            scope.launch { topRow.animateTo(targetTop, spring(stiffness = 700f)) }
-            scope.launch {
-                // A day-strip jump is a cut, not a slide: animating it would sweep the viewer through
-                // hours of cells whose data has not been requested yet.
-                if (kotlin.math.abs(targetStart - vs) > spanMs) viewOffset.snapTo((targetStart - origin).toFloat())
-                else viewOffset.animateTo((targetStart - origin).toFloat(), spring(stiffness = 700f))
+            if (targetTop != topRow.targetValue || (snap && topRow.value != targetTop)) {
+                scrollJobs[0]?.cancel()
+                scrollJobs[0] = scope.launch {
+                    if (snap) topRow.snapTo(targetTop)
+                    else topRow.animateTo(targetTop, spring(stiffness = 700f))
+                }
+            }
+            val offset = (targetStart - origin).toFloat()
+            if (offset != viewOffset.targetValue || (snap && viewOffset.value != offset)) {
+                scrollJobs[1]?.cancel()
+                scrollJobs[1] = scope.launch {
+                    if (snap || kotlin.math.abs(targetStart - vs) > spanMs) viewOffset.snapTo(offset)
+                    else viewOffset.animateTo(offset, spring(stiffness = 700f))
+                }
             }
             onViewTime(selTime)
             onFocusedChange(selRow, programmeAt(selRow, selTime))
@@ -259,6 +268,12 @@ fun EpgGrid(
                     val loaded = withContext(Dispatchers.Default) {
                         visibleFirst.associate { (r, b) -> blockKey(r, b) to data.programmes(r, b, b + BLOCK) }
                     }
+                    // Keep only nearby channel/time blocks; long guide sessions must plateau.
+                    val retained = buildSet {
+                        for (b in listOf(block - BLOCK, block, block + BLOCK)) for (r in rows) add(blockKey(r, b))
+                        add(blockKey(selRow, selTime))
+                    }
+                    cache.keys.toList().filter { it !in retained }.forEach { cache.remove(it) }
                     cache.putAll(loaded)
                 }
         }
@@ -306,7 +321,7 @@ fun EpgGrid(
                         // Provider numbers can be five digits. Let the measured number claim its
                         // actual width; if it outgrows the usual slot, omit the logo so the name
                         // still has room instead of drawing all three on top of each other.
-                        val wideNumber = numLayout.size.width > numColPx - padPx / 2f
+                        val wideNumber = numLayout.size.width > numColPx + padPx
                         var textX = padPx + maxOf(numColPx, numLayout.size.width + padPx / 2f)
                         val logo = logoPainters[row]
                         val logoTop = y + (rowPx - logoHPx) / 2f
@@ -339,12 +354,9 @@ fun EpgGrid(
                         val nameMaxW = Constraints(maxWidth = (size.width - textX - padPx - favoriteWidth).toInt().coerceAtLeast(1))
                         val nameStyle = type.body.copy(color = c.textPrimary, fontSize = type.body.fontSize * 0.9f,
                             lineHeight = type.body.fontSize * 1.05f)
-                        val nameLayout = channelLayouts.getOrPut(row.toLong() * 2 + 1 + if (ch.favorite) 1_000_000_000L else 0L) {
-                            val twoLines = measurer.measure(ch.name, nameStyle, maxLines = 2, overflow = TextOverflow.Ellipsis, constraints = nameMaxW)
-                            // Two lines only if they fit the row: at a large system font scale a 2-line
-                            // block is taller than the row and would bleed onto the channel below.
-                            if (twoLines.size.height <= rowPx) twoLines
-                            else measurer.measure(ch.name, nameStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, constraints = nameMaxW)
+                        val nameLayout = channelLayouts.getOrPut((row.toLong() * 31 + nameMaxW.maxWidth) * 31 + ch.name.hashCode() + if (ch.favorite) 1_000_000_000L else 0L) {
+                            measurer.measure(ch.name, nameStyle, maxLines = 1,
+                                overflow = TextOverflow.Ellipsis, constraints = nameMaxW)
                         }
                         clipRect(left = 0f, top = y, right = size.width, bottom = y + rowPx) {
                             drawText(nameLayout, topLeft = Offset(textX, y + ((rowPx - nameLayout.size.height) / 2f).coerceAtLeast(0f)))
@@ -374,12 +386,12 @@ fun EpgGrid(
                             return@onPreviewKeyEvent true
                         }
                         when (e.key) {
-                            Key.DirectionDown -> if (selRow < data.channelCount - 1) { selRow++; ensureVisible(); true } else false
-                            Key.DirectionUp -> if (selRow > 0) { selRow--; ensureVisible(); true } else false
+                            Key.DirectionDown -> if (selRow < data.channelCount - 1) { selRow++; ensureVisible(e.nativeKeyEvent.repeatCount > 0); true } else false
+                            Key.DirectionUp -> if (selRow > 0) { selRow--; ensureVisible(e.nativeKeyEvent.repeatCount > 0); true } else false
                             Key.DirectionRight -> {
                                 val p = programmeAt(selRow, selTime)
                                 selTime = (p?.endMs ?: (floorToHalfHour(selTime) + HALF_HOUR)).coerceAtMost(nowMs + 7 * DAY)
-                                ensureVisible(); true
+                                ensureVisible(e.nativeKeyEvent.repeatCount > 0); true
                             }
                             Key.DirectionLeft -> {
                                 val p = programmeAt(selRow, selTime)
@@ -390,7 +402,7 @@ fun EpgGrid(
                                 if (start <= nowMs && prev?.hasArchive != true) {
                                     if (onExitLeft != null) { onExitLeft(); true } else false
                                 }
-                                else { selTime = start - 1; ensureVisible(); true }
+                                else { selTime = start - 1; ensureVisible(e.nativeKeyEvent.repeatCount > 0); true }
                             }
                             // Task 85: media Fast-forward/Rewind (and the remote's Channel Up/Down,
                             // which the guide does not use for zapping) jump two hours at a time;
@@ -464,7 +476,7 @@ fun EpgGrid(
                                         p.endMs <= nowMs -> 1
                                         else -> 0
                                     }
-                                    val key = (p.startMs * 31 + p.title.hashCode()) * 4 + variant + row.toLong() * 7_919
+                                    val key = ((p.startMs * 31 + p.title.hashCode()) * 31 + p.endMs) * 31 + fullW * 4 + variant + row.toLong() * 7_919
                                     val layout = layouts.getOrPut(key) {
                                         val color = when (variant) {
                                             2 -> c.textPrimary

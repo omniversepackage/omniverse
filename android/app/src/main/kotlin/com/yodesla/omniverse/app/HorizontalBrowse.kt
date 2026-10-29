@@ -11,6 +11,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.focusGroup
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -28,6 +29,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.input.key.*
@@ -71,6 +73,8 @@ internal fun HorizontalBrowseRoute(
     var moving by remember { mutableStateOf<String?>(null) }
     var dropArmed by remember { mutableStateOf(false) }
     var barVisible by rememberSaveable(entry) { mutableStateOf(true) }
+    var contentFocused by remember { mutableStateOf(false) }
+    var returnToToolbar by rememberSaveable(entry) { mutableStateOf(false) }
     var leftPresses by remember { mutableIntStateOf(0) }
     var confirmMenu by remember { mutableStateOf(false) }
     var skipWarning by remember { mutableStateOf(false) }
@@ -86,18 +90,16 @@ internal fun HorizontalBrowseRoute(
     }
 
     BackHandler(enabled = moving == null && state.menuCategoryId == null && !state.libraryOpen) {
-        if (!barVisible) {
-            barVisible = true
-            scope.launch { kotlinx.coroutines.delay(200); selectedFocus.requestFocusWhenReady() }
-        } else if (state.horizontalHome) onOpenNavigation() else {
+        if (state.horizontalHome) onOpenNavigation() else {
+            returnToToolbar = barVisible
             browse.showHorizontalHome()
-            scope.launch { list.animateScrollToItem(0); homeFocus.requestFocusWhenReady() }
+            if (barVisible) scope.launch { list.animateScrollToItem(0); homeFocus.requestFocusWhenReady() }
         }
     }
 
     CosmicBackdrop(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().onKeyEvent { event ->
-        if (!barVisible && !state.libraryOpen && state.menuCategoryId == null &&
+        if (!barVisible && state.menuCategoryId == null &&
             event.key == Key.DirectionUp && event.type == KeyEventType.KeyDown) {
             // Traverse the content first; only restore the chooser at its upper edge.
             if (!focusManager.moveFocus(FocusDirection.Up)) {
@@ -108,14 +110,25 @@ internal fun HorizontalBrowseRoute(
         } else false
     }.onPreviewKeyEvent { event ->
         if (event.type == KeyEventType.KeyDown && event.key != Key.DirectionLeft) leftPresses = 0
-        if (event.key != Key.DirectionLeft || event.type != KeyEventType.KeyDown) false
+        if (barVisible && moving == null && event.key == Key.DirectionDown && event.type == KeyEventType.KeyDown) {
+            // Move focus before removing its possible owner in the toolbar. Reclaim the
+            // toolbar's height as well as its pixels so captions fit below the posters.
+            val moved = focusManager.moveFocus(FocusDirection.Down)
+            val enterContent = moved || contentFocused
+            if (enterContent) barVisible = false
+            enterContent
+        } else if (event.key != Key.DirectionLeft || event.type != KeyEventType.KeyDown) false
         else if (event.nativeKeyEvent.repeatCount > 0) true
         else if (!barVisible) {
             if (focusManager.moveFocus(FocusDirection.Left)) leftPresses = 0 else requestMainMenu()
             true
         } else false
     }) {
-        AnimatedVisibility(barVisible, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+        androidx.compose.animation.AnimatedVisibility(barVisible,
+            enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
+            exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut()) {
+        Box(Modifier.fillMaxWidth().height(52.dp)) {
+        FocusPivot(focusedScale = 1.02f, halo = 4.dp, onlyWhenClipped = true) {
         LazyRow(
             state = list,
             contentPadding = PaddingValues(horizontal = OmniSpacing.tvSide, vertical = OmniSpacing.s),
@@ -143,8 +156,8 @@ internal fun HorizontalBrowseRoute(
         ) {
             item(key = "__home") {
                 CategoryTab(
-                    onClick = { browse.showHorizontalHome() },
-                    modifier = Modifier.widthIn(min = 64.dp, max = 184.dp).width(IntrinsicSize.Max).height(32.dp).focusRequester(homeFocus).onPreviewKeyEvent { event ->
+                    onClick = { returnToToolbar = false; browse.showHorizontalHome() },
+                    modifier = Modifier.widthIn(min = 64.dp, max = 184.dp).width(IntrinsicSize.Max).height(36.dp).focusRequester(homeFocus).onPreviewKeyEvent { event ->
                         if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft) { requestMainMenu(); true } else false
                     },
                 ) {
@@ -158,7 +171,7 @@ internal fun HorizontalBrowseRoute(
             if (onSearch != null) item(key = "__search") {
                 CategoryTab(
                     onClick = { onSearch() },
-                    modifier = Modifier.widthIn(min = 64.dp, max = 184.dp).width(IntrinsicSize.Max).height(32.dp),
+                    modifier = Modifier.widthIn(min = 64.dp, max = 184.dp).width(IntrinsicSize.Max).height(36.dp),
                 ) {
                     Box(Modifier.fillMaxSize().padding(horizontal = OmniSpacing.m), contentAlignment = Alignment.CenterStart) {
                         androidx.tv.material3.Text("🔍 Search", style = OmniTheme.type.body, color = OmniTheme.colors.textPrimary)
@@ -168,24 +181,28 @@ internal fun HorizontalBrowseRoute(
             items(state.categories, key = { it.id ?: "__all" }) { category ->
                 val selected = !state.horizontalHome && category.id == state.selected
                 CategoryTab(
-                    onClick = { barVisible = false; browse.select(category.id) },
+                    onClick = { returnToToolbar = false; browse.select(category.id) },
                     onLongClick = category.id?.let { id -> { browse.openCategoryMenu(id) } },
-                    modifier = Modifier.widthIn(min = 64.dp, max = 184.dp).width(IntrinsicSize.Max).height(32.dp).focusRequester(requester(category.id)),
+                    modifier = Modifier.widthIn(min = 64.dp, max = 184.dp).width(IntrinsicSize.Max).height(36.dp).focusRequester(requester(category.id)),
                 ) {
                     if (selected || (moving != null && moving == category.id)) CategorySelectionGlow(category.name, Modifier.fillMaxSize())
                     Box(Modifier.fillMaxSize().padding(horizontal = OmniSpacing.m), contentAlignment = Alignment.CenterStart) {
-                        CategoryIdentity(category.name, selected)
+                        CategoryTabIdentity(category.name, selected)
                     }
                 }
             }
         }
         }
+        }
+        }
         // Let Compose's directional focus search traverse the content rows before the bar.
         // A parent Up handler runs before default focus traversal, even when attached as onKeyEvent.
-        Box(Modifier.weight(1f).fillMaxWidth().blendDestinationTop(barVisible)) {
+        Box(Modifier.weight(1f).fillMaxWidth().onFocusChanged { contentFocused = it.hasFocus }.focusGroup()) {
             if (state.horizontalHome) {
                 key(entry) {
-                    HomeRoute(home, onOpenHomeCard, onOpenNavigation = ::requestMainMenu, onPlay = onPlay, preserveBrowsePosition = true)
+                    HomeRoute(home, { card -> returnToToolbar = false; onOpenHomeCard(card) },
+                        onOpenNavigation = ::requestMainMenu, onPlay = onPlay, preserveBrowsePosition = true,
+                        requestInitialFocus = !returnToToolbar, resetScrollToTop = barVisible)
                 }
             } else {
                 VodBrowseRoute(browse, title, ::requestMainMenu, onSearch, onPlay, showCategoryRail = false, onOpen = onOpen)
@@ -250,7 +267,7 @@ private fun CategoryTab(onClick: () -> Unit, modifier: Modifier, onLongClick: ((
         shape = CardDefaults.shape(shape), scale = CardDefaults.scale(focusedScale = 1.02f),
         glow = CardDefaults.glow(focusedGlow = Glow.None),
         border = CardDefaults.border(focusedBorder = Border(BorderStroke(2.dp, OmniTheme.colors.focusBorder), shape = shape)),
-        colors = CardDefaults.colors(containerColor = OmniTheme.colors.surface.copy(alpha = 0.55f), focusedContainerColor = OmniTheme.colors.elevated)) {
+        colors = CardDefaults.colors(containerColor = OmniTheme.colors.surface.copy(alpha = 0.90f), focusedContainerColor = OmniTheme.colors.elevated)) {
         Box(Modifier.fillMaxSize(), content = content)
     }
 }

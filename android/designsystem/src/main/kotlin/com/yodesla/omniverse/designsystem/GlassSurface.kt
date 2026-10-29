@@ -1,6 +1,7 @@
 package com.yodesla.omniverse.designsystem
 
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.background
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -33,6 +34,8 @@ fun Modifier.glassSurface(
     return this
         .then(if (shadow) Modifier.shadow(8.dp, shape, clip = false) else Modifier)
         .clip(shape)
+        // Elevated panels must separate their text from the screen beneath them.
+        .then(if (shadow) Modifier.background(c.surface, shape) else Modifier)
         .drawWithCache {
             val radius = corner.toPx()
             val top = if (focused) c.glassFocusTop else c.glassTop

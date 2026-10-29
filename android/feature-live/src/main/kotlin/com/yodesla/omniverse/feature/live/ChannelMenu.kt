@@ -11,6 +11,8 @@ data class ChannelMenuState(
     /** A future programme is coming, so "Remind me" applies. */
     val canRemind: Boolean,
     val reminded: Boolean,
+    /** A favourite shown in the Favorites list with others around it, so "Move" (reorder) applies. */
+    val canMove: Boolean = false,
 )
 
 /**
@@ -24,8 +26,10 @@ fun channelMenuActions(
     onToggleFavorite: () -> Unit,
     onToggleMultiview: () -> Unit,
     onRemind: () -> Unit,
+    onMove: () -> Unit = {},
 ): List<MenuAction> = buildList {
     if (state.canWatch) add(MenuAction("Watch", onWatch))
+    if (state.canMove) add(MenuAction("Move", onMove))
     add(MenuAction(if (state.favorite) "Remove from Favorites" else "Add to Favorites", onToggleFavorite))
     add(MenuAction(if (state.inMultiview) "Remove from Multiview" else "Add to Multiview", onToggleMultiview))
     if (state.canRemind) add(MenuAction(if (state.reminded) "Reminder set" else "Remind me", onRemind))

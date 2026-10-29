@@ -56,6 +56,24 @@ class TmdbEnricherTest {
         tmdbId = "550", backdropUrl = backdrop, plot = plot,
     )
 
+    @Test fun providerPosterIsNeverTreatedAsALandscapeWhenRefillingArt() {
+        val row = movieRow(backdrop = "https://src/poster.jpg", poster = "https://src/poster.jpg")
+        val missing = row.withArt(null, null, null, null, null, null)
+        assertNull(missing.backdropUrl)
+        val found = row.withArt("https://tmdb/wide.jpg", null, null, null, null, null)
+        assertEquals("https://tmdb/wide.jpg", found.backdropUrl)
+        assertEquals(row.posterUrl, found.posterUrl)
+    }
+    @Test fun landscapeChoiceCannotBeOverwrittenByLaterProviderPosterArt() {
+        val correct = "https://image.tmdb.org/t/p/w1280/suaEOtk1N1sgg2MTM7oZd2cfVp3.jpg"
+        val wrongProvider = "https://provider/background-made-from-poster.jpg"
+        val poster = "https://provider/poster.jpg"
+        assertEquals(correct, landscapeBackdrop(correct, wrongProvider, poster))
+        assertEquals(correct, landscapeBackdrop(correct, poster, poster))
+        assertEquals(correct, landscapeBackdrop(correct, null, poster))
+        assertEquals(wrongProvider, landscapeBackdrop(null, wrongProvider, poster))
+        assertNull(landscapeBackdrop(null, poster, poster))
+    }
     @Test fun freshCacheIsNotRefetched() = runBlocking {
         val http = FakeHttp()
         val clock = MutableClock()
@@ -122,12 +140,12 @@ class TmdbEnricherTest {
         assertEquals(2, http.calls)
     }
 
-    @Test fun sourceArtWinsAndTmdbFillsOnlyGaps() {
+    @Test fun tmdbLandscapeReplacesProviderPosterBasedBackground() {
         val db = newDb()
         db.tmdbQueries.upsertTmdbMeta("550", "MOVIE", "/b.jpg", "/l.png", "/p.jpg", "R", 139L, "Drama", "tag", 1L, "A fight-club synopsis.", "/c.jpg", null, null)
         val art = TmdbArt(db)
         val full = art.fill(movieRow())
-        assertEquals("https://src/b.jpg", full.backdropUrl) // source backdrop kept
+        assertEquals("https://image.tmdb.org/t/p/w1280/b.jpg", full.backdropUrl)
         assertEquals("https://image.tmdb.org/t/p/w500/l.png", full.logoUrl) // logo only TMDB has
         assertEquals("R", full.certification)
         assertEquals(139, full.runtimeMin)
@@ -138,8 +156,11 @@ class TmdbEnricherTest {
         val bare = art.fill(movieRow(backdrop = null, poster = null))
         assertEquals("https://image.tmdb.org/t/p/w1280/b.jpg", bare.backdropUrl) // gap filled
         assertEquals("https://image.tmdb.org/t/p/w1280/c.jpg", bare.cardBackdropUrl)
+        assertEquals("https://image.tmdb.org/t/p/w342/p.jpg", bare.posterUrl)
+        val stalePlex = movieRow().copy(posterUrl = "https://old.plex.direct:32400/library/metadata/1/thumb?X-Plex-Token=redacted")
+        assertEquals("https://image.tmdb.org/t/p/w342/p.jpg", art.fill(stalePlex).posterUrl)
         val batch = TmdbArt(db).fillAll(listOf(movieRow(), movieRow(backdrop = null).copy(key = ContentKey(SourceId("s1"), ContentKind.VOD, RemoteId("m2")))))
-        assertEquals("https://src/b.jpg", batch[0].backdropUrl)
+        assertEquals("https://image.tmdb.org/t/p/w1280/b.jpg", batch[0].backdropUrl)
         assertEquals("https://image.tmdb.org/t/p/w1280/b.jpg", batch[1].backdropUrl)
         assertEquals("https://image.tmdb.org/t/p/w1280/c.jpg", batch[1].cardBackdropUrl)
         assertEquals("A fight-club synopsis.", batch[1].plot) // batch path carries the synopsis too
@@ -180,7 +201,7 @@ class TmdbEnricherTest {
         assertEquals("/english.jpg", stored.card_backdrop_path)
     }
 
-    @Test fun storedArtBumpsTheRefreshSignalOncePerDebounceWindow() = runBlocking {
+    @Test fun everyCompletedBatchPublishesItsFinalArtwork() = runBlocking {
         val clock = MutableClock()
         val e = TmdbEnricher(newDb(), clock, Tmdb(FakeHttp(), "k"))
         assertEquals(0L, e.artUpdated.value)
@@ -189,10 +210,10 @@ class TmdbEnricherTest {
         assertEquals(1L, e.artUpdated.value)
         clock.now += TmdbEnricher.ART_SIGNAL_DEBOUNCE_MS - 1
         e.prefetch(WikidataMetadata.Kind.MOVIE, listOf("4"))
-        assertEquals(1L, e.artUpdated.value) // still inside the 1.5 s window
+        assertEquals(2L, e.artUpdated.value) // final batch writes must not be dropped
         clock.now += 2
         e.prefetch(WikidataMetadata.Kind.MOVIE, listOf("5"))
-        assertEquals(2L, e.artUpdated.value)
+        assertEquals(3L, e.artUpdated.value)
     }
 
     @Test fun failedLookupsEmitNoRefreshSignal() = runBlocking {
@@ -206,4 +227,15 @@ class TmdbEnricherTest {
         val row = PosterRow(ContentKey(SourceId("s1"), ContentKind.VOD, RemoteId("x")), "No Id", null, null, null)
         assertEquals(row, TmdbArt(db).fill(row))
     }
+    @Test fun cachedPrefetchDoesNotCauseAnArtworkRefreshLoop() = runBlocking {
+        val e = TmdbEnricher(newDb(), MutableClock(), Tmdb(FakeHttp(), "k"))
+        e.prefetch(WikidataMetadata.Kind.MOVIE, listOf("1", "2"))
+        val revision = e.artUpdated.value
+        repeat(3) { e.prefetch(WikidataMetadata.Kind.MOVIE, listOf("1", "2")) }
+        assertEquals(revision, e.artUpdated.value)
+    }
+
 }
+
+
+

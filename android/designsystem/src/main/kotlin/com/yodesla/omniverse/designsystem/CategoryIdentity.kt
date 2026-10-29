@@ -88,6 +88,31 @@ fun CategoryIdentity(name: String, selected: Boolean, modifier: Modifier = Modif
 /** Accent color for a recognized brand category; null for unrecognized and special categories. */
 fun categoryAccent(name: String): Color? = categoryBrand(name)?.let { brandIdentity(it).tint }
 
+/** Compact navigation has its own optical bounds; hero logo dimensions never constrain a tab. */
+@Composable
+fun CategoryTabIdentity(name: String, selected: Boolean, modifier: Modifier = Modifier) {
+    val brand = categoryBrand(name)
+    val colors = OmniTheme.colors
+    Row(modifier, verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
+        if (brand != null) {
+            when (val mark = brandMark(brand, OmniTheme.publicBuild)) {
+                is BrandMark.Logo -> Image(painterResource(mark.res), contentDescription = name,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.width((22.dp * (mark.boxW / mark.boxH)).coerceIn(32.dp, 88.dp)).height(22.dp))
+                is BrandMark.Text -> Text(mark.label, style = OmniTheme.type.body,
+                    color = if (selected) colors.accent else colors.textPrimary,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        val suffix = brand?.let { categorySuffix(name, it) } ?: name
+        if (suffix.isNotEmpty()) Text(suffix, style = OmniTheme.type.body,
+            color = if (selected) colors.accent else colors.textSecondary,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = if (brand != null) Modifier.weight(1f, fill = false) else Modifier)
+    }
+}
+
 /** Quiet accent for a selected destination; original Omniverse chrome stays consistent. */
 @Composable
 fun CategoryDestinationAccent(name: String, modifier: Modifier = Modifier) {

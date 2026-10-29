@@ -483,6 +483,21 @@ class CatalogRepositoryImpl(
         }
     }
 
+    override suspend fun posters(keys: Collection<ContentKey>): Map<ContentKey, PosterRow> = withContext(io) {
+        val rows = ArrayList<PosterRow>()
+        keys.distinct().groupBy { it.sourceId to it.kind }.forEach { (group, items) ->
+            items.chunked(400).forEach { chunk ->
+                val ids = chunk.map { it.remoteId.value }
+                when (group.second) {
+                    ContentKind.VOD -> rows += db.readQueries.vodByKeys(group.first.value, ids).executeAsList().map { it.toPoster() }
+                    ContentKind.SERIES -> rows += db.readQueries.seriesByKeys(group.first.value, ids).executeAsList().map { it.toPoster() }
+                    else -> Unit
+                }
+            }
+        }
+        art(rows).associateBy { it.key }
+    }
+
     override suspend fun exactMovieMatches(key: ContentKey): List<PosterRow> = withContext(io) {
         if (key.kind != ContentKind.VOD) return@withContext emptyList()
         db.readQueries.otherVodWithSameTmdb(key.sourceId.value, key.remoteId.value) { sid, rid, name, poster, cat, rating, year, tmdb ->
@@ -546,14 +561,18 @@ class CatalogRepositoryImpl(
         db.readQueries.similarCandidates(seedGenre, seed.kind.name, seed.sourceId.value, seed.remoteId.value, CANDIDATE_SCAN_LIMIT) {
                 source_id, remote_id, name, poster_url, primary_category_id, rating, year, tmdb_id, genre ->
             SimilarCandidate(
-                art(PosterRow(
+                PosterRow(
                     key = ContentKey(SourceId(source_id), seed.kind, RemoteId(remote_id)),
                     name = name, posterUrl = poster_url, year = year?.toInt(), rating = rating?.toFloat(),
                     categoryId = RemoteId(primary_category_id), tmdbId = tmdb_id?.takeIf(String::isNotBlank),
-                )),
+                ),
                 genre?.lowercase(),
             )
         }.executeAsList()
+            .let { candidates ->
+                val posters = art(candidates.map { it.poster })
+                candidates.zip(posters) { candidate, poster -> candidate.copy(poster = poster) }
+            }
             .map { c -> c.copy(score = 3 * seedTokens.count { token -> c.genre?.contains(token) == true }) }
             .filter { it.score > 0 }
             .sortedWith(

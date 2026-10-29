@@ -1,4 +1,4 @@
-﻿package com.yodesla.omniverse.core.source.plex
+package com.yodesla.omniverse.core.source.plex
 
 import com.yodesla.omniverse.core.model.AccountStatus
 import com.yodesla.omniverse.core.model.ContentKind
@@ -44,6 +44,18 @@ class PlexSourceTest {
         server.close()
     }
 
+    @Test fun previewUsesBackgroundArtAndGuidsWithoutFetchingEpisodes() = runBlocking {
+        server.enqueue(MockResponse.Builder().code(200).setHeader("Content-Type", "application/json").body(
+            """{"MediaContainer":{"Metadata":[{"ratingKey":"42","title":"Show","thumb":"/poster.jpg","art":"/wide.jpg","Guid":[{"id":"tmdb://1399"}]}]}}"""
+        ).build())
+        val preview = source().previewArtwork(ContentKind.SERIES, RemoteId("42"))!!
+        assertEquals("1399", preview.tmdbId)
+        assertTrue(preview.backdropUrl!!.contains("/wide.jpg"))
+        assertFalse(preview.backdropUrl!!.contains("/poster.jpg"))
+        val request = server.takeRequest()
+        assertTrue(request.target.contains("includeGuids=1"))
+        assertEquals(1, server.requestCount)
+    }
     private fun fixture(name: String): String =
         javaClass.classLoader.getResource("plex/$name")!!.readText()
 
@@ -165,10 +177,10 @@ class PlexSourceTest {
         assertEquals("/library/sections/1/genre", server.takeRequest().url.encodedPath)
         val r1 = server.takeRequest()
         assertEquals("/library/sections/1/all", r1.url.encodedPath)
-        assertEquals("type=1&X-Plex-Container-Start=0&X-Plex-Container-Size=200", r1.url.encodedQuery)
+        assertEquals("type=1&includeGuids=1&X-Plex-Container-Start=0&X-Plex-Container-Size=200", r1.url.encodedQuery)
         val r2 = server.takeRequest()
         assertEquals("/library/sections/1/all", r2.url.encodedPath)
-        assertEquals("type=1&X-Plex-Container-Start=200&X-Plex-Container-Size=200", r2.url.encodedQuery)
+        assertEquals("type=1&includeGuids=1&X-Plex-Container-Start=200&X-Plex-Container-Size=200", r2.url.encodedQuery)
     }
 
     @Test
@@ -204,7 +216,7 @@ class PlexSourceTest {
         server.takeRequest() // sections
         server.takeRequest() // genre directory
         server.takeRequest() // first page
-        assertEquals("type=1&X-Plex-Container-Start=1&X-Plex-Container-Size=200", server.takeRequest().url.encodedQuery)
+        assertEquals("type=1&includeGuids=1&X-Plex-Container-Start=1&X-Plex-Container-Size=200", server.takeRequest().url.encodedQuery)
     }
 
     @Test
@@ -276,6 +288,28 @@ class PlexSourceTest {
         assertFailsWith<SourceException.NotFound> {
             source().playback(PlaybackRequest.Vod(SourceId("p"), RemoteId("77"), "mkv", versionId = "missing"))
         }
+    }
+
+    @Test
+    fun plexVersionsCarryTheirPictureFromPlexsOwnAnalysis() = runBlocking {
+        val body = fixture("movie_metadata.json").replace(
+            "\"videoResolution\": \"2160\"",
+            "\"videoResolution\": \"2160\", \"Stream\": [{\"streamType\": 2, \"codec\": \"truehd\"}, " +
+                "{\"streamType\": 1, \"width\": 3840, \"height\": 1608, \"DOVIPresent\": true, \"colorTrc\": \"smpte2084\"}]",
+        )
+        server.enqueue(MockResponse.Builder().code(200).body(body).build())
+        val detail = source().vodDetail(RemoteId("77"))
+        val dolbyVision = com.yodesla.omniverse.core.model.VideoInfo(3840, 1608, com.yodesla.omniverse.core.model.DynamicRange.DOLBY_VISION)
+        assertEquals(dolbyVision, detail.versions.single().video)
+        assertEquals(dolbyVision, detail.video, "as an alternative, the item is described by its best file")
+
+        val hdr = fixture("movie_metadata.json").replace("\"videoResolution\": \"2160\"",
+            "\"videoResolution\": \"2160\", \"Stream\": [{\"streamType\": 1, \"width\": 3840, \"height\": 2160, \"colorTrc\": \"smpte2084\"}]")
+        server.enqueue(MockResponse.Builder().code(200).body(hdr).build())
+        assertEquals(com.yodesla.omniverse.core.model.DynamicRange.HDR, source().vodDetail(RemoteId("77")).video?.range)
+
+        server.enqueue(MockResponse.Builder().code(200).body(fixture("movie_metadata.json")).build())
+        assertEquals(null, source().vodDetail(RemoteId("77")).video, "no analysis, nothing claimed")
     }
 
     @Test
@@ -437,9 +471,9 @@ class PlexSourceTest {
         assertEquals("/library/sections/1/genre", server.takeRequest().url.encodedPath)
         val animePage = server.takeRequest()
         assertEquals("/library/sections/1/all", animePage.url.encodedPath)
-        assertEquals("type=1&genre=3975&X-Plex-Container-Start=0&X-Plex-Container-Size=200", animePage.url.encodedQuery)
-        assertEquals("type=1&genre=3976&X-Plex-Container-Start=0&X-Plex-Container-Size=200", server.takeRequest().url.encodedQuery)
-        assertEquals("type=1&X-Plex-Container-Start=0&X-Plex-Container-Size=200", server.takeRequest().url.encodedQuery)
+        assertEquals("type=1&genre=3975&includeGuids=1&X-Plex-Container-Start=0&X-Plex-Container-Size=200", animePage.url.encodedQuery)
+        assertEquals("type=1&genre=3976&includeGuids=1&X-Plex-Container-Start=0&X-Plex-Container-Size=200", server.takeRequest().url.encodedQuery)
+        assertEquals("type=1&includeGuids=1&X-Plex-Container-Start=0&X-Plex-Container-Size=200", server.takeRequest().url.encodedQuery)
     }
 
     @Test
@@ -491,4 +525,6 @@ class PlexSourceTest {
         assertEquals(0, server.requestCount)
     }
 }
+
+
 

@@ -118,7 +118,7 @@ class NetflixRowsTest {
     @Test
     fun billboardCropsThePosterWhenNoBackdrop() {
         assertIs<NetflixArt.Backdrop>(netflixBillboardArt(row(1, backdrop = "wide")))
-        assertIs<NetflixArt.Backdrop>(netflixBillboardArt(row(1)))
+        assertIs<NetflixArt.PosterFill>(netflixBillboardArt(row(1)))
         assertIs<NetflixArt.Blank>(netflixBillboardArt(row(1, poster = null)))
     }
 

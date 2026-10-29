@@ -51,7 +51,7 @@ fun AutoRefreshSettings(graph: AppGraph, discovery: Boolean) {
     picker?.let { which ->
         val options = when (which) {
             "mode" -> names.map { PickerOption(it.key, it.value) }
-            "hours" -> (1..168).map { PickerOption(it.toString(), "Every $it hours") }
+            "hours" -> (1..168).map { PickerOption(it.toString(), if (it == 1) "Every hour" else "Every $it hours") }
             "hour" -> (0..23).map { PickerOption(it.toString(), "%02d:xx".format(it)) }
             else -> (0..59).map { PickerOption(it.toString(), "xx:%02d".format(it)) }
         }

@@ -5,6 +5,7 @@ import com.yodesla.omniverse.core.model.AccountStatus
 import com.yodesla.omniverse.core.model.Category
 import com.yodesla.omniverse.core.model.ChannelRecord
 import com.yodesla.omniverse.core.model.ContentKind
+import com.yodesla.omniverse.core.model.DynamicRange
 import com.yodesla.omniverse.core.model.Episode
 import com.yodesla.omniverse.core.model.ProgrammeRecord
 import com.yodesla.omniverse.core.model.RemoteId
@@ -12,6 +13,7 @@ import com.yodesla.omniverse.core.model.Season
 import com.yodesla.omniverse.core.model.SeriesDetail
 import com.yodesla.omniverse.core.model.SeriesRecord
 import com.yodesla.omniverse.core.model.SourceId
+import com.yodesla.omniverse.core.model.VideoInfo
 import com.yodesla.omniverse.core.model.VodDetail
 import com.yodesla.omniverse.core.model.VodRecord
 import kotlinx.serialization.json.JsonArray
@@ -144,7 +146,32 @@ object XtreamMappers {
             backdropUrls = info.strList("backdrop_path").filter { it.startsWith("http", ignoreCase = true) },
             releaseDate = info.str("releasedate"),
             trailerUrl = trailer,
+            video = videoInfo(info),
         )
+    }
+
+    private val dolbyVisionTags = setOf("dvh1", "dvhe", "dva1", "dvav")
+
+    /**
+     * The panel's own ffprobe of the file (`info.video`); an empty list or object means it never
+     * probed it. Dolby Vision shows as a DOVI configuration record (or a dvh1/dvhe codec tag), HDR
+     * as a PQ or HLG transfer; a bt709-style transfer is stated SDR.
+     */
+    fun videoInfo(info: JsonObject): VideoInfo? {
+        val v = info.obj("video") ?: return null
+        val width = v.int("width")?.takeIf { it > 0 }
+        val height = v.int("height")?.takeIf { it > 0 }
+        val sideData = v.arr("side_data_list").orEmpty().mapNotNull { (it as? JsonObject)?.str("side_data_type") }
+        val transfer = v.str("color_transfer")?.lowercase()?.takeIf { it != "unknown" && it != "unspecified" }
+        val range = when {
+            sideData.any { it.contains("DOVI", ignoreCase = true) } || v.str("codec_tag_string")?.lowercase() in dolbyVisionTags ->
+                DynamicRange.DOLBY_VISION
+            sideData.any { it.contains("2094-40") || it.contains("HDR10+", ignoreCase = true) } -> DynamicRange.HDR10_PLUS
+            transfer == "smpte2084" || transfer == "arib-std-b67" -> DynamicRange.HDR
+            transfer != null -> DynamicRange.SDR
+            else -> null
+        }
+        return VideoInfo(width, height, range).takeIf { width != null || height != null || range != null }
     }
 
     fun seriesDetail(root: JsonObject, fallback: SeriesRecord): SeriesDetail {
@@ -307,6 +334,7 @@ object XtreamMappers {
                 stillUrl = info?.str("movie_image")?.takeIf { it.startsWith("http", ignoreCase = true) },
                 containerExt = e.str("container_extension"),
                 rating = info?.float("rating")?.takeIf { it in 0f..10f },
+                video = info?.let(::videoInfo),
             )
         }.getOrNull()
 

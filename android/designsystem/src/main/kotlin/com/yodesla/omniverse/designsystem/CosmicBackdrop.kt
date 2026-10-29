@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Size
@@ -20,41 +22,47 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.graphics.drawscope.translate
 import kotlin.math.max
 
+private val LocalCosmicBackdrop = staticCompositionLocalOf { false }
+
 /**
- * Static, low-contrast atmosphere behind TV browse surfaces; never animates or captures focus.
+ * Luminous atmosphere behind browse surfaces; never animates or captures focus.
  *
  * Performance: the Shield renders the UI at 4K. The art used to be drawn every frame as a
  * translucent full-screen image plus a translucent full-screen gradient (two blended 4K layers
- * under every focus move). It is now composed ONCE, at half resolution, into an opaque bitmap and
- * drawn as a single scaled blit; the art is soft space imagery, so the lower resolution is invisible.
+ * under every focus move). Compose once at the actual viewport size to preserve fine stars,
+ * then draw opaquely. Nested destinations share the same backdrop.
  */
 @Composable
 fun CosmicBackdrop(modifier: Modifier = Modifier, content: @Composable BoxScope.() -> Unit) {
+    if (LocalCosmicBackdrop.current) {
+        Box(modifier, content = content)
+        return
+    }
     val c = OmniTheme.colors
-    val art = painterResource(R.drawable.cosmic_backdrop_v2)
+    val art = painterResource(R.drawable.cosmic_backdrop_v3)
     Box(modifier) {
         Spacer(
             Modifier.fillMaxSize().drawWithCache {
-                val w = max(1, (size.width / 2f).toInt())
-                val h = max(1, (size.height / 2f).toInt())
+                val w = max(1, size.width.toInt())
+                val h = max(1, size.height.toInt())
                 val bmp = ImageBitmap(w, h)
                 CanvasDrawScope().draw(this, LayoutDirection.Ltr, androidx.compose.ui.graphics.Canvas(bmp), Size(w.toFloat(), h.toFloat())) {
                     drawRect(c.background)
-                    drawCropped(art, Size(w.toFloat(), h.toFloat()), alpha = 0.72f)
+                    drawCropped(art, Size(w.toFloat(), h.toFloat()), alpha = 1f)
                     drawRect(
                         Brush.verticalGradient(
-                            0f to c.background.copy(alpha = 0.18f),
-                            0.55f to c.background.copy(alpha = 0.28f),
-                            1f to c.background.copy(alpha = 0.72f),
+                            0f to c.background.copy(alpha = 0.08f),
+                            0.55f to c.background.copy(alpha = 0.12f),
+                            1f to c.background.copy(alpha = 0.30f),
                         ),
                     )
                 }
                 onDrawBehind {
-                    drawImage(bmp, srcOffset = IntOffset.Zero, srcSize = IntSize(w, h), dstSize = IntSize(size.width.toInt(), size.height.toInt()), filterQuality = FilterQuality.Low)
+                    drawImage(bmp)
                 }
             },
         )
-        content()
+        CompositionLocalProvider(LocalCosmicBackdrop provides true) { content() }
     }
 }
 

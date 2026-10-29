@@ -50,6 +50,14 @@ class DiscoveryRepositoryTest {
         assertEquals(ContentKind.SERIES, shows.single().key.kind)
         assertTrue(repo.home(null, flowOf<Visibility>({ _, _, _ -> false })).first().isEmpty())
     }
+    @Test fun recentBrokenSourceFallsBackToOtherExactCopy() = runTest {
+        seed(); feed("week", "1" to "movie")
+        val health = MutableStateFlow(listOf(SourceHealthSnapshot("a", "Offline", 999, lastErrorKind = SourceErrorKind.NETWORK.name)))
+        val checked = DiscoveryRepository(null, user, catalog, clock, sourceHealth = health)
+        assertEquals("b", checked.home(null, ShowEverything).first().single().posters.single().key.sourceId.value)
+        health.value = health.value + SourceHealthSnapshot("b", "Login failed", 999, lastErrorKind = SourceErrorKind.AUTH.name)
+        assertTrue(checked.home(null, ShowEverything).first().isEmpty())
+    }
     @Test fun missingKeyAndMalformedCacheKeepExistingGoodFeeds() = runTest {
         seed(); feed("day", "1" to "movie")
         user.putSetting("discovery_cache_week", "broken json")

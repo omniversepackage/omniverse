@@ -1,0 +1,19 @@
+-- v17 -> v18: Unicode case/accent folding for all indexed search paths.
+-- Preserve existing indexed rows: no provider refresh is required after upgrading.
+CREATE TABLE search_index_backup AS
+SELECT docid AS saved_docid, title, kind, source_id, remote_id FROM search_index;
+DROP TABLE search_index;
+CREATE VIRTUAL TABLE search_index USING fts4(
+    title,
+    kind,
+    source_id,
+    remote_id,
+    notindexed=kind,
+    notindexed=source_id,
+    notindexed=remote_id,
+    prefix="2,3,4",
+    tokenize=unicode61
+);
+INSERT INTO search_index(docid, title, kind, source_id, remote_id)
+SELECT saved_docid, title, kind, source_id, remote_id FROM search_index_backup;
+DROP TABLE search_index_backup;

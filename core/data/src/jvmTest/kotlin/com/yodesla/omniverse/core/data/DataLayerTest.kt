@@ -61,6 +61,17 @@ class DataLayerTest {
     private suspend fun addSource(): SourceId =
         sources.add(SourceConfig.Xtream(SourceId(""), "Test", "http://h", "u", "p"))
 
+    @Test fun emptyCategoriesKeepTheExistingBrowseCatalog() = runTest(io) {
+        val id = addSource()
+        sync.sync(id, SyncScope.ALL, force = true).toList()
+        fake.emptyCategories = true
+        val events = sync.sync(id, SyncScope.ALL, force = true).toList()
+        assertTrue(events.any { it.stage == SyncStage.VOD_CATEGORIES && it.error != null })
+        for (kind in listOf(ContentKind.LIVE, ContentKind.VOD, ContentKind.SERIES)) {
+            assertEquals(5, db.readQueries.allCategories(id.value, kind.name).executeAsList().size)
+        }
+    }
+
     @Test
     fun fullSyncWritesEverythingInBatchesAndIsSearchable() = runTest(io) {
         val id = addSource()
@@ -250,6 +261,7 @@ class DataLayerTest {
 
     /** Scriptable in-memory provider. */
     private inner class FakeSource : ContentSource {
+        var emptyCategories = false
         var channelCount = 5_000
         var vodCount = 3_000
         var failVod = false
@@ -265,7 +277,7 @@ class DataLayerTest {
         )
 
         private fun cats(kind: ContentKind) = flow {
-            repeat(5) { emit(Category(id, kind, RemoteId("cat$it"), "Cat $it", null, it)) }
+            if (!emptyCategories) repeat(5) { emit(Category(id, kind, RemoteId("cat$it"), "Cat $it", null, it)) }
         }
 
         override fun liveCategories() = cats(ContentKind.LIVE)

@@ -2,9 +2,11 @@ package com.yodesla.omniverse.core.source.xtream
 
 import com.yodesla.omniverse.core.model.AccountStatus
 import com.yodesla.omniverse.core.model.ContentKind
+import com.yodesla.omniverse.core.model.DynamicRange
 import com.yodesla.omniverse.core.model.RemoteId
 import com.yodesla.omniverse.core.model.SeriesRecord
 import com.yodesla.omniverse.core.model.SourceId
+import com.yodesla.omniverse.core.model.VideoInfo
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -116,6 +118,27 @@ class MappersTest {
         assertNull(detail.trailerUrl)
         assertNotNull(detail.plot)
         assertNotNull(detail.cast)
+    }
+
+    @Test
+    fun vodDetailReadsThePanelsProbeOfTheFile() {
+        fun info(video: String) = parseObj("""{"name":"Film","video":$video}""")
+        assertEquals(VideoInfo(3840, 1600, DynamicRange.DOLBY_VISION), XtreamMappers.videoInfo(info(
+            """{"codec_name":"hevc","width":3840,"height":1600,"color_transfer":"smpte2084",
+               "side_data_list":[{"side_data_type":"DOVI configuration record","dv_profile":8}]}""")))
+        assertEquals(VideoInfo(1920, 1080, DynamicRange.DOLBY_VISION),
+            XtreamMappers.videoInfo(info("""{"width":1920,"height":1080,"codec_tag_string":"dvh1"}""")))
+        assertEquals(VideoInfo(3840, 2160, DynamicRange.HDR),
+            XtreamMappers.videoInfo(info("""{"width":"3840","height":"2160","color_transfer":"smpte2084"}""")))
+        assertEquals(VideoInfo(1920, 800, DynamicRange.SDR),
+            XtreamMappers.videoInfo(info("""{"width":1920,"height":800,"color_transfer":"bt709"}""")))
+        assertEquals(VideoInfo(1280, 720, null),
+            XtreamMappers.videoInfo(info("""{"width":1280,"height":720,"color_transfer":"unknown"}""")))
+        assertNull(XtreamMappers.videoInfo(info("[]")), "an unprobed file says nothing")
+        assertNull(XtreamMappers.videoInfo(info("{}")))
+        val root = parseObj("""{"info":{"name":"Film","video":{"width":3840,"height":2160}},"movie_data":{"stream_id":"9"}}""")
+        val fallback = XtreamMappers.vod(parseArray(fixture("vod_streams.json"))[0] as JsonObject, sourceId, 0)!!
+        assertEquals(VideoInfo(3840, 2160, null), XtreamMappers.vodDetail(root, fallback).video)
     }
 
     @Test

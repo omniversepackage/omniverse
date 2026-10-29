@@ -210,7 +210,8 @@ class AppGraph(context: Context, val brand: BrandConfig) {
     val discovery by lazy { com.yodesla.omniverse.core.data.metadata.DiscoveryRepository(
         BuildConfig.TMDB_API_KEY.takeIf { it.isNotBlank() }?.let { com.yodesla.omniverse.core.data.metadata.Tmdb(http, it, io = io) },
         userData, catalog, clock,
-        BuildConfig.TMDB_API_KEY.takeIf { it.isNotBlank() }?.let { com.yodesla.omniverse.core.data.metadata.NetflixCharts(http, com.yodesla.omniverse.core.data.metadata.Tmdb(http, it, io = io)) }) }
+        BuildConfig.TMDB_API_KEY.takeIf { it.isNotBlank() }?.let { com.yodesla.omniverse.core.data.metadata.NetflixCharts(http, com.yodesla.omniverse.core.data.metadata.Tmdb(http, it, io = io)) },
+        sourceHealth.snapshots()) }
 
     /** Task 142: Anime hub trending charts and channel art (TMDB; null key = feeds stay empty). */
     val animeFeeds by lazy { com.yodesla.omniverse.core.data.metadata.AnimeHubFeeds(
@@ -502,23 +503,25 @@ class AppGraph(context: Context, val brand: BrandConfig) {
     suspend fun syncSourceNow(id: SourceId, scope: SyncScope = SyncScope.ALL, force: Boolean = true): Boolean =
         runSync(id, scope, force)
 
-    private suspend fun reconnectPlex(id: SourceId) {
-        val current = sources.config(id) as? SourceConfig.Plex ?: return
+    suspend fun reconnectPlex(id: SourceId): Boolean {
+        val current = sources.config(id) as? SourceConfig.Plex ?: return false
         try {
             val refreshed = plexLinker.reconnect(current) ?: run {
                 Log.w(TAG, "Plex discovery found no verified connection for ${current.displayName}")
-                return
+                return false
             }
             if (refreshed.server != current.server || refreshed.token != current.token) {
                 sources.update(refreshed)
                 Log.i(TAG, "Plex connection rediscovered for ${current.displayName}")
                 StartupTrace.mark("Plex connection repaired: ${current.displayName}")
+                return true
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (_: Exception) {
             Log.w(TAG, "Plex connection discovery unavailable for ${current.displayName}")
         }
+        return false
     }
 
     private suspend fun runSync(id: SourceId, scope: SyncScope = SyncScope.ALL, force: Boolean = false): Boolean {

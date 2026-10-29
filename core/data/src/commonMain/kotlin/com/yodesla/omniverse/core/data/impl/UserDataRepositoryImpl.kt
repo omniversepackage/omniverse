@@ -70,6 +70,25 @@ class UserDataRepositoryImpl(
         Unit
     }
 
+    override suspend fun reorderFavorites(keys: List<ContentKey>) = withContext(io) {
+        val p = profileId()
+        db.transaction {
+            var all = q.favoritesByKind(p, null).executeAsList()
+            if (all.distinctBy { it.sort_index }.size < all.size) {
+                // Undo/restore can leave two rows on one sort_index; renumber so every slot is distinct.
+                all.forEachIndexed { n, r -> q.updateFavoriteSort(n.toLong(), p, LIST, r.source_id, r.kind, r.remote_id) }
+                all = q.favoritesByKind(p, null).executeAsList()
+            }
+            val byKey = all.associateBy { Triple(it.source_id, it.kind, it.remote_id) }
+            val rows = keys.distinct().mapNotNull { byKey[Triple(it.sourceId.value, it.kind.name, it.remoteId.value)] }
+            // The listed rows hand their own slots around in the new order; nobody else moves.
+            rows.zip(rows.map { it.sort_index }.sorted()) { r, slot ->
+                if (r.sort_index != slot) q.updateFavoriteSort(slot, p, LIST, r.source_id, r.kind, r.remote_id)
+            }
+        }
+        Unit
+    }
+
     override fun playNext(): Flow<List<ContentKey>> = perProfile { profile ->
         q.playNext(profile).asFlow().mapToList(io).map { rows ->
             rows.mapNotNull { runCatching { key(it.source_id, it.kind, it.remote_id) }.getOrNull() }
@@ -641,7 +660,7 @@ class UserDataRepositoryImpl(
         fun isProfileSetting(key: String) = key == "search_history" || key.startsWith("category_order_") ||
             key.startsWith("episode_snapshot_") || key.startsWith("new_episodes_") || key.startsWith("tracks_") ||
             key.startsWith("edition_pick_") ||
-            key == "live_hidden_providers" || key == "movies_shows_view" || key == "left_opens_menu" || key == "warn_main_menu" || key == "for_you_news" || key == "home_layout" || key == "home_density" || key == "text_size" ||
+            key == "live_hidden_providers" || key == "movies_shows_view" || key == "left_opens_menu" || key == "warn_main_menu" || key == "for_you_news" || key == "for_you_layout" || key == "home_layout" || key == "home_density" || key == "text_size" ||
             key.startsWith("category_lang_") || key.startsWith("browse_filter_") ||
             key.startsWith("subtitle_style_") || key == "preload_next_channel" ||
             key == "guide_filter" || key == "match_frame_rate" || key == "crash_notice" ||

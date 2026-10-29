@@ -138,7 +138,8 @@ CREATE VIRTUAL TABLE search_index USING fts4(
     notindexed=kind,
     notindexed=source_id,
     notindexed=remote_id,
-    prefix="2,3,4"
+    prefix="2,3,4",
+    tokenize=unicode61
 );
 
 -- ---------- queries used by Phase 0/1 contracts (Qwen extends in P1.5) ----------

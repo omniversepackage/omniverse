@@ -218,6 +218,9 @@ interface CatalogRepository {
     fun recentlyAdded(kind: ContentKind, limit: Int, excludedKeys: Collection<String>): Flow<List<PosterRow>> = recentlyAdded(kind, limit)
     /** Poster data for a VOD or SERIES key (EPISODE: pass the series key). Null if not in the catalog. */
     suspend fun poster(key: ContentKey): PosterRow?
+    /** Bounded SQL hydration for Home's overlapping progress, queue and saved-title shelves. */
+    suspend fun posters(keys: Collection<ContentKey>): Map<ContentKey, PosterRow> =
+        keys.distinct().mapNotNull { key -> poster(key)?.let { key to it } }.toMap()
     /**
      * Task 87b: re-read the local TMDB art cache for rows already on screen (no network, no paging
      * restart). Browse pages call it when the TMDB enricher reports new art, so freshly cached
@@ -334,6 +337,12 @@ interface SearchRepository {
     suspend fun search(query: String, limitPerKind: Int = 20): Map<ContentKind, List<SearchHit>>
     /** Only channels are needed for the live section of the TV search screen. */
     suspend fun searchLive(query: String, limit: Int = 24): List<SearchHit> = search(query, limit)[ContentKind.LIVE].orEmpty()
+
+    /** Optional indexed first stage; broad substring matching can finish afterward. */
+    suspend fun searchTitlePrefixes(query: String, kinds: Collection<ContentKind>, excludedCategoryKeys: Collection<String>, limitPerKind: Int): Map<ContentKind, SearchFilteredPage> = emptyMap()
+
+    suspend fun searchLiveVisible(query: String, excludedCategoryKeys: Collection<String>, limit: Int = 24): List<SearchHit> = searchLive(query, limit)
+    suspend fun searchProgrammesVisible(query: String, nowMs: Long, excludedCategoryKeys: Collection<String>, windowMs: Long = 86_400_000L, limit: Int = 30): List<ProgrammeHit> = searchProgrammes(query, nowMs, windowMs, limit)
 
     /**
      * Task 122: cross-source movie/show search narrowed by [filters] (AND), every filter applied in
@@ -464,6 +473,13 @@ interface UserDataRepository {
     fun favorites(kind: ContentKind? = null): Flow<List<ContentKey>>
     fun isFavorite(key: ContentKey): Flow<Boolean>
     suspend fun setFavorite(key: ContentKey, favorite: Boolean)
+
+    /**
+     * Save a new viewer order for the favourites in [keys] (the Live list's hold-OK › Move). They
+     * take over each other's slots, so favourites not listed (other kinds, hidden channels) keep
+     * theirs; keys that are not favourites are ignored. Default: no-op.
+     */
+    suspend fun reorderFavorites(keys: List<ContentKey>) {}
 
     /**
      * Task 97: the "Play next" queue — a per-profile, viewer-ordered list of titles the viewer

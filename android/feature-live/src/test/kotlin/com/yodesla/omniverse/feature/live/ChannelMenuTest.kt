@@ -32,6 +32,14 @@ class ChannelMenuTest {
         )
     }
 
+    @Test fun moveRowOnlyWhenReorderableAndSitsAfterWatch() {
+        assertFalse(labels(ChannelMenuState(true, false, canWatch = true, canRemind = false, reminded = false)).contains("Move"))
+        assertEquals(
+            listOf("Watch", "Move", "Remove from Favorites", "Add to Multiview"),
+            labels(ChannelMenuState(true, false, canWatch = true, canRemind = false, reminded = false, canMove = true)),
+        )
+    }
+
     @Test fun remindRowOnlyForFutureAndFlipsWhenAlreadySet() {
         assertFalse(labels(ChannelMenuState(false, false, canWatch = false, canRemind = false, reminded = false)).any { it.startsWith("Remind") })
         assertEquals(

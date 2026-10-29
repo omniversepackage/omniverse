@@ -53,6 +53,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.yodesla.omniverse.designsystem.LocalTextScale
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -260,7 +261,7 @@ private fun GameHero(g: GameUi, now: Long, playing: HighlightClip?, paused: Bool
     val t = OmniTheme.type
     val game = g.game
     val clip = playing ?: g.clip
-    FocusCard(onClick = onOpen, onLongClick = onLongPress, modifier = modifier.padding(horizontal = OmniSpacing.tvSide).fillMaxWidth().height(230.dp)
+    FocusCard(onClick = onOpen, onLongClick = onLongPress, modifier = modifier.padding(horizontal = OmniSpacing.tvSide).fillMaxWidth().height(230.dp * LocalTextScale.current.coerceAtLeast(1f))
         .onPreviewKeyEvent { e -> if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionLeft) { onLeft(); true } else false }) {
         Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(teamColor(game.away).deep(), Color(0xFF070D16), teamColor(game.home).deep()), start = Offset.Zero, end = Offset.Infinite))) {
             if (playing != null) {
@@ -355,7 +356,7 @@ private fun GameCard(g: GameUi, now: Long, reminded: Boolean, photos: Map<com.yo
     val c = OmniTheme.colors
     val t = OmniTheme.type
     val game = g.game
-    FocusCard(onClick = onClick, onLongClick = onLongPress, modifier = Modifier.width(360.dp).height(200.dp)) {
+    FocusCard(onClick = onClick, onLongClick = onLongPress, modifier = Modifier.width(360.dp).height(200.dp * LocalTextScale.current.coerceAtLeast(1f))) {
         Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(teamColor(game.away).deep(0.6f), Color(0xFF0A111B), teamColor(game.home).deep(0.6f))))) {
             // A real photo behind the logos: this game's clip, else a recent photo from the sport.
             (g.clip?.thumbnailUrl ?: sportPhoto(photos, game.sport, game.id))?.let { url ->
@@ -407,7 +408,7 @@ private fun ClipCard(clip: HighlightClip, previewing: Boolean, onFocus: (Boolean
     // A short dwell before previewing so scrolling past cards doesn't start every clip.
     LaunchedEffect(focused) { if (focused) { kotlinx.coroutines.delay(700); onFocus(true) } else onFocus(false) }
     val playing = previewing
-    FocusCard(onClick = onClick, modifier = Modifier.width(320.dp).height(200.dp).onFocusChanged { focused = it.hasFocus }) {
+    FocusCard(onClick = onClick, modifier = Modifier.width(320.dp).height(200.dp * LocalTextScale.current.coerceAtLeast(1f)).onFocusChanged { focused = it.hasFocus }) {
         Box(Modifier.fillMaxSize()) {
             AsyncImage(model = clip.thumbnailUrl, contentDescription = null, contentScale = ContentScale.Crop, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt, modifier = Modifier.fillMaxSize())
             if (previewing) ClipVideo(clip.videoUrl, muted = false, paused = false, modifier = Modifier.fillMaxSize())
@@ -447,7 +448,7 @@ private fun AiringCard(a: SportsAiring, now: Long, reminded: Boolean, channels: 
     val photo = a.imageUrl ?: clips.firstOrNull { cl -> cl.teams.any { it in names } }?.thumbnailUrl ?: sportPhoto(photos, a.sport, a.title)
     val left = pair?.first ?: solo
     val right = pair?.second ?: solo
-    FocusCard(onClick = onClick, onLongClick = onLongPress, modifier = Modifier.width(360.dp).height(200.dp)) {
+    FocusCard(onClick = onClick, onLongClick = onLongPress, modifier = Modifier.width(360.dp).height(200.dp * LocalTextScale.current.coerceAtLeast(1f))) {
         Box(Modifier.fillMaxSize().background(
             if (left != null && right != null) Brush.horizontalGradient(listOf(teamColor(left).deep(0.6f), Color(0xFF0A111B), teamColor(right).deep(0.6f)))
             else Brush.verticalGradient(listOf(Turf.copy(alpha = 0.25f), Color(0xFF0A111B))))) {
@@ -485,7 +486,7 @@ private fun AiringCard(a: SportsAiring, now: Long, reminded: Boolean, channels: 
 private fun ChannelCard(ch: SportsChannelUi, now: Long, onClick: () -> Unit) {
     val c = OmniTheme.colors
     val t = OmniTheme.type
-    FocusCard(onClick = onClick, onLongClick = channelFavoriteMenu(ch.row.key.sourceId.value, ch.row.key.remoteId.value, ch.row.name, ch.row.logoUrl), modifier = Modifier.width(240.dp).height(140.dp)) {
+    FocusCard(onClick = onClick, onLongClick = channelFavoriteMenu(ch.row.key.sourceId.value, ch.row.key.remoteId.value, ch.row.name, ch.row.logoUrl), modifier = Modifier.width(240.dp).height(140.dp * LocalTextScale.current.coerceAtLeast(1f))) {
         Column(Modifier.fillMaxSize().padding(OmniSpacing.m), verticalArrangement = Arrangement.SpaceBetween) {
             LogoImage(ch.row.logoUrl, ch.row.name, Modifier.width(80.dp).height(44.dp))
             Column {

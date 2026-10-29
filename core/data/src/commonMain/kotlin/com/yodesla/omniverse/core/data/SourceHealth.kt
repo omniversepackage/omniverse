@@ -32,8 +32,8 @@ import kotlinx.serialization.json.Json
 /** Tuning knobs for the health rules, in one place. */
 object SourceHealth {
     const val DAY = 86_400_000L
-    /** The weekly cadence: a check is due once the last one is this old. */
-    const val CHECK_INTERVAL_MS = 7 * DAY
+    /** Recheck on app startup after a few hours so changed provider URLs/tokens stop poisoning shelves. */
+    const val CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000L
     /** "Expires in N days" starts counting at this many days left. */
     const val EXPIRY_WARN_DAYS = 7
     /** A source whose last successful sync is older than this has a sync problem. */
@@ -262,7 +262,7 @@ class SourceHealthStore(private val userData: UserDataRepository, private val cl
             prevChannels = if (countsKnown && baselineKnown) old?.channels ?: 0L else old?.prevChannels ?: 0L,
             countsKnown = countsKnown,
             failCount = if (observation.error == null) 0 else (old?.failCount ?: 0) + 1,
-            lastErrorKind = observation.error?.name ?: old?.lastErrorKind,
+            lastErrorKind = observation.error?.name,
         )
         writeSnapshots(current.filter { it.sourceId != sourceId.value } + next)
     }

@@ -40,10 +40,10 @@ internal fun netflixCardArt(row: PosterRow): NetflixArt = when {
 /** Cards that need a title treatment inside them: reused banner art, or art we fell back to. */
 internal fun NetflixArt.needsTitleOverlay(): Boolean = this !is NetflixArt.Backdrop
 
-/** Billboard art: wide art, else the poster scaled to fill and cropped from the top. */
+/** Preserve artwork semantics: portrait fallback must never enter the landscape crop path. */
 internal fun netflixBillboardArt(row: PosterRow): NetflixArt = when {
     !row.backdropUrl.isNullOrBlank() -> NetflixArt.Backdrop(row.backdropUrl!!)
-    !row.posterUrl.isNullOrBlank() -> NetflixArt.Backdrop(row.posterUrl!!)
+    !row.posterUrl.isNullOrBlank() -> NetflixArt.PosterFill(row.posterUrl!!)
     else -> NetflixArt.Blank
 }
 

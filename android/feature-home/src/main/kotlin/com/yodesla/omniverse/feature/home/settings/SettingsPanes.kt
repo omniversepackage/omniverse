@@ -125,7 +125,12 @@ fun SettingsCategoryPane(
     )
 
     // Task 99: a search jump scrolls the pane by index, so the list state is hoisted here.
-    val listState = remember(category) { LazyListState() }
+    val listState = remember(category, registry) { registry.listStates.getOrPut(category) { LazyListState() } }
+    registry.paneKeys[category] = settingsPaneItemKeys(category,
+        sourceIds = state.sources.map { it.summary.id.value },
+        hasHiddenCategories = state.hiddenCategories.isNotEmpty(), spoilerFree = state.spoilerFree,
+        compact = compact, guestMode = guestMode, hasSlot = slot != null,
+        hasHiddenCwRow = onOpenHiddenCw != null)
     LaunchedEffect(jumpKey) {
         if (jumpKey == null) return@LaunchedEffect
         val keys = settingsPaneItemKeys(
@@ -151,11 +156,11 @@ fun SettingsCategoryPane(
         onJumpHandled()
     }
 
-    FocusPivot(parentFraction = 0.35f, leading = 0.dp) {
+    FocusPivot(onlyWhenClipped = true, halo = 12.dp) {
         LazyColumn(
             modifier.fillMaxSize(),
             state = listState,
-            contentPadding = PaddingValues(start = OmniSpacing.tvSide, end = OmniSpacing.tvSide, top = OmniSpacing.xl, bottom = 240.dp),
+            contentPadding = PaddingValues(start = OmniSpacing.tvSide, end = OmniSpacing.tvSide, top = OmniSpacing.xl, bottom = OmniSpacing.xxl),
             verticalArrangement = Arrangement.spacedBy(OmniSpacing.s),
         ) {
             item(key = SettingsRowKeys.TITLE) { Text(categoryTitle, style = t.browseHeading, color = c.textPrimary) }
@@ -677,6 +682,23 @@ private fun LazyListScope.displayRows(
                 onClick = { openPicker(PickerSpec(title, options, state.moviesShowsView) { viewModel.setMoviesShowsView(it) }) },
                 secondary = stringResource(R.string.movies_shows_view_note),
                 ctx = ctx, key = SettingsRowKeys.MOVIES_SHOWS_VIEW,
+            )
+        }
+    }
+    if (SettingsRowKeys.FOR_YOU_LAYOUT in rows) {
+        item(key = SettingsRowKeys.FOR_YOU_LAYOUT) {
+            val state by viewModel.state.collectAsStateWithLifecycle()
+            val options = listOf(
+                PickerOption(com.yodesla.omniverse.core.data.ForYouLayout.CINEMATIC, stringResource(R.string.for_you_layout_cinematic)),
+                PickerOption(com.yodesla.omniverse.core.data.ForYouLayout.MAGAZINE, stringResource(R.string.for_you_layout_magazine)),
+            )
+            val title = stringResource(R.string.for_you_layout_label)
+            OmniPickerRow(
+                title,
+                value = options.firstOrNull { it.value == state.forYouLayout }?.label ?: options.first().label,
+                onClick = { openPicker(PickerSpec(title, options, state.forYouLayout) { viewModel.setForYouLayout(it) }) },
+                secondary = stringResource(R.string.for_you_layout_note),
+                ctx = ctx, key = SettingsRowKeys.FOR_YOU_LAYOUT,
             )
         }
     }

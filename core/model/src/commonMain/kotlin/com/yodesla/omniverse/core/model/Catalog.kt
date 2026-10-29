@@ -84,9 +84,20 @@ data class VodDetail(
     val trailerUrl: String?,
     /** Playable files within this source item; empty when the source does not expose choices. */
     val versions: List<MediaVersion> = emptyList(),
+    /** The file's picture as the source's own probe reports it; null when it reported nothing. */
+    val video: VideoInfo? = null,
 )
 
-data class MediaVersion(val id: String, val index: Int, val label: String)
+data class MediaVersion(val id: String, val index: Int, val label: String, val video: VideoInfo? = null, val durationSec: Int? = null)
+
+/**
+ * A file's picture from the source's own probe of it (Xtream `info.video`, Plex media/stream data).
+ * Null fields are unknown; nothing here is read out of a title.
+ */
+data class VideoInfo(val width: Int? = null, val height: Int? = null, val range: DynamicRange? = null)
+
+/** [SDR] means the probe says so; a null range means it did not say. */
+enum class DynamicRange { SDR, HDR, HDR10_PLUS, DOLBY_VISION }
 
 data class SeriesDetail(
     val record: SeriesRecord,
@@ -114,6 +125,8 @@ data class Episode(
     val stillUrl: String?,
     val containerExt: String?,
     val rating: Float?,
+    /** Picture of the source's playable episode file when the provider exposes a probe. */
+    val video: VideoInfo? = null,
 )
 
 data class ProgrammeRecord(

@@ -176,12 +176,35 @@ class PlexSource(
 
     // ---------------------------------------------------------------- details
 
+    override suspend fun previewArtwork(kind: ContentKind, id: RemoteId): com.yodesla.omniverse.core.source.PreviewArtwork? {
+        if (kind != ContentKind.VOD && kind != ContentKind.SERIES) return null
+        val metadata = firstMetadata("/library/metadata/${enc(id.value)}?includeGuids=1") ?: return null
+        return com.yodesla.omniverse.core.source.PreviewArtwork(
+            metadata.fieldList("Guid", "id").firstOrNull { it.startsWith("tmdb://") }?.removePrefix("tmdb://"),
+            metadata.str("art")?.let(::artUrl),
+        )
+    }
     override suspend fun vodDetail(id: RemoteId): VodDetail {
         val m = firstMetadata("/library/metadata/${enc(id.value)}")
             ?: throw SourceException.NotFound("Movie ${id.value} not found")
         val record = mapVod(m, m.str("parentRatingKey") ?: "unknown", 0)
             ?: throw SourceException.BadResponse("Plex movie ${id.value} has no usable title")
         val roles = m.fieldList("Role", "tag")
+        val versions = playableParts(m).mapIndexed { index, (media, part) ->
+            val durationSec = (media.long("duration") ?: part.long("duration"))?.div(1000)?.toInt()
+            val resolution = media.str("videoResolution") ?: part.str("videoResolution")
+            val quality = when (resolution) {
+                "2160", "4k" -> "4K"
+                "1080" -> "1080p"
+                "720" -> "720p"
+                else -> resolution?.takeIf { it.matches(Regex("[0-9]{3,4}")) }?.let { "${it}p" }
+            }
+            val container = (media.str("container") ?: part.str("container"))?.uppercase()?.takeIf { it.matches(Regex("[A-Z0-9]{2,8}")) }
+            val cut = plexCutLabel(m.str("title"), m.int("year"), durationSec, part.str("file"))
+            com.yodesla.omniverse.core.model.MediaVersion(mediaVersionId(media, part), index,
+                listOfNotNull(quality, cut, container).joinToString(" · ").ifBlank { "Version ${index + 1}" },
+                plexVideo(media, part), durationSec)
+        }
         return VodDetail(
             record = record,
             plot = m.str("summary"),
@@ -192,19 +215,26 @@ class PlexSource(
             backdropUrls = m.str("art")?.let(::artUrl)?.let(::listOf) ?: emptyList(),
             releaseDate = m.str("originallyAvailableAt") ?: m.str("PremiDate") ?: m.str("year"),
             trailerUrl = m.arr("Trailer")?.mapNotNull { (it as? JsonObject)?.str("watchURL") }?.firstOrNull(),
-            versions = playableParts(m).mapIndexed { index, (media, part) ->
-                val resolution = media.str("videoResolution") ?: part.str("videoResolution")
-                val quality = when (resolution) {
-                    "2160", "4k" -> "4K"
-                    "1080" -> "1080p"
-                    "720" -> "720p"
-                    else -> resolution?.takeIf { it.matches(Regex("[0-9]{3,4}")) }?.let { "${it}p" }
-                }
-                val container = (media.str("container") ?: part.str("container"))?.uppercase()?.takeIf { it.matches(Regex("[A-Z0-9]{2,8}")) }
-                com.yodesla.omniverse.core.model.MediaVersion(mediaVersionId(media, part), index,
-                    listOfNotNull(quality, container).joinToString(" · ").ifBlank { "Version ${index + 1}" })
-            },
+            versions = versions,
+            // As another title's alternative this item plays its best file, so that file describes it.
+            video = versions.mapNotNull { it.video }.maxByOrNull { it.width ?: 0 },
         )
+    }
+
+    /** Plex's own analysis of one file: the media's dimensions plus its video stream's range. */
+    private fun plexVideo(media: JsonObject, part: JsonObject): com.yodesla.omniverse.core.model.VideoInfo? {
+        val stream = part.arr("Stream")?.mapNotNull { it as? JsonObject }?.firstOrNull { it.int("streamType") == 1 }
+        val transfer = stream?.str("colorTrc")?.lowercase()
+        val range = when {
+            stream?.bool("DOVIPresent") == true -> com.yodesla.omniverse.core.model.DynamicRange.DOLBY_VISION
+            stream?.str("displayTitle")?.contains("HDR10+", ignoreCase = true) == true -> com.yodesla.omniverse.core.model.DynamicRange.HDR10_PLUS
+            transfer == "smpte2084" || transfer == "arib-std-b67" -> com.yodesla.omniverse.core.model.DynamicRange.HDR
+            transfer != null -> com.yodesla.omniverse.core.model.DynamicRange.SDR
+            else -> null
+        }
+        val width = (media.int("width") ?: stream?.int("width"))?.takeIf { it > 0 }
+        val height = (media.int("height") ?: stream?.int("height"))?.takeIf { it > 0 }
+        return com.yodesla.omniverse.core.model.VideoInfo(width, height, range).takeIf { width != null || height != null || range != null }
     }
 
     override suspend fun seriesDetail(id: RemoteId): SeriesDetail {
@@ -227,6 +257,8 @@ class PlexSource(
                 val eKey = e.str("ratingKey")
                 val eTitle = e.str("title")
                 if (eKey == null || eTitle == null) return@mapNotNull null
+                val media = e.arr("Media")?.firstOrNull() as? JsonObject
+                val part = media?.arr("Part")?.firstOrNull() as? JsonObject
                 Episode(
                     sourceId = this.id,
                     remoteId = RemoteId(eKey),
@@ -239,6 +271,7 @@ class PlexSource(
                     stillUrl = e.str("thumb")?.let(::artUrl),
                     containerExt = null,
                     rating = e.float("rating")?.takeIf { it in 0f..10f },
+                    video = media?.let { plexVideo(it, part ?: JsonObject(emptyMap())) },
                 )
             }
             seasons.add(Season(sIndex, s.str("title"), s.str("thumb")?.let(::artUrl), episodes))
@@ -551,7 +584,7 @@ class PlexSource(
 
     private suspend fun pageItems(type: Int, sectionKey: String, start: Int, genre: String? = null): Page {
         val genreParam = genre?.let { "&genre=${enc(it)}" }.orEmpty()
-        val path = "/library/sections/${enc(sectionKey)}/all?type=$type$genreParam&X-Plex-Container-Start=$start&X-Plex-Container-Size=$PAGE_SIZE"
+        val path = "/library/sections/${enc(sectionKey)}/all?type=$type$genreParam&includeGuids=1&X-Plex-Container-Start=$start&X-Plex-Container-Size=$PAGE_SIZE"
         val container = getJson(path)["MediaContainer"] as? JsonObject
             ?: throw SourceException.BadResponse("Plex page had no MediaContainer")
         val total = container.long("totalSize")?.takeIf { it in 0..Int.MAX_VALUE }?.toInt()
@@ -633,3 +666,4 @@ class PlexSourceFactory(private val http: HttpClient) : SourceFactory {
     override fun create(config: SourceConfig): ContentSource? =
         (config as? SourceConfig.Plex)?.let { PlexSource(it, http) }
 }
+

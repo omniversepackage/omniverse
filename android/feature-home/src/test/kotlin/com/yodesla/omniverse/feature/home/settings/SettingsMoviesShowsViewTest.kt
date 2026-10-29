@@ -21,7 +21,7 @@ class SettingsMoviesShowsViewTest {
         assertEquals(
             listOf(
                 SettingsRowKeys.TITLE, SettingsRowKeys.EXPERIENCE, SettingsRowKeys.HIDE_SPORTS_SCORES, SettingsRowKeys.TEXT_SIZE,
-                SettingsRowKeys.MOVIES_SHOWS_VIEW, SettingsRowKeys.LEFT_MENU, SettingsRowKeys.MENU_WARNING, SettingsRowKeys.SCREENSAVER, SettingsRowKeys.END_SPACER,
+                SettingsRowKeys.MOVIES_SHOWS_VIEW, SettingsRowKeys.FOR_YOU_LAYOUT, SettingsRowKeys.LEFT_MENU, SettingsRowKeys.MENU_WARNING, SettingsRowKeys.SCREENSAVER, SettingsRowKeys.END_SPACER,
             ),
             keys,
         )

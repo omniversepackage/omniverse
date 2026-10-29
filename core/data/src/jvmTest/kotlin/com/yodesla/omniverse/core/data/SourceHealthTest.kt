@@ -179,7 +179,7 @@ class SourceHealthTest {
         assertTrue(healthCheckDue(now, null))
         assertTrue(healthCheckDue(now, now - 8 * day))
         assertTrue(healthCheckDue(now, now - SourceHealth.CHECK_INTERVAL_MS))
-        assertTrue(!healthCheckDue(now, now - 6 * day))
+        assertTrue(!healthCheckDue(now, now - SourceHealth.CHECK_INTERVAL_MS + 1))
     }
 
     @Test

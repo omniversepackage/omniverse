@@ -192,7 +192,7 @@ internal fun CrunchyrollLayout(
             Modifier.fillMaxSize(),
         ) {
             val heroHeight = maxHeight * 0.64f
-            FocusPivot(parentFraction = 0f, leading = 64.dp) /* room for the focused row's title */ {
+            FocusPivot(parentFraction = 0f, leading = 64.dp, trailing = 48.dp) /* room for the focused row's title */ {
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
@@ -257,6 +257,11 @@ internal fun CrunchyrollHeroBackdrop(row: PosterRow?, cinematic: Boolean, modifi
     }
     val zoomNow by animateFloatAsState(zoom, tween(12_000, easing = LinearEasing), label = "crKenBurns")
     Crossfade(row, animationSpec = tween(320), label = "crHeroArt", modifier = modifier) { r ->
+        if (r != null && r.backdropUrl.isNullOrBlank()) {
+            com.yodesla.omniverse.designsystem.HeroArtwork(null, r.posterUrl,
+                Modifier.fillMaxSize())
+            return@Crossfade
+        }
         val art = r?.let { crunchyrollKeyArt(it) }
         if (art == null) return@Crossfade
         Box(
@@ -382,7 +387,7 @@ private fun CrunchyrollHero(
                 }
                 Text(
                     displayTitle(r.name, r.year), maxLines = 1, overflow = TextOverflow.Ellipsis, color = c.textPrimary,
-                    style = TextStyle(fontFamily = t.family, fontWeight = FontWeight.Bold, fontSize = 36.sp, lineHeight = 40.sp, letterSpacing = (-1.0).sp),
+                    style = TextStyle(fontFamily = t.family, fontWeight = FontWeight.Bold, fontSize = (36f * com.yodesla.omniverse.designsystem.LocalTextScale.current).sp, lineHeight = (40f * com.yodesla.omniverse.designsystem.LocalTextScale.current).sp, letterSpacing = (-1.0).sp),
                 )
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
                     age?.let { CrunchyrollAgeBox(it) }
@@ -394,7 +399,7 @@ private fun CrunchyrollHero(
                     crunchyrollHeroScores(r.key, rt?.first, rt?.second)?.let { RtBadges(it) }
                 }
                 r.plot?.let {
-                    Text(it, style = t.body.copy(fontSize = 15.sp, lineHeight = 22.sp), color = c.textSecondary, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                    Text(it, style = t.body.copy(fontSize = (15f * com.yodesla.omniverse.designsystem.LocalTextScale.current).sp, lineHeight = (22f * com.yodesla.omniverse.designsystem.LocalTextScale.current).sp), color = c.textSecondary, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 }
                 var playFocused by remember { mutableStateOf(false) }
                 var bookmarkFocused by remember { mutableStateOf(false) }
@@ -430,7 +435,7 @@ private fun CrunchyrollHero(
 internal fun CrunchyrollAgeBox(label: String) {
     val c = OmniTheme.colors
     Box(Modifier.background(c.elevated, CrunchShape).padding(horizontal = OmniSpacing.s, vertical = 2.dp)) {
-        Text(label, style = CrunchKicker(OmniTheme.type).copy(fontSize = 12.sp), color = c.textSecondary, maxLines = 1)
+        Text(label, style = CrunchKicker(OmniTheme.type).copy(fontSize = (14f * com.yodesla.omniverse.designsystem.LocalTextScale.current).sp), color = c.textSecondary, maxLines = 1)
     }
 }
 
@@ -469,7 +474,7 @@ internal fun CrunchyrollPlayButton(label: String, modifier: Modifier = Modifier,
         contentPadding = PaddingValues(horizontal = OmniSpacing.l),
     ) {
         Box(Modifier.fillMaxHeight(), contentAlignment = Alignment.Center) {
-            Text(label.uppercase(), style = CrunchKicker(OmniTheme.type).copy(fontSize = 15.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(label.uppercase(), style = CrunchKicker(OmniTheme.type).copy(fontSize = (15f * com.yodesla.omniverse.designsystem.LocalTextScale.current).sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -504,7 +509,7 @@ internal fun CrunchyrollBookmarkButton(inList: Boolean, description: String, siz
             },
             contentAlignment = Alignment.Center,
         ) {
-            Text(if (inList) "✓" else "+", style = CrunchKicker(OmniTheme.type).copy(fontSize = 22.sp), maxLines = 1)
+            Text(if (inList) "✓" else "+", style = CrunchKicker(OmniTheme.type).copy(fontSize = (22f * com.yodesla.omniverse.designsystem.LocalTextScale.current).sp), maxLines = 1)
         }
     }
 }
@@ -519,7 +524,7 @@ internal fun CrunchyrollShelf(title: String, caption: String? = null, compact: B
                 style = OmniTheme.type.title.copy(fontWeight = FontWeight.Bold, fontSize = if (compact) 18.sp else 22.sp, lineHeight = if (compact) 22.sp else 26.sp),
             )
             // Task 142: where a ranked shelf's data comes from (e.g. "TMDB trending · Animation").
-            caption?.let { Text(it, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis, style = OmniTheme.type.body.copy(fontSize = 13.sp)) }
+            caption?.let { Text(it, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis, style = OmniTheme.type.body.copy(fontSize = (14f * com.yodesla.omniverse.designsystem.LocalTextScale.current).sp)) }
         }
         // Task 84l: in the single-scroll page a focused shelf settles 35% down the screen, so the
         // row and its title / Sub|Dub captions are fully visible (bottom padding is 64 dp).
@@ -571,7 +576,7 @@ internal fun CrunchyrollPosterCard(
         Text(displayTitle(row.name, row.year), style = OmniTheme.type.body.copy(fontWeight = FontWeight.SemiBold),
             color = c.textPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis)
         subDub?.let {
-            Text(it.uppercase(), style = CrunchKicker(OmniTheme.type).copy(fontSize = 11.sp), color = c.textSecondary, maxLines = 1)
+            Text(it.uppercase(), style = CrunchKicker(OmniTheme.type).copy(fontSize = (14f * com.yodesla.omniverse.designsystem.LocalTextScale.current).sp), color = c.textSecondary, maxLines = 1)
         }
     }
 }
@@ -626,7 +631,7 @@ internal fun CrunchyrollContinueCard(
             color = c.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(
             listOfNotNull(episode, minutes, subDub).joinToString("  ·  "),
-            style = CrunchKicker(OmniTheme.type).copy(fontSize = 11.sp), color = c.textSecondary, maxLines = 1,
+            style = CrunchKicker(OmniTheme.type).copy(fontSize = (14f * com.yodesla.omniverse.designsystem.LocalTextScale.current).sp), color = c.textSecondary, maxLines = 1,
         )
     }
 }
@@ -664,7 +669,7 @@ internal fun CrunchyrollCard(
 
 /** UPPERCASE kicker: Crunchyroll's buttons and row labels, +0.5sp tracking. */
 internal fun CrunchKicker(t: OmniType) =
-    TextStyle(fontFamily = t.family, fontWeight = FontWeight.Bold, fontSize = 13.sp, lineHeight = 16.sp, letterSpacing = 0.5.sp)
+    t.caption.copy(fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
 
 /**
  * The "Sub | Dub" line, looked up off the main thread once the card settles (fast scrolling
@@ -699,3 +704,5 @@ internal fun fitWidth(row: androidx.compose.ui.unit.Dp, target: androidx.compose
     val n = kotlin.math.max(1, kotlin.math.round((row + gap) / (target + gap)).toInt())
     return (row - gap * (n - 1)) / n
 }
+
+

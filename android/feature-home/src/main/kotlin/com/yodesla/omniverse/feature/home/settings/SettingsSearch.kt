@@ -45,6 +45,7 @@ val settingsSearchIndex: List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry(SettingsCategory.Display, SettingsRowKeys.EXPERIENCE, "Experience", listOf("experience", "simple", "full", "mode", "interface")),
     SettingsSearchEntry(SettingsCategory.Display, SettingsRowKeys.TEXT_SIZE, "Text size", listOf("text", "size", "font", "fonts", "zoom", "big", "large", "bigger", "accessibility")),
     SettingsSearchEntry(SettingsCategory.Display, SettingsRowKeys.MOVIES_SHOWS_VIEW, "Movies & Shows view", listOf("movies", "movie", "shows", "show", "view", "layout", "horizontal", "classic", "sidebar", "categories", "browse", "grid")),
+    SettingsSearchEntry(SettingsCategory.Display, SettingsRowKeys.FOR_YOU_LAYOUT, "For You layout", listOf("for", "you", "foryou", "layout", "cinematic", "magazine", "editorial", "personal", "recommendations", "picks")),
     SettingsSearchEntry(SettingsCategory.Display, SettingsRowKeys.SCREENSAVER, "Screensaver", listOf("screensaver", "screen", "saver", "idle", "burn", "artwork", "clock")),
     SettingsSearchEntry(SettingsCategory.Display, SettingsRowKeys.CUSTOMIZE_HOME, "Customize Home", listOf("home", "rows", "customize", "layout", "reorder", "posters", "order")),
     SettingsSearchEntry(SettingsCategory.Display, SettingsRowKeys.HIDDEN_CW, "Hidden from Continue Watching", listOf("continue", "watching", "hidden", "hide", "restore", "dismissed")),

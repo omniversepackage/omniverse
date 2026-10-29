@@ -13,6 +13,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -23,6 +26,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
 import coil3.compose.SubcomposeAsyncImage
+import coil3.compose.AsyncImage
+import coil3.compose.AsyncImagePainter
+import coil3.request.ImageRequest
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 
 /**
  * 2:3 poster tile with the signature focus glow. Missing/broken artwork falls back to a
@@ -51,13 +59,22 @@ fun PosterCard(
                     // Task 87: a card never needs the provider's full-resolution original. Cards
                     // are ≤ 220.dp, so TMDB artwork is requested at its poster variant; the
                     // request itself is already constraint-sized by Coil for decoding.
-                    val model = remember(posterUrl, maxWidth) { tmdbPosterUrlForCard(posterUrl, maxWidth.value.toInt()) }
-                    SubcomposeAsyncImage(
+                    val density = LocalDensity.current.density
+                    val context = LocalContext.current
+                    val model = remember(posterUrl, maxWidth, density, context) {
+                        val width = (maxWidth.value * density * OmniMotion.FOCUS_SCALE).toInt().coerceAtLeast(1)
+                        ImageRequest.Builder(context)
+                            .data(tmdbPosterUrlForCard(posterUrl, maxWidth.value.toInt(), density))
+                            .size(width, (width * 1.5f).toInt()).build()
+                    }
+                    var imageState by remember(model) { mutableStateOf<AsyncImagePainter.State>(AsyncImagePainter.State.Empty) }
+                    if (imageState is AsyncImagePainter.State.Error) TypographicPoster(title)
+                    else if (imageState !is AsyncImagePainter.State.Success) PosterPlaceholder(title)
+                    AsyncImage(
                         model = model,
                         contentDescription = title,
                         contentScale = ContentScale.Crop, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt,
-                        loading = { PosterPlaceholder(title) },
-                        error = { TypographicPoster(title) },
+                        onState = { imageState = it },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }

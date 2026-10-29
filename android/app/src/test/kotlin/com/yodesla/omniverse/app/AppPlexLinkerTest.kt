@@ -1,6 +1,7 @@
 package com.yodesla.omniverse.app
 
 import com.yodesla.omniverse.core.data.UserDataRepository
+import com.yodesla.omniverse.core.data.SecretBox
 import com.yodesla.omniverse.core.data.Progress
 import com.yodesla.omniverse.core.model.SourceId
 import com.yodesla.omniverse.core.source.SourceConfig
@@ -19,6 +20,20 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 
 class AppPlexLinkerTest {
+    @Test
+    fun reconnectRefreshesServerTokenFromSavedAccountBeforeUsingOldLocalToken() = runBlocking {
+        val user = PlexLinkUserData()
+        user.putSetting("plex_account_token_sealed", "user-token")
+        val http = PlexLinkHttpFixture()
+        val linker = AppPlexLinker(http, user, secrets = SecretBox.None,
+            localConnections = { listOf("https://own.plex.direct:32400") })
+        val original = SourceConfig.Plex(SourceId("existing"), "Theatre", "https://stale-public:32400",
+            "revoked-token", "own-machine", "existing-client")
+        val repaired = assertNotNull(linker.reconnect(original))
+        assertEquals("owner-server-token", repaired.token)
+        assertEquals("http://192.168.1.10:32400", repaired.server)
+        assertEquals(original.id, repaired.id)
+    }
     @Test
     fun reconnectUsesVerifiedLocalDiscoveryBeforeCloud() = runBlocking {
         val http = PlexLinkHttpFixture()

@@ -108,12 +108,11 @@ internal fun NetflixLayout(
     val rows = remember(official, cw, mine, pool, plan, profileName, popular) { netflixRows(cw, mine, pool, plan, profileName, popular, official) }
     val topUids = official.rows.map { it.uid() }.toSet()
 
-    var focused by remember { mutableStateOf<PosterRow?>(null) }
+    val focused = remember { mutableStateOf<PosterRow?>(null) }
     // Task 119: the browse billboard no longer carries Play / More info, so poster focus only drives
     // which title the billboard previews — there is no hero-button state left to track.
-    val onFocus: (PosterRow) -> Unit = { focused = it }
-    val shown = focused
-        ?: cw.firstOrNull { !it.poster.posterUrl.isNullOrBlank() || !it.poster.backdropUrl.isNullOrBlank() }?.poster
+    val onFocus: (PosterRow) -> Unit = remember { { focused.value = it } }
+    val fallback = cw.firstOrNull { !it.poster.posterUrl.isNullOrBlank() || !it.poster.backdropUrl.isNullOrBlank() }?.poster
         ?: pool.firstOrNull { !it.posterUrl.isNullOrBlank() || !it.backdropUrl.isNullOrBlank() }
         ?: pool.firstOrNull()
 
@@ -125,11 +124,15 @@ internal fun NetflixLayout(
     Box(Modifier.fillMaxSize().background(NetflixCanvas)) {
         // The billboard art lives behind the whole top of the page (not inside the billboard box), so it bleeds
         // softly under the first row instead of stopping at a hard edge.
-        NetflixBackdrop(shown, cinematic, Modifier.align(Alignment.TopEnd).fillMaxWidth().fillMaxHeight(0.80f))
+        SettledPosterPreview(focused, fallback) { shown ->
+            NetflixBackdrop(shown, cinematic, Modifier.align(Alignment.TopEnd).fillMaxWidth().fillMaxHeight(0.80f))
+        }
         Column(Modifier.fillMaxSize()) {
-            NetflixBillboard(shown, kindLabel, scores, cinematic, Modifier.fillMaxWidth().weight(1f), onLibrary)
+            SettledPosterPreview(focused, fallback) { shown ->
+                NetflixBillboard(shown, kindLabel, scores, cinematic, Modifier.fillMaxWidth().weight(1f), onLibrary)
+            }
             Box(Modifier.fillMaxWidth().weight(1f)) {
-                FocusPivot(parentFraction = 0f, leading = 80.dp) {
+                FocusPivot(parentFraction = 0f, leading = 80.dp, trailing = 48.dp) {
                     LazyColumn(
                         Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(top = OmniSpacing.s, bottom = OmniSpacing.xxl),
@@ -199,6 +202,11 @@ private fun NetflixBackdrop(shown: PosterRow?, cinematic: Boolean, modifier: Mod
     val zoomNow by animateFloatAsState(zoom, tween(12_000, easing = LinearEasing), label = "kenBurns")
     Crossfade(shown, animationSpec = tween(350), label = "netflixBackdrop", modifier = modifier) { r ->
         val art = r?.let { netflixBillboardArt(it) }
+        if (art is NetflixArt.PosterFill) {
+            com.yodesla.omniverse.designsystem.HeroArtwork(null, art.url,
+                Modifier.fillMaxSize())
+            return@Crossfade
+        }
         if (art !is NetflixArt.Backdrop) return@Crossfade
         Box(
             Modifier.fillMaxSize()
@@ -264,7 +272,7 @@ private fun NetflixBillboard(
                 Column(
                     Modifier.align(Alignment.BottomStart).fillMaxHeight()
                         .padding(start = OmniSpacing.tvSide, top = OmniSpacing.m, bottom = OmniSpacing.l)
-                        .widthIn(max = 620.dp),
+                        .widthIn(max = 460.dp),
                     verticalArrangement = Arrangement.spacedBy(OmniSpacing.s),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -291,7 +299,7 @@ private fun NetflixBillboard(
                     } else {
                         Text(
                             displayTitle(r.name, null), maxLines = 1, overflow = TextOverflow.Ellipsis, color = c.textPrimary,
-                            style = t.display.copy(fontSize = 36.sp, lineHeight = 40.sp, fontWeight = FontWeight.Bold, letterSpacing = (-1.2).sp),
+                            style = t.display.copy(fontSize = (36f * com.yodesla.omniverse.designsystem.LocalTextScale.current).sp, lineHeight = (40f * com.yodesla.omniverse.designsystem.LocalTextScale.current).sp, fontWeight = FontWeight.Bold, letterSpacing = (-1.2).sp),
                         )
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -345,7 +353,7 @@ private fun NetflixPill(label: String, filled: Boolean, onClick: () -> Unit) {
     ) {
         Box(Modifier.fillMaxHeight().padding(horizontal = OmniSpacing.l), contentAlignment = Alignment.Center) {
             Text(
-                label, style = OmniTheme.type.title.copy(fontWeight = FontWeight.SemiBold, fontSize = 15.sp),
+                label, style = OmniTheme.type.title.copy(fontWeight = FontWeight.SemiBold, fontSize = (15f * com.yodesla.omniverse.designsystem.LocalTextScale.current).sp),
                 color = if (filled) Color.Black else Color.White, maxLines = 1,
             )
         }
@@ -361,11 +369,12 @@ private fun NetflixShelf(
 ) {
     Column {
         Text(
-            title, style = OmniTheme.type.title.copy(fontSize = 21.sp, lineHeight = 27.sp, fontWeight = FontWeight.SemiBold),
+            title, style = OmniTheme.type.title.copy(fontSize = (21f * com.yodesla.omniverse.designsystem.LocalTextScale.current).sp, lineHeight = (27f * com.yodesla.omniverse.designsystem.LocalTextScale.current).sp, fontWeight = FontWeight.SemiBold),
             color = OmniTheme.colors.textPrimary,
             modifier = Modifier.padding(start = OmniSpacing.tvSide, bottom = OmniSpacing.s), maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
-        FocusPivot(parentFraction = 0f, leading = if (ranked) OmniSpacing.tvSide + 100.dp else OmniSpacing.tvSide) {
+        FocusPivot(parentFraction = 0f, leading = if (ranked) OmniSpacing.tvSide + 100.dp else OmniSpacing.tvSide,
+            focusedScale = 1.08f, halo = 12.dp) {
             LazyRow(
                 contentPadding = PaddingValues(start = OmniSpacing.tvSide, end = OmniSpacing.tvSide, top = OmniSpacing.focusEdge, bottom = OmniSpacing.focusEdge),
                 horizontalArrangement = Arrangement.spacedBy(OmniSpacing.l),
@@ -431,7 +440,7 @@ private fun NetflixLandscapeCard(
             overlay?.invoke(this)
             if (row.uid() in topUids) {
                 Box(Modifier.align(Alignment.TopStart).padding(OmniSpacing.s).background(c.accent, RoundedCornerShape(3.dp)).padding(horizontal = 6.dp, vertical = 2.dp)) {
-                    Text("TOP 10", style = OmniTheme.type.overline.copy(fontSize = 12.sp, lineHeight = 15.sp, letterSpacing = 1.sp), color = Color.White)
+                    Text("TOP 10", style = OmniTheme.type.overline.copy(fontSize = (14f * com.yodesla.omniverse.designsystem.LocalTextScale.current).sp, lineHeight = (15f * com.yodesla.omniverse.designsystem.LocalTextScale.current).sp, letterSpacing = 1.sp), color = Color.White)
                 }
             }
         }
@@ -503,3 +512,5 @@ private fun BoxScope.CardLogo(row: PosterRow, logoUrl: String) {
         )
     }
 }
+
+

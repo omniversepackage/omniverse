@@ -40,6 +40,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.res.stringResource
@@ -53,6 +54,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.tv.material3.Text
 import com.yodesla.omniverse.core.data.CatalogRepository
+import com.yodesla.omniverse.core.data.PosterRow
 import com.yodesla.omniverse.core.data.SearchRepository
 import com.yodesla.omniverse.core.data.SearchSort
 import com.yodesla.omniverse.core.data.search.closest
@@ -154,6 +156,7 @@ class SearchViewModel(
     private val userData: com.yodesla.omniverse.core.data.UserDataRepository? = null,
     /** Task 143: the section this search is scoped to (Movies / Shows / Live TV search only their own content). */
     private val scope: com.yodesla.omniverse.core.data.SearchScope = com.yodesla.omniverse.core.data.SearchScope.ALL,
+    private val tmdb: com.yodesla.omniverse.core.data.metadata.TmdbEnricher? = null,
 ) : ViewModel() {
     @Volatile private var programmeCards: Map<String, com.yodesla.omniverse.core.data.ProgrammeHit> = emptyMap()
     private val _state = MutableStateFlow(SearchState(scope = scope))
@@ -167,11 +170,23 @@ class SearchViewModel(
     private val limitFlow = MutableStateFlow(SEARCH_PAGE)
 
     init {
+        tmdb?.artUpdated?.onEach {
+            val current = _state.value.rows
+            val cards = current.flatMap { it.cards }.filter { !it.isChannel && it.titleIdentity?.namespace == "tmdb" }
+            if (cards.isNotEmpty()) {
+                val refreshed = catalog.refillArt(cards.map { card ->
+                    PosterRow(card.open, card.title, card.image, null, null, tmdbId = card.titleIdentity?.externalId)
+                }).associateBy { it.key }
+                _state.update { state -> if (state.rows != current) state else state.copy(rows = state.rows.map { row ->
+                    row.copy(cards = row.cards.map { card -> card.copy(image = refreshed[card.open]?.posterUrl ?: card.image) })
+                }) }
+            }
+        }?.launchIn(viewModelScope)
         userData?.favorites(ContentKind.LIVE)?.onEach { keys ->
             _state.update { it.copy(favoriteChannels = keys.toSet()) }
         }?.launchIn(viewModelScope)
         // Load the guide's title list while the user types, so "On TV" with no match costs nothing.
-        if (scope.live) viewModelScope.launch { try { val t = System.currentTimeMillis(); search.warmGuideSearch(clock.nowMs()); android.util.Log.i("Search", "guide titles loaded in ${System.currentTimeMillis() - t} ms") } catch (c: CancellationException) { throw c } catch (_: Exception) {} }
+        if (scope.live) viewModelScope.launch { kotlinx.coroutines.delay(1_500); try { val t = System.currentTimeMillis(); search.warmGuideSearch(clock.nowMs()); android.util.Log.i("Search", "guide titles loaded in ${System.currentTimeMillis() - t} ms") } catch (c: CancellationException) { throw c } catch (_: Exception) {} }
         // Voice / global search (task 80): the spoken text arrives pre-filled and is searched at once.
         initialQuery?.trim()?.takeIf { it.isNotEmpty() }?.let { q ->
             _state.update { it.copy(query = q) }
@@ -197,10 +212,17 @@ class SearchViewModel(
             emit(SearchResults(emptyList(), false, null, loading = true, busy = true, note = "Searching…"))
             // Task 143: channels and the guide lookup start NOW, beside the title search, instead of after it.
             val live = !f.active && scope.live
-            val par = kotlinx.coroutines.CoroutineScope(kotlin.coroutines.coroutineContext + kotlinx.coroutines.SupervisorJob(kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]))
-            val channelsJob = if (live) par.async { val t = System.currentTimeMillis(); val r = try { buildChannelRows(q, vis) } catch (c: CancellationException) { throw c } catch (_: Exception) { emptyList() }; android.util.Log.i("Search", "channels q='$q' -> ${r.sumOf { it.cards.size }} in ${System.currentTimeMillis() - t} ms"); r } else null
-            val programmesJob = if (live) par.async { val t = System.currentTimeMillis(); val r = try { buildProgrammeRows(q, vis) } catch (c: CancellationException) { throw c } catch (_: Exception) { Built(emptyList(), emptyMap()) }; android.util.Log.i("Search", "guide q='$q' -> ${r.rows.sumOf { it.cards.size }} in ${System.currentTimeMillis() - t} ms"); r } else null
+            val par = kotlinx.coroutines.CoroutineScope(kotlin.coroutines.coroutineContext)
+            val channelsJob = if (live) par.async { val t = System.currentTimeMillis(); val r = try { buildChannelRows(q, vis, off) } catch (c: CancellationException) { throw c } catch (_: Exception) { emptyList() }; android.util.Log.i("Search", "channels q='$q' -> ${r.sumOf { it.cards.size }} in ${System.currentTimeMillis() - t} ms"); r } else null
+            val programmesJob = if (live) par.async { val t = System.currentTimeMillis(); val r = try { buildProgrammeRows(q, vis, off) } catch (c: CancellationException) { throw c } catch (_: Exception) { Built(emptyList(), emptyMap()) }; android.util.Log.i("Search", "guide q='$q' -> ${r.rows.sumOf { it.cards.size }} in ${System.currentTimeMillis() - t} ms"); r } else null
             val t0 = System.currentTimeMillis()
+            if (!f.active && sort == SearchSort.RELEVANCE && q.isNotBlank()) {
+                val indexed = buildFilteredRows(q, f, vis, off, limit, sort, prefixOnly = true)
+                if (indexed.rows.isNotEmpty()) {
+                    emit(SearchResults(indexed.rows, true, null, indexed.truncated, busy = true, note = "Finding more matches…"))
+                    android.util.Log.i("Search", "indexed titles -> ${titleCount(indexed.rows)} in ${System.currentTimeMillis() - t0} ms")
+                }
+            }
             val built = buildFilteredRows(q, f, vis, off, limit, sort)
             android.util.Log.i("Search", "titles q='$q' scope=$scope filters=${f.active} -> ${titleCount(built.rows)} in ${System.currentTimeMillis() - t0} ms")
             var rows = built.rows
@@ -256,8 +278,8 @@ class SearchViewModel(
 
     private data class SearchResults(val rows: List<HomeRow>, val searched: Boolean, val didYouMean: String?, val truncated: Boolean = false, val loading: Boolean = false, val busy: Boolean = false, val note: String? = null)
 
-    private suspend fun buildChannelRows(q: String, vis: Visibility): List<HomeRow> {
-        val hits = search.searchLive(q, limit = 24)
+    private suspend fun buildChannelRows(q: String, vis: Visibility, excluded: Collection<String>): List<HomeRow> {
+        val hits = search.searchLiveVisible(q, excluded, limit = 24)
         val rows = ArrayList<HomeRow>()
         if (hits.isNotEmpty()) {
             rows += HomeRow("live", "Channels", hits.mapNotNull { h ->
@@ -268,11 +290,11 @@ class SearchViewModel(
         return rows.filter { it.cards.isNotEmpty() }
     }
 
-    private suspend fun buildProgrammeRows(q: String, vis: Visibility): Built {
+    private suspend fun buildProgrammeRows(q: String, vis: Visibility, excluded: Collection<String>): Built {
         val rows = ArrayList<HomeRow>()
         // "On TV": guide programmes airing now or in the next 24 h (TiviMate-style EPG search).
         val now = clock.nowMs()
-        val progs = search.searchProgrammes(q, now).filter { vis("LIVE", it.channel.sourceId.value, it.categoryId.value) }
+        val progs = search.searchProgrammesVisible(q, now, excluded).filter { vis("LIVE", it.channel.sourceId.value, it.categoryId.value) }
         val progCards = progs.associateBy { "p-${it.channel.sourceId.value}-${it.channel.remoteId.value}-${it.startMs}" }
         if (progCards.isNotEmpty()) rows += HomeRow("ontv", "On TV", progCards.map { (id, h) ->
             val time = if (h.startMs <= now) "Now" else com.yodesla.omniverse.designsystem.ClockFormat.format(h.startMs)
@@ -287,11 +309,12 @@ class SearchViewModel(
      * paging a recent-title subset. No Channels / On TV rows here: live and programme search is
      * the no-filter path (a decade or genre says nothing about a live channel).
      */
-    private suspend fun buildFilteredRows(q: String, f: com.yodesla.omniverse.core.data.SearchFilters, vis: Visibility, off: Collection<String>, limit: Int, sort: SearchSort): Built {
+    private suspend fun buildFilteredRows(q: String, f: com.yodesla.omniverse.core.data.SearchFilters, vis: Visibility, off: Collection<String>, limit: Int, sort: SearchSort, prefixOnly: Boolean = false): Built {
         if (scope == com.yodesla.omniverse.core.data.SearchScope.LIVE) return Built(emptyList(), emptyMap())
         // Plain text with no chips takes the cheap FTS path; chips (or a non-relevance sort) keep the full SQL filter query.
         val found = if (!f.active && sort == SearchSort.RELEVANCE && q.isNotBlank()) {
-            search.searchTitles(q, scope.kinds, off, limitPerKind = limit)
+            if (prefixOnly) search.searchTitlePrefixes(q, scope.kinds, off, limitPerKind = limit)
+            else search.searchTitles(q, scope.kinds, off, limitPerKind = limit)
         } else {
             val forced = when (scope) {
                 com.yodesla.omniverse.core.data.SearchScope.MOVIES -> f.copy(movies = true, shows = false)
@@ -306,9 +329,16 @@ class SearchViewModel(
             found[kind]?.let { page ->
                 truncated = truncated || page.more
                 val visible = page.rows.filter { p -> p.categoryId?.let { vis(kind.name, p.key.sourceId.value, it.value) } ?: true }
-                if (visible.isNotEmpty()) rows += HomeRow(kind.name, label, visible.map { p ->
-                    HomeCard("${kind.name}-${p.key.sourceId.value}-${p.key.remoteId.value}", p.key, displayTitle(p.name, p.year), p.year?.toString(), p.posterUrl)
+                val withArt = catalog.refillArt(visible)
+                if (withArt.isNotEmpty()) rows += HomeRow(kind.name, label, withArt.map { p ->
+                    HomeCard("${kind.name}-${p.key.sourceId.value}-${p.key.remoteId.value}", p.key, displayTitle(p.name, p.year), p.year?.toString(), p.posterUrl,
+                        titleIdentity = p.titleIdentity())
                 })
+                val ids = visible.mapNotNull { it.tmdbId }.distinct()
+                if (ids.isNotEmpty()) viewModelScope.launch {
+                    tmdb?.prefetch(if (kind == ContentKind.VOD) com.yodesla.omniverse.core.data.metadata.WikidataMetadata.Kind.MOVIE
+                        else com.yodesla.omniverse.core.data.metadata.WikidataMetadata.Kind.SERIES, ids)
+                }
             }
         }
         return Built(rows, emptyMap(), truncated)
@@ -455,6 +485,7 @@ fun SearchRoute(viewModel: SearchViewModel, onOpen: (HomeCard) -> Unit) {
     val c = OmniTheme.colors
     val field = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     val filterButton = remember { FocusRequester() }
     val sortButton = remember { FocusRequester() }
     var filterOpen by remember { mutableStateOf(false) }
@@ -487,7 +518,7 @@ fun SearchRoute(viewModel: SearchViewModel, onOpen: (HomeCard) -> Unit) {
                     // Task 143: the spinner shows from the first keystroke until the last result row has landed.
                     trailingIcon = { if (s.busy) androidx.compose.material3.CircularProgressIndicator(modifier = Modifier.size(26.dp), strokeWidth = 3.dp, color = c.accent) },
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { viewModel.rememberQuery() }),
+                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { viewModel.rememberQuery(); keyboard?.hide(); focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) }),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = c.accent, unfocusedBorderColor = c.elevated, cursorColor = c.accent,
                         focusedContainerColor = c.surface, unfocusedContainerColor = c.surface,
@@ -496,7 +527,7 @@ fun SearchRoute(viewModel: SearchViewModel, onOpen: (HomeCard) -> Unit) {
                         // Inside the LazyColumn the field kept D-pad Down; hand it to the chips explicitly.
                         .onPreviewKeyEvent { e ->
                             if (e.type == androidx.compose.ui.input.key.KeyEventType.KeyDown && e.key == androidx.compose.ui.input.key.Key.DirectionDown) {
-                                focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down); true
+                                keyboard?.hide(); focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down); true
                             } else false
                         },
                 )
@@ -579,15 +610,16 @@ fun SearchRoute(viewModel: SearchViewModel, onOpen: (HomeCard) -> Unit) {
                     // A new sort/filter/query starts at its first match; Back from a title with
                     // unchanged search state still restores the row's horizontal position.
                     val cardsState = rememberSaveable(s.sort, s.filters, s.query, row.cards.firstOrNull()?.id, saver = LazyListState.Saver) { LazyListState() }
+                    val selectedResult = remember(row.id, s.query) { mutableStateOf<HomeCard?>(null) }
                     Column {
-                        Text(row.title, style = OmniTheme.type.body, color = c.textSecondary, modifier = Modifier.padding(start = OmniSpacing.tvSide))
+                        SearchResultHeading(row.title, selectedResult)
                         FocusPivot {
                             LazyRow(state = cardsState, horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m), contentPadding = PaddingValues(horizontal = OmniSpacing.tvSide, vertical = if (row.cards.firstOrNull()?.isChannel == true) 6.dp else 12.dp)) {
                                 items(row.cards, key = { it.id }) { card ->
                                     val focused = card.id == focusTarget
                                     if (card.isChannel) SearchChannelTile(card, if (focused) Modifier.focusRequester(cardFocus) else Modifier,
                                         favorite = card.open in s.favoriteChannels, onLongClick = { channelMenu = card }) { viewModel.rememberQuery(); if (!viewModel.handle(card)) { viewModel.resultOpened(card); onOpen(card) } }
-                                    else PosterCard(card.title, card.image, { viewModel.rememberQuery(); viewModel.resultOpened(card); onOpen(card) }, if (focused) Modifier.width(84.dp).focusRequester(cardFocus) else Modifier.width(84.dp), card.subtitle, compact = true)
+                                    else PosterCard(card.title, card.image, { viewModel.rememberQuery(); viewModel.resultOpened(card); onOpen(card) }, Modifier.width(100.dp).onFocusChanged { if (it.isFocused) selectedResult.value = card }.then(if (focused) Modifier.focusRequester(cardFocus) else Modifier), card.subtitle, compact = true)
                                 }
                             }
                         }
@@ -741,4 +773,16 @@ private fun searchPlaceholder(scope: com.yodesla.omniverse.core.data.SearchScope
     com.yodesla.omniverse.core.data.SearchScope.MOVIES -> "Search movies only"
     com.yodesla.omniverse.core.data.SearchScope.SHOWS -> "Search shows only"
     com.yodesla.omniverse.core.data.SearchScope.LIVE -> "Search live channels and what is on now"
+}
+
+
+@Composable
+private fun SearchResultHeading(section: String, selection: androidx.compose.runtime.State<HomeCard?>) {
+    val card = selection.value
+    Column(Modifier.padding(horizontal = OmniSpacing.tvSide, vertical = OmniSpacing.xs)) {
+        Text(section, style = OmniTheme.type.caption, color = OmniTheme.colors.textTertiary)
+        Text(card?.let { listOfNotNull(it.title, it.subtitle).joinToString("  ·  ") } ?: " ",
+            style = OmniTheme.type.title, color = OmniTheme.colors.textPrimary,
+            maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+    }
 }

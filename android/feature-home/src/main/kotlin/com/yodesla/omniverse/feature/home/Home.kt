@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -99,6 +100,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combineTransform
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.first
@@ -107,7 +109,10 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.Flow
 import com.yodesla.omniverse.core.data.PosterRow
@@ -143,6 +148,7 @@ data class HomeCard(
     val titleIdentity: TitleIdentity? = null,
     /** Episode a show-detail open should be ready on (task 71 "New episodes"). */
     val focusEpisode: RemoteId? = null,
+    val backdropUrl: String? = null,
 )
 
 @Immutable
@@ -192,6 +198,7 @@ class HomeViewModel(
      */
     private val contentKind: ContentKind? = null,
     private val discovery: com.yodesla.omniverse.core.data.metadata.DiscoveryRepository? = null,
+    private val sources: com.yodesla.omniverse.core.data.SourceRepository? = null,
 ) : ViewModel() {
     private val _state = MutableStateFlow(HomeState())
     val state: StateFlow<HomeState> = _state.asStateFlow()
@@ -300,7 +307,8 @@ class HomeViewModel(
             }
             if (cards.isEmpty()) null else HomeRow("myTeams", "My teams", cards)
         }
-        combine(
+        var publishedCoreShelves = false
+        combineTransform(
             cwWithSpoiler,
             favsAndQueue,
             recentMovies,
@@ -308,6 +316,11 @@ class HomeViewModel(
             visibility,
         ) { (cw, spoilerOn), (allFavs, queue), movies, shows, vis ->
             val (progress, doneShows, savedProgress) = cw
+            val watchedShows = if (inScope(ContentKind.SERIES)) watchedShowKeys(savedProgress, allFavs, clock.nowMs() - NewEpisodes.WATCH_WINDOW_MS, NewEpisodes.MAX_SHOWS_PER_SYNC) else emptyList()
+            val posterKeys = progress.mapNotNull { progressPosterKey(it.key, it.parentId) } +
+                doneShows.map { it.seriesKey } + queue + allFavs + watchedShows +
+                savedProgress.mapNotNull { progressPosterKey(it.key, it.parentId) }
+            val posters = catalog.posters(posterKeys.filter { inScope(it.kind) })
             val favs = allFavs.filter { it.kind == ContentKind.LIVE }
             // Task 201: the same gate every poster passes also drops out-of-scope kinds, so a scoped
             // Home filters while it builds (before the bounded seed/candidate picks), not at render.
@@ -315,31 +328,31 @@ class HomeViewModel(
             val rows = ArrayList<HomeRow>()
             val watching = progress.mapNotNull { p ->
                 val posterKey = progressPosterKey(p.key, p.parentId)
-                val poster = posterKey?.let { catalog.poster(it) }?.takeIf { ok(it) } ?: return@mapNotNull null
+                val poster = posterKey?.let { posters[it] }?.takeIf { ok(it) } ?: return@mapNotNull null
                 p.updatedMs to HomeCard(
                     id = "cw-${p.key.sourceId.value}-${p.key.kind.name}-${p.key.remoteId.value}", open = poster.key, title = displayTitle(poster.name, poster.year),
                     subtitle = timeLeftLabel(p.key.kind == ContentKind.EPISODE, p.positionMs, p.durationMs),
                     image = poster.posterUrl, progress = p.durationMs?.let { d -> p.positionMs.toFloat() / d },
-                    titleIdentity = poster.titleIdentity(),
+                    titleIdentity = poster.titleIdentity(), backdropUrl = poster.backdropUrl,
                 )
             }
             val upNextCards = doneShows.mapNotNull { cs ->
                 val ep = upNext?.nextAfter(cs.seriesKey, cs.lastEpisodeKey.remoteId) ?: return@mapNotNull null
-                val poster = catalog.poster(cs.seriesKey)?.takeIf { ok(it) } ?: return@mapNotNull null
+                val poster = posters[cs.seriesKey]?.takeIf { ok(it) } ?: return@mapNotNull null
                 cs.updatedMs to HomeCard(
                     id = "upnext-${poster.key.sourceId.value}-${poster.key.remoteId.value}", open = poster.key,
                     title = displayTitle(poster.name, poster.year),
                     subtitle = com.yodesla.omniverse.core.data.SpoilerFree.upNextSubtitle(ep.season, ep.number, spoilerOn),
-                    image = poster.posterUrl, titleIdentity = poster.titleIdentity(),
+                    image = poster.posterUrl, titleIdentity = poster.titleIdentity(), backdropUrl = poster.backdropUrl,
                 )
             }
             val cont = (watching + upNextCards).sortedByDescending { it.first }.map { it.second }
                 .distinctBy { it.titleIdentity ?: it.open }.distinctBy { cwNameGroup(it.open.kind, it.title) } // the most recently watched copy of a title wins
             if (cont.isNotEmpty()) rows += HomeRow("continue", "Continue watching", cont.map { it.copy(section = "Continue watching") })
             // Task 97: Play next — the viewer's own queue, in their own order, right after Continue watching.
-            val queued = queue.mapNotNull { k -> catalog.poster(k)?.takeIf(::ok) }.distinctBy(::titleGroup)
+            val queued = queue.mapNotNull { k -> posters[k]?.takeIf(::ok) }.distinctBy(::titleGroup)
             if (queued.isNotEmpty()) rows += HomeRow("playnext", "Play next", queued.map {
-                HomeCard("pn-${it.key.sourceId.value}-${it.key.kind.name}-${it.key.remoteId.value}", it.key, displayTitle(it.name, it.year), it.year?.toString(), it.posterUrl, section = "Play next", titleIdentity = it.titleIdentity())
+                HomeCard("pn-${it.key.sourceId.value}-${it.key.kind.name}-${it.key.remoteId.value}", it.key, displayTitle(it.name, it.year), it.year?.toString(), it.posterUrl, section = "Play next", titleIdentity = it.titleIdentity(), backdropUrl = it.backdropUrl)
             })
             // Task 71 "New episodes": shows this profile watches (progress in the last 60 days, or
             // in My List) whose post-sync snapshot flagged an episode it has not seen. The notices
@@ -347,18 +360,18 @@ class HomeViewModel(
             // them, dropping one once its episode has progress or once it is 14 days old.
             // Task 201: new episodes are inherently shows, so a Movies-only Home skips the whole row
             // (and its per-show notice/progress reads) rather than building it and dropping every card.
-            val newEps = if (inScope(ContentKind.SERIES)) watchedShowKeys(savedProgress, allFavs, clock.nowMs() - NewEpisodes.WATCH_WINDOW_MS, NewEpisodes.MAX_SHOWS_PER_SYNC)
+            val newEps = if (inScope(ContentKind.SERIES)) watchedShows
                 .mapNotNull { show ->
                     val notice = NewEpisodesNotice.decode(userData.setting(NewEpisodes.noticeKey(show.sourceId.value, show.remoteId.value)).first())
                         ?: return@mapNotNull null
                     if (clock.nowMs() - notice.detectedMs > NewEpisodes.NOTICE_TTL_MS) return@mapNotNull null
                     if (userData.progress(ContentKey(show.sourceId, ContentKind.EPISODE, RemoteId(notice.episodeId))) != null) return@mapNotNull null
-                    val poster = catalog.poster(show)?.takeIf(::ok) ?: return@mapNotNull null
+                    val poster = posters[show]?.takeIf(::ok) ?: return@mapNotNull null
                     notice.detectedMs to HomeCard(
                         id = "newep-${show.sourceId.value}-${show.remoteId.value}", open = poster.key,
                         title = displayTitle(poster.name, poster.year),
                         subtitle = newEpisodesLabel(notice.count, notice.season, notice.number),
-                        image = poster.posterUrl, section = "New episodes", titleIdentity = poster.titleIdentity(),
+                        image = poster.posterUrl, section = "New episodes", titleIdentity = poster.titleIdentity(), backdropUrl = poster.backdropUrl,
                         focusEpisode = RemoteId(notice.episodeId),
                     )
                 }.sortedByDescending { it.first }.map { it.second }.distinctBy { it.titleIdentity ?: it.open }.take(30)
@@ -381,17 +394,28 @@ class HomeViewModel(
             }
             // My List: movies and shows the viewer saved, one card per title across sources.
             val saved = allFavs.filter { (it.kind == ContentKind.VOD || it.kind == ContentKind.SERIES) && inScope(it.kind) }
-                .mapNotNull { k -> catalog.poster(k)?.takeIf(::ok) }.distinctBy(::titleGroup)
+                .mapNotNull { k -> posters[k]?.takeIf(::ok) }.distinctBy(::titleGroup)
             if (saved.isNotEmpty()) rows += HomeRow("mylist", "My List", saved.map {
-                HomeCard("l-${it.key.sourceId.value}-${it.key.kind.name}-${it.key.remoteId.value}", it.key, displayTitle(it.name, it.year), it.year?.toString(), it.posterUrl, section = "My List", titleIdentity = it.titleIdentity())
+                HomeCard("l-${it.key.sourceId.value}-${it.key.kind.name}-${it.key.remoteId.value}", it.key, displayTitle(it.name, it.year), it.year?.toString(), it.posterUrl, section = "My List", titleIdentity = it.titleIdentity(), backdropUrl = it.backdropUrl)
             })
+            if (movies.any(::ok)) rows += HomeRow("movies", "Recently added movies", movies.filter(::ok).distinctBy(::titleGroup).map {
+                HomeCard("m-${it.key.sourceId.value}-${it.key.remoteId.value}", it.key, displayTitle(it.name, it.year), it.year?.toString(), it.posterUrl, section = "Recently added movies", titleIdentity = it.titleIdentity(), backdropUrl = it.backdropUrl)
+            })
+            if (shows.any(::ok)) rows += HomeRow("shows", "Recently added shows", shows.filter(::ok).distinctBy(::titleGroup).map {
+                HomeCard("s-${it.key.sourceId.value}-${it.key.remoteId.value}", it.key, displayTitle(it.name, it.year), it.year?.toString(), it.posterUrl, section = "Recently added shows", titleIdentity = it.titleIdentity(), backdropUrl = it.backdropUrl)
+            })
+            // Render cached core shelves before the optional recommendation queries.
+            if (!publishedCoreShelves && rows.isNotEmpty()) {
+                emit(rows.toList())
+                publishedCoreShelves = true
+            }
             // "Because you watched": up to 2 rows seeded by the 2 most recent distinct Continue Watching
             // titles (episodes seed their parent show). Skip rows with fewer than 4 results; never show
             // the seed or anything else the viewer already has saved progress on — exclusion uses the
             // full saved-progress list (task 63, M11), not the 20-item CW row, so completed movies and
             // older progress are excluded too.
             val watchedKeys = savedProgress.flatMap { p -> listOfNotNull(p.key, progressPosterKey(p.key, p.parentId)) }.toSet()
-            val watchedGroups = (cont.map { it.open } + watchedKeys).mapNotNull { k -> catalog.poster(k)?.let(::titleGroup) }.toSet()
+            val watchedGroups = (cont.map { it.open } + watchedKeys).mapNotNull { k -> posters[k]?.let(::titleGroup) }.toSet()
             val byw = ArrayList<HomeRow>()
             cont.take(2).forEach { seed ->
                 val seedGroup = seed.titleIdentity?.let { "${seed.open.kind}:tmdb:${it.externalId}" } ?: "${seed.open.kind}:key:${seed.open.sourceId.value}:${seed.open.remoteId.value}"
@@ -401,7 +425,7 @@ class HomeViewModel(
                     .take(20).map { p ->
                         HomeCard("byw-${seed.open.kind}-${seed.open.sourceId.value}-${seed.open.remoteId.value}-${p.key.sourceId.value}-${p.key.remoteId.value}",
                             p.key, displayTitle(p.name, p.year), p.year?.toString(), p.posterUrl,
-                            section = rowTitle, titleIdentity = p.titleIdentity())
+                            section = rowTitle, titleIdentity = p.titleIdentity(), backdropUrl = p.backdropUrl)
                     }.toList()
                 if (cards.size >= 4) byw += HomeRow("byw-${seed.open.kind}-${seed.open.sourceId.value}-${seed.open.remoteId.value}", rowTitle, cards)
             }
@@ -410,22 +434,32 @@ class HomeViewModel(
                     ?: rows.indexOfFirst { it.id == "continue" }.let { if (it < 0) 0 else it + 1 }
                 rows.addAll(insertAt, byw)
             }
-            if (movies.any(::ok)) rows += HomeRow("movies", "Recently added movies", movies.filter(::ok).distinctBy(::titleGroup).map {
-                HomeCard("m-${it.key.sourceId.value}-${it.key.remoteId.value}", it.key, displayTitle(it.name, it.year), it.year?.toString(), it.posterUrl, section = "Recently added movies", titleIdentity = it.titleIdentity())
-            })
-            if (shows.any(::ok)) rows += HomeRow("shows", "Recently added shows", shows.filter(::ok).distinctBy(::titleGroup).map {
-                HomeCard("s-${it.key.sourceId.value}-${it.key.remoteId.value}", it.key, displayTitle(it.name, it.year), it.year?.toString(), it.posterUrl, section = "Recently added shows", titleIdentity = it.titleIdentity())
-            })
-            rows
-        }.combine(discovery?.home(contentKind, visibility) ?: flowOf(emptyList())) { rows, shelves ->
+            emit(rows.toList())
+        // Optional discovery and team lookups must not hold cached Continue Watching hostage.
+        }.combine(discovery?.home(contentKind, visibility)?.onStart { emit(emptyList()) } ?: flowOf(emptyList())) { rows, shelves ->
             val discovered = shelves.map { shelf -> HomeRow(shelf.id, shelf.title, shelf.posters.map { p ->
                 HomeCard("discovery-${shelf.id}-${p.key.sourceId.value}-${p.key.remoteId.value}", p.key, displayTitle(p.name, p.year),
                     listOfNotNull(p.year?.toString(), if (p.key.kind == ContentKind.VOD) "Movie" else "Show").joinToString(" · "),
-                    p.posterUrl, section = shelf.title, titleIdentity = p.titleIdentity())
+                    p.posterUrl, section = shelf.title, titleIdentity = p.titleIdentity(), backdropUrl = p.backdropUrl)
             }) } // No source/date caption under the shelf title (Kory: "Trending This Week" is enough).
             val at = rows.indexOfFirst { it.id != "continue" && it.id != "newEpisodes" }.let { if (it < 0) rows.size else it }
             rows.take(at) + discovered + rows.drop(at)
         }.onEach { rows -> prefetchArt(rows) }
+        .combine(tmdb?.artUpdated ?: flowOf(0L)) { rows, _ ->
+            // Batch-refresh cached landscapes without rebuilding the catalog or changing focus.
+            val posters = rows.flatMap { it.cards }.filter { !it.isChannel }.distinctBy { it.open }.map { card ->
+                PosterRow(card.open, card.title, card.image, null, null,
+                    tmdbId = card.titleIdentity?.takeIf { it.namespace == "tmdb" }?.externalId,
+                    backdropUrl = card.backdropUrl)
+            }
+            val art = catalog.refillArt(posters).associateBy { it.key }
+            rows.map { row -> row.copy(cards = row.cards.map { card ->
+                card.copy(
+                    image = art[card.open]?.posterUrl ?: card.image,
+                    backdropUrl = art[card.open]?.backdropUrl ?: card.backdropUrl,
+                )
+            }) }
+        }
         .combine(userData.collections()) { rows, collections ->
             rows to collections
         }.combine(userData.itemOverrides().combine(userData.titleOverrides()) { items, titles -> items to titles }) { (rows, collections), custom ->
@@ -438,9 +472,9 @@ class HomeViewModel(
                 val posters = if (collection.mode == "smart") {
                     SmartCollectionFilter.decode(collection.smartFilterJson)?.let { catalog.smartCollectionItems(collection.contentKind, it, 200) }.orEmpty()
                 } else {
-                    val concrete = userData.collectionItems(collection.id).mapNotNull { key ->
-                        if (key.kind == collection.contentKind) catalog.poster(key) else null
-                    }
+                    val keys = userData.collectionItems(collection.id).filter { it.kind == collection.contentKind }
+                    val hydrated = catalog.posters(keys)
+                    val concrete = keys.mapNotNull { hydrated[it] }
                     val titles = userData.collectionTitles(collection.id).mapNotNull { identity ->
                         if (identity.kind != collection.contentKind) return@mapNotNull null
                         catalog.titleCandidates(identity).firstOrNull { candidate ->
@@ -454,7 +488,7 @@ class HomeViewModel(
                 }.distinctBy { it.titleIdentity() ?: it.key }.take(100).map { poster ->
                     HomeCard("collection-${collection.id}-${poster.key.sourceId.value}-${poster.key.remoteId.value}", poster.key,
                         displayTitle(poster.name, poster.year), poster.year?.toString(), poster.posterUrl,
-                        section = collection.name, titleIdentity = poster.titleIdentity())
+                        section = collection.name, titleIdentity = poster.titleIdentity(), backdropUrl = poster.backdropUrl)
                 }.toList()
                 if (cards.isEmpty()) null else HomeRow("collection-${collection.id}", collection.name, cards)
             }
@@ -467,7 +501,7 @@ class HomeViewModel(
                         image = title?.customPosterUrl ?: custom?.customPosterUrl ?: card.image)
                 })
             }
-        }.combine(myTeamsRow) { rows, mine -> if (mine == null) rows else listOf(mine) + rows }
+        }.combine(myTeamsRow.onStart { emit(null) }) { rows, mine -> if (mine == null) rows else listOf(mine) + rows }
         .combine(userData.setting("home_layout")) { natural, layoutRaw ->
             natural to parseHomeLayout(layoutRaw)
         }.combine(userData.setting("home_density")) { (natural, layout), densityRaw ->
@@ -592,8 +626,37 @@ class HomeViewModel(
         viewModelScope.launch { userData.putSetting(SourceHealthKeys.dismissed, alert.fingerprint) }
     }
 
+    private val previewArtCache = mutableMapOf<ContentKey, String>()
+    private var previewArtJob: kotlinx.coroutines.Job? = null
+    private var previewArtKey: ContentKey? = null
+
     fun onFocus(card: HomeCard) {
-        _state.update { it.copy(hero = card) }
+        _state.update { state ->
+            val ready = state.rows.asSequence().flatMap { it.cards.asSequence() }
+                .firstOrNull { it.id == card.id } ?: card
+            if (state.hero == ready) state else state.copy(hero = ready)
+        }
+        if (previewArtKey == card.open) return
+        previewArtKey = card.open
+        previewArtJob?.cancel()
+        if (card.isChannel) return
+        previewArtJob = viewModelScope.launch {
+            delay(300)
+            val landscape = if (previewArtCache.containsKey(card.open)) previewArtCache[card.open] else {
+                resolveTitleArt(card, sources, tmdb).backdrop.also {
+                    if (previewArtCache.size >= 128) previewArtCache.remove(previewArtCache.keys.first())
+                    if (it != null) previewArtCache[card.open] = it
+                }
+            } ?: run { previewArtKey = null; return@launch }
+            _state.update { state ->
+                if (state.hero?.open != card.open) state else state.copy(
+                    hero = state.hero?.copy(backdropUrl = landscape),
+                    rows = state.rows.map { row -> row.copy(cards = row.cards.map {
+                        if (it.open == card.open) it.copy(backdropUrl = landscape) else it
+                    }) },
+                )
+            }
+        }
     }
 }
 
@@ -605,31 +668,37 @@ fun HomeRoute(viewModel: HomeViewModel, onOpen: (HomeCard) -> Unit, modifier: Mo
               profile: com.yodesla.omniverse.core.data.Profile? = null,
               onProfileClick: () -> Unit = {},
               /** Scoped landing pages retain their focused poster and scroll position across title details. */
-              preserveBrowsePosition: Boolean = false) {
+              preserveBrowsePosition: Boolean = false,
+              requestInitialFocus: Boolean = true,
+              resetScrollToTop: Boolean = false) {
     if (LocalCompact.current) {
         CompactHomeRoute(viewModel, onOpen, modifier)
         return
     }
-    val s by viewModel.state.collectAsStateWithLifecycle()
+    // Focus updates repaint only the preview. Shelves do not rebuild for each D-pad press.
+    val screenState = remember(viewModel) {
+        viewModel.state.map { it.copy(hero = null) }.distinctUntilChanged()
+    }
+    val s by screenState.collectAsStateWithLifecycle(viewModel.state.value.copy(hero = null))
     val undo by viewModel.undo.collectAsStateWithLifecycle()
     val c = OmniTheme.colors
     val first = remember { FocusRequester() }
     var lastPoster by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
     val restorePoster = remember { lastPoster }
     val posterRequesters = remember { androidx.compose.runtime.mutableStateMapOf<String, FocusRequester>() }
-    // Debounce hero changes so fast D-pad scrolling doesn't thrash image loads (PLAN.md §8.2).
-    var hero by remember { mutableStateOf(s.hero) }
-    LaunchedEffect(s.hero) { delay(250); hero = s.hero }
     var menuCard by remember { mutableStateOf<Pair<HomeCard, String>?>(null) } // card, the row id it was opened from
     // Home always opens at the top row (the list used to restore a scroll position near the bottom).
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    LaunchedEffect(resetScrollToTop) {
+        if (resetScrollToTop) listState.scrollToItem(0)
+    }
     // Compact density shrinks Home posters ~15% (124 → 105.dp); other screens are untouched.
     val posterW = if (s.compact) 105.dp else 124.dp
     // Task 69: the hold-OK hint shows once per Home session, first three launches only.
     val hint by viewModel.hintVisible.collectAsStateWithLifecycle(initialValue = false)
     var hintDone by remember { mutableStateOf(false) }
     // Task 102: which card has focus, so the posters ahead of it can be warmed before it lands.
-    var posterFocus by remember { mutableStateOf<PosterFocus?>(null) }
+    val posterFocus = remember { mutableStateOf<PosterFocus?>(null) }
     PosterPrefetch(
         rows = remember(s.rows) { s.rows.map { row -> row.cards.map { if (it.isChannel) null else it.image } } },
         focus = posterFocus,
@@ -637,28 +706,20 @@ fun HomeRoute(viewModel: HomeViewModel, onOpen: (HomeCard) -> Unit, modifier: Mo
     )
 
     CosmicBackdrop(modifier.fillMaxSize()) {
-        // Home cards carry portrait posters, not backdrops. Keep the artwork legible instead of
-        // cropping it into a wide, nearly empty background.
-        Crossfade(hero?.image to hero?.isChannel, animationSpec = tween(OmniMotion.BACKDROP_CROSSFADE_MS), label = "hero", modifier = Modifier.align(Alignment.TopEnd)) { (url, isChannel) ->
-            if (url != null || isChannel == true) {
-                if (isChannel == true) Box(Modifier.fillMaxWidth(0.58f).height(148.dp)) {
-                    LogoImage(url, hero?.title.orEmpty(), Modifier.align(Alignment.CenterEnd)
-                        .padding(end = OmniSpacing.tvSide + OmniSpacing.l).size(160.dp, 90.dp), plain = true)
-                } else {
-                    // Key art as a soft backdrop behind the stage: a wide crop that melts into the
-                    // galaxy on every side (alpha mask), so the top of Home is never an empty band.
-                    AsyncImage(
-                        model = url, contentDescription = null, contentScale = ContentScale.Crop, colorFilter = com.yodesla.omniverse.designsystem.VibrantArt,
-                        alignment = Alignment.TopCenter,
-                        modifier = Modifier.fillMaxWidth(0.6f).height(280.dp)
-                            .graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen; alpha = 0.85f }
-                            .drawWithContent {
-                                drawContent()
-                                drawRect(androidx.compose.ui.graphics.Brush.horizontalGradient(0f to Color.Transparent, 0.45f to Color.Black.copy(alpha = 0.7f), 0.75f to Color.Black), blendMode = androidx.compose.ui.graphics.BlendMode.DstIn)
-                                drawRect(androidx.compose.ui.graphics.Brush.verticalGradient(0f to Color.Black, 0.55f to Color.Black, 1f to Color.Transparent), blendMode = androidx.compose.ui.graphics.BlendMode.DstIn)
-                            },
-                    )
-                }
+        HomePreview(viewModel, Modifier.align(Alignment.TopEnd).fillMaxWidth(0.84f).height(332.dp)
+            .graphicsLayer {
+                translationX = size.width * (0.05f / 0.84f)
+                translationY = -size.height * 0.05f
+            }) { card ->
+            if (card?.isChannel == true) {
+                LogoImage(card.image, card.title, Modifier.align(Alignment.CenterEnd)
+                    .padding(end = OmniSpacing.tvSide + 112.dp)
+                    .size(144.dp, 80.dp), plain = true)
+            } else {
+                com.yodesla.omniverse.designsystem.HeroArtwork(
+                    card?.backdropUrl, card?.image,
+                    Modifier.fillMaxSize(),
+                )
             }
         }
         // Kory (2026-10-03): no dark "curtain" band behind the stage text. The key art fades itself out
@@ -698,19 +759,22 @@ fun HomeRoute(viewModel: HomeViewModel, onOpen: (HomeCard) -> Unit, modifier: Mo
         }
         Text(
             rememberTimeText(), style = OmniTheme.type.numeric, color = c.textSecondary,
-            modifier = Modifier.align(Alignment.TopEnd).padding(top = OmniSpacing.l, end = OmniSpacing.tvSide + 136.dp),
+            modifier = Modifier.align(Alignment.TopEnd).padding(
+                top = if (profile != null) 104.dp else OmniSpacing.l, end = OmniSpacing.tvSide),
         )
         Column(Modifier.fillMaxSize()) {
-            // A compact, fixed-height editorial stage keeps more rows visible without jumping.
+            // A generous preview stage gives artwork room while keeping the first shelf in view.
+            HomePreview(viewModel, Modifier.fillMaxWidth().height(224.dp)) { hero ->
             Column(
-                // fillMaxWidth makes a trailing widthIn a no-op; reserve the clock + hero-poster column instead.
-                Modifier.fillMaxWidth().height(148.dp).padding(start = OmniSpacing.tvSide, top = 28.dp, end = OmniSpacing.tvSide + 248.dp),
+                // Keep titles clear of the profile controls; artwork blends underneath the text.
+                Modifier.fillMaxWidth().height(224.dp).padding(start = OmniSpacing.tvSide, top = 28.dp, end = OmniSpacing.tvSide + 248.dp),
                 verticalArrangement = Arrangement.spacedBy(OmniSpacing.xs),
             ) {
                 Text((hero?.section ?: "").uppercase(), style = OmniTheme.type.overline, color = c.accent, maxLines = 1)
                 // One line: the stage has a fixed height, a second line would run into the first row.
                 Text(hero?.title ?: " ", style = OmniTheme.type.browseHero, color = c.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(hero?.subtitle ?: " ", style = OmniTheme.type.body, color = c.textSecondary, maxLines = 1)
+            }
             }
             s.alert?.let { alert -> SourceAlertBanner(alert, { viewModel.dismissSourceAlert() }, Modifier.padding(horizontal = OmniSpacing.tvSide)) }
             if (s.loaded && s.rows.isEmpty()) {
@@ -720,11 +784,11 @@ fun HomeRoute(viewModel: HomeViewModel, onOpen: (HomeCard) -> Unit, modifier: Mo
                 )
             }
             // The focused CARD lands here; leave room above it for its row header.
-            FocusPivot(parentFraction = 0f, leading = 80.dp) {
+            FocusPivot(parentFraction = 0f, leading = 80.dp, trailing = 48.dp) {
                 LazyColumn(
                     state = listState,
                     verticalArrangement = Arrangement.spacedBy(OmniSpacing.l),
-                    contentPadding = PaddingValues(top = OmniSpacing.focusEdge, bottom = 160.dp),
+                    contentPadding = PaddingValues(top = OmniSpacing.focusEdge, bottom = OmniSpacing.xxl),
                 ) {
                     itemsIndexed(s.rows, key = { _, row -> row.id }) { rowIndex, row ->
                         Column {
@@ -747,7 +811,7 @@ fun HomeRoute(viewModel: HomeViewModel, onOpen: (HomeCard) -> Unit, modifier: Mo
                                             .onFocusChanged {
                                                 if (it.isFocused) {
                                                     viewModel.onFocus(card)
-                                                    posterFocus = PosterFocus(rowIndex, cardIndex)
+                                                    posterFocus.value = PosterFocus(rowIndex, cardIndex)
                                                     if (preserveBrowsePosition) lastPoster = card.id
                                                 }
                                             }
@@ -819,8 +883,8 @@ fun HomeRoute(viewModel: HomeViewModel, onOpen: (HomeCard) -> Unit, modifier: Mo
             )
         }
     }
-    LaunchedEffect(s.rows.isNotEmpty()) {
-        if (s.rows.isNotEmpty()) {
+    LaunchedEffect(s.rows.isNotEmpty(), requestInitialFocus) {
+        if (s.rows.isNotEmpty() && requestInitialFocus) {
             if (!preserveBrowsePosition) {
                 listState.scrollToItem(0)
                 first.requestFocusWhenReady()
@@ -836,6 +900,24 @@ fun HomeRoute(viewModel: HomeViewModel, onOpen: (HomeCard) -> Unit, modifier: Mo
                 androidx.compose.runtime.snapshotFlow { posterRequesters[target] }.first { it != null }?.requestFocusWhenReady()
             }
         }
+    }
+}
+
+/** Focus-only state is read in this small restart scope, never by the shelf renderer. */
+@OptIn(kotlinx.coroutines.FlowPreview::class)
+@Composable
+private fun HomePreview(
+    viewModel: HomeViewModel,
+    modifier: Modifier,
+    content: @Composable androidx.compose.foundation.layout.BoxScope.(HomeCard?) -> Unit,
+) {
+    val selection = remember(viewModel) {
+        viewModel.state.map { it.hero }.distinctUntilChanged().debounce(OmniMotion.BACKDROP_DEBOUNCE_MS)
+    }
+    val hero by selection.collectAsStateWithLifecycle(viewModel.state.value.hero)
+    Crossfade(hero, modifier = modifier, animationSpec = tween(OmniMotion.BACKDROP_CROSSFADE_MS),
+        label = "homePreview") { card ->
+        Box(Modifier.fillMaxSize()) { content(card) }
     }
 }
 
@@ -970,8 +1052,8 @@ private fun SourceAlertBanner(alert: SourceAlert, onDismiss: () -> Unit, modifie
 @Composable
 private fun ChannelTile(card: HomeCard, modifier: Modifier, onClick: () -> Unit) {
     val c = OmniTheme.colors
-    FocusCard(onClick = onClick, onLongClick = channelFavoriteMenu(card.open.sourceId.value, card.open.remoteId.value, card.title, card.image), modifier = modifier.size(220.dp, 124.dp)) {
-        Column(Modifier.fillMaxSize().padding(OmniSpacing.m), verticalArrangement = Arrangement.SpaceBetween) {
+    FocusCard(onClick = onClick, onLongClick = channelFavoriteMenu(card.open.sourceId.value, card.open.remoteId.value, card.title, card.image), modifier = modifier.width(220.dp).heightIn(min = 132.dp + (com.yodesla.omniverse.designsystem.LocalTextScale.current - 1f).coerceAtLeast(0f).times(48).dp)) {
+        Column(Modifier.fillMaxWidth().padding(OmniSpacing.m), verticalArrangement = Arrangement.spacedBy(OmniSpacing.xs)) {
             LogoImage(card.image, card.title, Modifier.size(96.dp, 54.dp))
             Column {
                 Text(card.title, style = OmniTheme.type.body, color = c.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -1002,7 +1084,7 @@ private fun SurpriseTile(width: Dp, modifier: Modifier, onClick: () -> Unit) {
 private fun pickCard(p: PosterRow) = HomeCard(
     id = "pick-${p.key.sourceId.value}-${p.key.remoteId.value}", open = p.key,
     title = displayTitle(p.name, p.year), subtitle = null, image = p.posterUrl,
-    titleIdentity = p.titleIdentity(),
+    titleIdentity = p.titleIdentity(), backdropUrl = p.backdropUrl,
 )
 
 /**
@@ -1072,7 +1154,7 @@ internal fun cwNameGroup(kind: ContentKind, title: String): String {
 }
 
 /** Exact-ID grouping key: the same TMDB title from several sources shows once (first visible wins). */
-private fun titleGroup(p: com.yodesla.omniverse.core.data.PosterRow): String =
+internal fun titleGroup(p: com.yodesla.omniverse.core.data.PosterRow): String =
     p.tmdbId?.takeIf { it.isNotBlank() }?.let { "${p.key.kind}:tmdb:$it" } ?: "${p.key.kind}:key:${p.key.sourceId.value}:${p.key.remoteId.value}"
 
 /** "24 min left" / "1h 02m left" for Continue Watching; null when the length is unknown. */
@@ -1081,3 +1163,12 @@ internal fun timeLeftLabel(episode: Boolean, positionMs: Long, durationMs: Long?
     val time = if (left >= 60) "%dh %02dm left".format(left / 60, left % 60) else "${left.coerceAtLeast(1)} min left"
     return if (episode) "Episode  ·  $time" else time
 }
+
+
+
+
+
+
+
+
+

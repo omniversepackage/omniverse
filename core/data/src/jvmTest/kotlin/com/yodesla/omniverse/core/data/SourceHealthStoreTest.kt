@@ -100,6 +100,7 @@ class SourceHealthStoreTest {
         assertEquals(listOf("Keeps failing (3 checks in a row)"), s.warnings().first().map { it.text })
         s.record(SourceId("a"), "IPTV", obs())
         assertEquals(0, s.snapshots().first().single().failCount)
+        assertNull(s.snapshots().first().single().lastErrorKind)
         assertTrue(s.warnings().first().isEmpty())
     }
 

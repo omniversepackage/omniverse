@@ -42,13 +42,13 @@ const val POSTER_PREFETCH_SIDE_ROWS = 1
 const val POSTER_PREFETCH_MAX = 24
 
 /** Requests in flight at once: the cap that keeps prefetch from out-loading what is on screen. */
-const val POSTER_PREFETCH_IN_FLIGHT = 12
+const val POSTER_PREFETCH_IN_FLIGHT = 4
 
 /** A focus jump this large counts as fast scrolling: pending prefetch is dropped instead. */
 const val POSTER_FAST_SCROLL_JUMP = 3
 
 /** Focus has to sit still this long before anything is fetched. */
-const val POSTER_PREFETCH_SETTLE_MS = 120L
+const val POSTER_PREFETCH_SETTLE_MS = 180L
 
 /** Where the viewer is: which row, and which card in it. */
 @Immutable
@@ -122,11 +122,12 @@ fun posterPrefetchUrls(
     sideTake: Int = POSTER_PREFETCH_SIDE_TAKE,
     sideRows: Int = POSTER_PREFETCH_SIDE_ROWS,
     maxTotal: Int = POSTER_PREFETCH_MAX,
+    density: Float = 2f,
 ): List<String> =
     posterPrefetchIndices(
         rows.map { it.size }, focus, focusDirection(prev, focus), ahead, sideTake, sideRows, maxTotal,
     ).mapNotNull { (row, index) -> rows[row][index] }
-        .mapNotNull { tmdbPosterUrlForCard(it, cardWidthDp) }
+        .mapNotNull { tmdbPosterUrlForCard(it, cardWidthDp, density) }
         .filter { it.isNotBlank() }
         .distinct()
         .take(maxTotal)
@@ -182,44 +183,76 @@ class PosterPrefetcher(
     private val enqueue: PosterEnqueue,
     private val maxInFlight: Int = POSTER_PREFETCH_IN_FLIGHT,
 ) {
-    private val pending = HashMap<String, () -> Unit>()
+    private class Request(var cancel: (() -> Unit)? = null)
+    private val pending = LinkedHashMap<String, Request>()
     private val requested = LinkedHashSet<String>()
+    private val queued = LinkedHashSet<String>()
+    private var pumping = false
 
-    val pendingCount: Int get() = pending.size
+    val pendingCount: Int @Synchronized get() = pending.size
 
+    @Synchronized
     fun prefetch(urls: List<String>) {
-        for (url in urls) {
-            if (url.isBlank() || url in pending || url in requested) continue
-            if (pending.size >= maxInFlight) break
-            requested.add(url)
-            var completed = false
-            val cancel = runCatching {
-                enqueue.enqueue(url, widthPx, heightPx) {
-                    completed = true
-                    pending.remove(url)
-                }
-            }.getOrNull()
-            if (cancel != null && !completed) pending[url] = cancel
-        }
-        // A long session must not grow the dedupe set without limit.
-        while (requested.size > maxInFlight * 8) {
-            val it = requested.iterator()
-            it.next()
-            it.remove()
-        }
+        // Replace obsolete look-ahead, retaining only the current bounded window.
+        queued.clear()
+        urls.asSequence().filter { it.isNotBlank() && it !in pending && it !in requested }
+            .take(maxInFlight.coerceAtLeast(1) * 8).forEach { queued.add(it) }
+        pump()
     }
 
-    /** Drop everything still in flight (fast scroll, rows rebuilt, screen left). */
+    @Synchronized
+    private fun pump() {
+        if (pumping) return
+        pumping = true
+        try {
+            while (pending.size < maxInFlight && queued.isNotEmpty()) {
+                val url = queued.first()
+                queued.remove(url)
+                val request = Request()
+                pending[url] = request
+                requested.add(url)
+                val cancel = try {
+                    enqueue.enqueue(url, widthPx, heightPx) { complete(url, request) }
+                } catch (_: Exception) {
+                    pending.remove(url)
+                    requested.remove(url)
+                    continue
+                }
+                // Completion may happen synchronously inside enqueue.
+                if (pending[url] === request) {
+                    if (cancel == null) pending.remove(url) else request.cancel = cancel
+                }
+            }
+            while (requested.size > maxInFlight.coerceAtLeast(1) * 8) {
+                val removable = requested.firstOrNull { it !in pending } ?: break
+                requested.remove(removable)
+            }
+        } finally { pumping = false }
+    }
+
+    @Synchronized
+    private fun complete(url: String, request: Request) {
+        if (pending[url] !== request) return
+        pending.remove(url)
+        pump()
+    }
+
+    /** Clear bookkeeping first: cancellation callbacks must never start obsolete work. */
+    @Synchronized
     fun cancelPending() {
-        pending.values.forEach { runCatching { it() } }
+        queued.clear()
+        val cancel = pending.values.mapNotNull { it.cancel }
         requested.removeAll(pending.keys)
         pending.clear()
+        cancel.forEach { runCatching { it() } }
     }
 
+    @Synchronized
     fun dispose() {
         cancelPending()
         requested.clear()
     }
+
 }
 
 /** The app-wide Coil loader, warmed at the pixel size a [cardWidth] card decodes at (2:3 posters). */
@@ -228,8 +261,8 @@ fun rememberPosterPrefetcher(cardWidth: Dp, maxInFlight: Int = POSTER_PREFETCH_I
     val context = LocalContext.current
     val density = LocalDensity.current
     val loader = remember(context) { SingletonImageLoader.get(context) }
-    val widthPx = with(density) { cardWidth.roundToPx() }
-    val heightPx = with(density) { (cardWidth * 1.5f).roundToPx() }
+    val widthPx = (with(density) { cardWidth.toPx() } * OmniMotion.FOCUS_SCALE).toInt().coerceAtLeast(1)
+    val heightPx = (widthPx * 1.5f).toInt()
     return remember(loader, widthPx, heightPx, maxInFlight) {
         PosterPrefetcher(
             widthPx = widthPx,
@@ -253,13 +286,22 @@ fun rememberPosterPrefetcher(cardWidth: Dp, maxInFlight: Int = POSTER_PREFETCH_I
 @Composable
 fun PosterPrefetch(rows: List<List<String?>>, focus: PosterFocus?, cardWidth: Dp) {
     val prefetcher = rememberPosterPrefetcher(cardWidth)
+    val density = LocalDensity.current.density
     var previous by remember(prefetcher) { mutableStateOf<PosterFocus?>(null) }
     DisposableEffect(prefetcher) { onDispose { prefetcher.dispose() } }
     LaunchedEffect(focus, rows) {
         val now = focus ?: return@LaunchedEffect
         if (isFastPosterScroll(previous, now)) prefetcher.cancelPending()
+        val from = previous
         previous = now
         delay(POSTER_PREFETCH_SETTLE_MS)
-        prefetcher.prefetch(posterPrefetchUrls(rows, now, cardWidthDp = cardWidth.value.toInt()))
+        prefetcher.prefetch(posterPrefetchUrls(rows, now, from,
+            cardWidthDp = cardWidth.value.toInt(), density = density))
     }
+}
+
+/** Observe focus in this restart scope, so a move never recomposes the shelf's parent. */
+@Composable
+fun PosterPrefetch(rows: List<List<String?>>, focus: androidx.compose.runtime.State<PosterFocus?>, cardWidth: Dp) {
+    PosterPrefetch(rows, focus.value, cardWidth)
 }

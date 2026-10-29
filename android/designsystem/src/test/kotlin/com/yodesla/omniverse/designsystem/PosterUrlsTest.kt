@@ -12,7 +12,7 @@ class PosterUrlsTest {
             tmdbPosterUrlForCard("https://image.tmdb.org/t/p/original/abc123.jpg", 124),
         )
         assertEquals(
-            "https://image.tmdb.org/t/p/w342/abc123.jpg",
+            "https://image.tmdb.org/t/p/w500/abc123.jpg",
             tmdbPosterUrlForCard("https://image.tmdb.org/t/p/original/abc123.jpg", 220),
         )
     }
@@ -35,7 +35,7 @@ class PosterUrlsTest {
     @Test
     fun alreadySmallVariantsUntouched() {
         assertEquals(
-            "https://image.tmdb.org/t/p/w185/abc123.jpg",
+            "https://image.tmdb.org/t/p/w342/abc123.jpg",
             tmdbPosterUrlForCard("https://image.tmdb.org/t/p/w185/abc123.jpg", 124),
         )
         assertEquals(
@@ -76,5 +76,12 @@ class PosterUrlsTest {
         assertEquals(odd, tmdbPosterUrlForCard(odd, 124))
         val noSize = "https://image.tmdb.org/t/p/abc.jpg"
         assertEquals(noSize, tmdbPosterUrlForCard(noSize, 124))
+    }
+
+    @Test fun fourKIncludesFocusGrowthWithoutUpscalingSmallArt() {
+        assertEquals("https://image.tmdb.org/t/p/w780/a.jpg",
+            tmdbPosterUrlForCard("https://image.tmdb.org/t/p/w342/a.jpg", 124, 4f))
+        assertEquals("https://image.tmdb.org/t/p/w500/a.jpg",
+            tmdbPosterUrlForCard("https://image.tmdb.org/t/p/original/a.jpg", 105, 4f))
     }
 }

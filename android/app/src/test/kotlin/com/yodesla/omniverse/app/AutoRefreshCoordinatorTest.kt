@@ -5,8 +5,8 @@ import java.time.*
 import kotlin.test.*
 
 class AutoRefreshCoordinatorTest {
-    private val zone = ZoneId.of("America/New_York")
-    private fun at(s: String) = LocalDateTime.parse(s).atZone(zone).toInstant().toEpochMilli()
+    private val zone = java.util.TimeZone.getTimeZone("America/New_York")
+    private fun at(s: String) = LocalDateTime.parse(s).atZone(zone.toZoneId()).toInstant().toEpochMilli()
     @Test fun dailyRunsAfterSelectedLocalTimeOnlyOncePerDay() {
         val p = AutoRefreshPolicy("daily", minute = 8 * 60 + 30)
         val last = at("2026-10-16T08:31:00")

@@ -5,6 +5,18 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class FocusPivotTest {
+    @Test fun visibilityOnlyDoesNotMoveAnAlreadySafeControl() {
+        assertEquals(0f, focusSafeScrollDistance(180f, 72f, 480f, 0f, 12f,
+            onlyWhenClipped = true), 0.001f)
+    }
+
+    @Test fun visibilityOnlyMovesJustEnoughForTheActualScale() {
+        val distance = focusSafeScrollDistance(390f, 100f, 480f, 0f, 12f,
+            focusedScale = 1.08f, onlyWhenClipped = true)
+        assertEquals(26f, distance, 0.001f)
+        assertEquals(364f, 390f - distance, 0.001f)
+    }
+
     @Test fun ordinarySafePivotKeepsItsPosition() {
         assertEquals(52f, focusSafeScrollDistance(100f, 132f, 960f, 48f, 16f), 0.001f)
     }

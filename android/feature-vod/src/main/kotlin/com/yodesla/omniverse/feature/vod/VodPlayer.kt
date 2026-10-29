@@ -307,14 +307,23 @@ fun VodPlayerRoute(
     var communityLookupDone by remember(item.key) { mutableStateOf(false) }
     var communityLookupRunning by remember(item.key) { mutableStateOf(false) }
     var resumeAt by remember { mutableStateOf(-1L) }
+    var resumePaused by remember { mutableStateOf(false) }
+    var retryAttempt by remember(item.key) { mutableIntStateOf(0) }
     LifecycleStartEffect(item) {
         if (resumeAt >= 0) {
-            openedSpec?.let { analysisStreamKey = item.key; engine.play(it, startPositionMs = resumeAt) }
+            openedSpec?.let {
+                analysisStreamKey = item.key
+                if (kids.blocked == null) {
+                    engine.play(it, startPositionMs = resumeAt)
+                    if (resumePaused) engine.pause()
+                }
+            }
             resumeAt = -1L
         }
         onStopOrDispose {
             if (openedSpec != null) {
                 resumeAt = engine.positionMs
+                resumePaused = state is PlayerState.Paused
                 save()
                 heartbeat("stopped")
                 analysisStreamKey = null
@@ -342,14 +351,16 @@ fun VodPlayerRoute(
         if (!trackPref.isEmpty) return@LaunchedEffect
         engine.setLanguagePreferences(audioLang?.takeIf { it.isNotBlank() }, subtitlePref)
     }
-    LaunchedEffect(item) {
+    LaunchedEffect(item, retryAttempt) {
+        error = null
+        if (kids.blocked != null) return@LaunchedEffect
         val source = sources.contentSource(item.key.sourceId)
         if (source == null) { error = "This source was removed."; return@LaunchedEffect }
         try {
             val spec = source.playback(item.request)
             openedSpec = spec
             analysisStreamKey = item.key
-            engine.play(spec, startPositionMs = item.resumeMs)
+            if (kids.blocked == null) engine.play(spec, startPositionMs = if (retryAttempt > 0) position.coerceAtLeast(item.resumeMs) else item.resumeMs)
         } catch (e: SourceException) {
             error = "This title can't be played right now."
         }
@@ -397,14 +408,14 @@ fun VodPlayerRoute(
     // At the daily limit or at bedtime the player pauses itself and shows the "Time is up" card;
     // a granted extension (parental PIN) resumes it. The PIN pad itself belongs to the app shell.
     var kidsWasBlocked by remember { mutableStateOf(false) }
-    LaunchedEffect(kids.blocked) {
+    LaunchedEffect(kids.blocked, state) {
         if (kids.blocked != null) {
-            if (state is PlayerState.Playing) engine.pause()
+            if (state is PlayerState.Playing || state is PlayerState.Loading || state is PlayerState.Buffering) engine.pause()
             kidsWasBlocked = true
             overlay = true
         } else if (kidsWasBlocked) {
             kidsWasBlocked = false
-            if (state is PlayerState.Paused) engine.resume()
+            if (state is PlayerState.Paused) engine.resume() else if (openedSpec == null) retryAttempt++
         }
     }
     // Task 81 give-up path: the engine's retry policy exhausted its same-URL reconnects (or the
@@ -424,7 +435,7 @@ fun VodPlayerRoute(
         if (choices.size >= 2) fallbackPanel = true
     }
     suspend fun switchToFallback(choice: FallbackChoice) {
-        if (switchingCopy) return
+        if (switchingCopy || kids.blocked != null) return
         switchingCopy = true
         fallbackCountdown = -1
         val at = engine.positionMs.takeIf { it > 0 } ?: position
@@ -438,7 +449,8 @@ fun VodPlayerRoute(
             fallbackPanel = true
         }
     }
-    LaunchedEffect(state) {
+    LaunchedEffect(state, error) {
+        if (error != null) { offerFallbackCopies(); return@LaunchedEffect }
         val failed = state as? PlayerState.Failed ?: return@LaunchedEffect
         if (failed.kind == FailureKind.NETWORK && refreshes < 2) {
             val source = sources.contentSource(item.key.sourceId) ?: return@LaunchedEffect
@@ -448,7 +460,7 @@ fun VodPlayerRoute(
                 val spec = source.playback(item.request)
                 openedSpec = spec
                 analysisStreamKey = item.key
-                engine.play(spec, startPositionMs = at)
+                if (kids.blocked == null) engine.play(spec, startPositionMs = at)
             } catch (_: SourceException) {
                 offerFallbackCopies()
             }
@@ -458,6 +470,7 @@ fun VodPlayerRoute(
     }
     LaunchedEffect(state) {
         if (state is PlayerState.Playing) {
+            error = null
             refreshes = 0
             fallbackLoaded = false
             fallback = null
@@ -927,7 +940,19 @@ fun VodPlayerRoute(
             else -> null
         }
         if (status != null && fallback == null) {
-            Text(status, style = OmniTheme.type.title, color = c.textPrimary, modifier = Modifier.align(Alignment.Center).clip(RoundedCornerShape(12.dp)).background(c.scrim).padding(OmniSpacing.l))
+            LaunchedEffect(status) { fallbackFocus.requestFocusWhenReady() }
+            Column(Modifier.align(Alignment.Center).clip(RoundedCornerShape(12.dp)).background(c.scrim).padding(OmniSpacing.l),
+                verticalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
+                Text(status, style = OmniTheme.type.title, color = c.textPrimary)
+                Row(horizontalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
+                    OmniButton("Try again", {
+                        error = null
+                        fallbackLoaded = false
+                        retryAttempt++
+                    }, Modifier.focusRequester(fallbackFocus), primary = true)
+                    OmniButton("Back", onExit)
+                }
+            }
         }
         // Task 93: the failed copy is not a dead end when the catalog has another copy of the same
         // title. One alternative counts down automatically; several open a chooser.

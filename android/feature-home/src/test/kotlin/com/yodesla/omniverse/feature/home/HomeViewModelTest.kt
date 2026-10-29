@@ -39,6 +39,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -89,6 +90,22 @@ class HomeViewModelTest {
 
     @BeforeTest fun setUp() = Dispatchers.setMain(dispatcher)
     @AfterTest fun tearDown() = Dispatchers.resetMain()
+
+    @Test
+    fun cachedShelvesAppearWhileRecommendationsAreStillPending() = runTest(dispatcher) {
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val key = vodKey(src1, "cached")
+        val row = poster(key, "Cached movie")
+        val catalog = HomeFakeCatalog(mapOf(key to row), recentVod = listOf(row), beforeSimilar = { gate.await() })
+        val vm = homeVm(catalog, HomeFakeEpg(), HomeFakeUserData(listOf(Progress(key, null, 1_000L, 2_000L, 200L))), Clock { 0L })
+        runCurrent()
+        assertTrue(vm.state.value.loaded)
+        assertNotNull(vm.state.value.rowOrNull("continue"))
+        assertNotNull(vm.state.value.rowOrNull("movies"))
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertNotNull(vm.state.value.rowOrNull("continue"))
+    }
 
     @Test
     fun continueWatchingCollapsesSameTmdbIdToMostRecentCard() = runTest(dispatcher) {
@@ -595,6 +612,30 @@ class HomeViewModelTest {
         assertEquals(key, vm.state.value.rows.single().cards.single().open)
     }
 
+    @Test
+    fun cachedContinueWatchingAppearsBeforeSlowDiscoveryCompletes() = runTest(dispatcher) {
+        val key = vodKey(src1, "a")
+        val catalog = HomeFakeCatalog(mapOf(key to poster(key, "Movie A", tmdbId = "tt1")))
+        val local = HomeFakeUserData(listOf(Progress(key, null, 1_000L, 2_000L, updatedMs = 200L)))
+        val user = object : UserDataRepository by local {
+            override fun setting(key: String): Flow<String?> =
+                if (key.startsWith("discovery_cache_")) kotlinx.coroutines.flow.flow {
+                    kotlinx.coroutines.delay(5_000L)
+                    emit(null)
+                } else local.setting(key)
+        }
+        val clock = Clock { 0L }
+        val discovery = com.yodesla.omniverse.core.data.metadata.DiscoveryRepository(null, user, catalog, clock)
+        val vm = HomeViewModel(catalog, HomeFakeEpg(), user, clock,
+            compute = StandardTestDispatcher(testScheduler), discovery = discovery)
+        runCurrent()
+        assertEquals(0L, testScheduler.currentTime)
+        assertTrue(vm.state.value.loaded)
+        assertEquals(key, assertNotNull(vm.state.value.rowOrNull("continue")).cards.single().open)
+        advanceUntilIdle()
+        assertEquals(key, assertNotNull(vm.state.value.rowOrNull("continue")).cards.single().open)
+    }
+
     // Task 71 — New episodes: shows the viewer watches whose post-sync snapshot flagged an unseen episode.
 
     private fun TestScope.newEpisodesVm(
@@ -774,10 +815,11 @@ private class HomeFakeCatalog(
     private val recentVod: List<PosterRow> = emptyList(),
     private val recentSeries: List<PosterRow> = emptyList(),
     private val similar: Map<ContentKey, List<PosterRow>> = emptyMap(),
+    private val beforeSimilar: suspend () -> Unit = {},
 ) : CatalogRepository {
     override suspend fun poster(key: ContentKey): PosterRow? = posters[key]
     override suspend fun channel(key: ContentKey): ChannelRow? = channels[key]
-    override suspend fun similarTo(seed: ContentKey, limit: Int): List<PosterRow> = similar[seed]?.take(limit) ?: emptyList()
+    override suspend fun similarTo(seed: ContentKey, limit: Int): List<PosterRow> { beforeSimilar(); return similar[seed]?.take(limit) ?: emptyList() }
     override fun recentlyAdded(kind: ContentKind, limit: Int): Flow<List<PosterRow>> = when (kind) {
         ContentKind.VOD -> flowOf(recentVod)
         ContentKind.SERIES -> flowOf(recentSeries)

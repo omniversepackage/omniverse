@@ -13,6 +13,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * TMDB artwork/details enrichment with a local cache (task 84d).
@@ -45,32 +48,37 @@ class TmdbEnricher(
     private val seasonAttempts = mutableMapOf<String, Long>()
 
     /**
-     * Task 87b: bumped whenever a lookup stored new art, at most once per [ART_SIGNAL_DEBOUNCE_MS].
+     * Bumped after a direct artwork lookup or a completed prefetch batch, including its final write.
      * Browse/brand pages re-map their visible rows on this, so art cached by the prefetch that ran
      * under the first paint appears within a second or two — without leaving the page and without
      * restarting paging (no scroll or focus reset).
      */
+    private val _artWrites = MutableStateFlow(0L)
     private val _artUpdated = MutableStateFlow(0L)
     val artUpdated: StateFlow<Long> = _artUpdated.asStateFlow()
-    private var lastArtSignalMs: Long? = null
-
-    private fun signalArtUpdated(nowMs: Long) {
-        val last = lastArtSignalMs
-        if (last != null && nowMs - last < ART_SIGNAL_DEBOUNCE_MS) return
-        lastArtSignalMs = nowMs
-        _artUpdated.update { it + 1 }
-    }
+    // Fixed striped locks coalesce concurrent requests without retaining every visited identity.
+    private val lookupLocks = List(32) { Mutex() }
+    private fun signalArtUpdated() { _artUpdated.update { it + 1 } }
 
     /** Cached-first details for one exact TMDB id; null when unknown, off, or the lookup failed. */
-    suspend fun meta(kind: WikidataMetadata.Kind, tmdbId: String?): TmdbMeta? {
+    suspend fun meta(kind: WikidataMetadata.Kind, tmdbId: String?): TmdbMeta? = meta(kind, tmdbId, true)
+
+    private suspend fun meta(kind: WikidataMetadata.Kind, tmdbId: String?, notify: Boolean): TmdbMeta? {
         val id = tmdbId?.trim()?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) } ?: return null
+        val lock = lookupLocks[((kind.name + id).hashCode() and Int.MAX_VALUE) % lookupLocks.size]
+        return lock.withLock { lookup(kind, id, notify) }
+    }
+
+    private suspend fun lookup(kind: WikidataMetadata.Kind, id: String, notify: Boolean): TmdbMeta? {
         val client = tmdb ?: return null
         if (!enabled()) return null
         val now = clock.nowMs()
         val cached = withContext(io) { db.tmdbQueries.tmdbMeta(id, kind.name).executeAsOneOrNull() }
         // Rows cached before v17 have art but no score: fetch them once more to pick up the rating.
         if (cached != null && !(cached.vote_average == null && cached.hasContent()) && isFresh(cached.fetched_ms, cached.hasContent(), now)) return cached.toMeta().takeIf { !it.isEmpty }
-        val found = runCatching { if (kind == WikidataMetadata.Kind.MOVIE) client.movie(id) else client.tv(id) }.getOrNull()
+        val found = try { if (kind == WikidataMetadata.Kind.MOVIE) client.movie(id) else client.tv(id) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { null }
         withContext(io) {
             if (found != null) {
                 db.tmdbQueries.upsertTmdbMeta(
@@ -86,7 +94,10 @@ class TmdbEnricher(
                 db.tmdbQueries.touchTmdbMeta(tmdbId = id, kind = kind.name, fetchedMs = now)
             }
         }
-        if (found != null && !found.isEmpty) signalArtUpdated(now)
+        if (found != null && !found.isEmpty) {
+            _artWrites.update { it + 1 }
+            if (notify) signalArtUpdated()
+        }
         return found
     }
 
@@ -118,7 +129,14 @@ class TmdbEnricher(
     /** Warm the cache for on-screen titles. The client's own limiter caps the network at 4 in flight. */
     suspend fun prefetch(kind: WikidataMetadata.Kind, ids: Collection<String>) {
         if (tmdb == null || !enabled()) return
-        coroutineScope { ids.map { id -> launch { meta(kind, id) } } }
+        // One notification after the final committed write; no leading-edge throttle can lose it.
+        // Keep both active requests and waiting coroutines bounded for very large shelves.
+        val before = _artWrites.value
+        try {
+            ids.distinct().chunked(4).forEach { chunk ->
+                coroutineScope { chunk.forEach { id -> launch { meta(kind, id, false) } } }
+            }
+        } finally { if (_artWrites.value != before) signalArtUpdated() }
     }
 
     private fun isFresh(fetchedMs: Long, hasContent: Boolean, now: Long): Boolean =
@@ -154,7 +172,7 @@ fun pickPlot(source: String?, tmdbOverview: String?, wikidataSummary: String? = 
  * the local cache only — it never makes a request, so browse screens stay fast and the Metadata
  * switch (which gates network) never leaves already-cached screens blank.
  *
- * Precedence: source/Plex art first; TMDB fills gaps. The title logo is the one thing only TMDB
+ * Precedence: verified TMDB landscape art first; provider art is the fallback. The title logo is the one thing only TMDB
  * supplies, so it is shown whenever cached. The plot follows [pickPlot]: the provider's own plot
  * wins, the cached TMDB overview is the fallback (most IPTV movies carry no plot at all).
  */
@@ -170,6 +188,7 @@ class TmdbArt(private val db: OmniverseDb) {
             cached.overview,
             cached.card_backdrop_path?.let(Tmdb::backdropUrl),
             tmdbRating(cached.vote_average, cached.vote_count),
+            cached.poster_path?.let(Tmdb::posterUrl),
         )
     }
 
@@ -181,18 +200,18 @@ class TmdbArt(private val db: OmniverseDb) {
         val byId = HashMap<String, TmdbArtRow>()
         // Chunked: whole anime pools (thousands of ids) exceed SQLite's bound-variable limit.
         for ((kind, ids) in listOf("MOVIE" to movies, "SERIES" to series)) for (chunk in ids.chunked(500)) {
-            db.readQueries.tmdbMetaForIds(kind, chunk).executeAsList().forEach { byId["$kind:${it.tmdb_id}"] = TmdbArtRow(it.backdrop_path, it.logo_path, it.certification, it.runtime_min?.toInt(), it.overview, it.card_backdrop_path, tmdbRating(it.vote_average, it.vote_count)) }
+            db.readQueries.tmdbMetaForIds(kind, chunk).executeAsList().forEach { byId["$kind:${it.tmdb_id}"] = TmdbArtRow(it.backdrop_path, it.logo_path, it.certification, it.runtime_min?.toInt(), it.overview, it.card_backdrop_path, tmdbRating(it.vote_average, it.vote_count), it.poster_path) }
         }
         return rows.map { row ->
             val kind = row.tmdbKind() ?: return@map row
             val art = byId["$kind:${row.tmdbId}"] ?: return@map row
-            row.withArt(art.backdrop?.let(Tmdb::backdropUrl), art.logo?.let(Tmdb::logoUrl), art.certification, art.runtimeMin, art.overview, art.cardBackdrop?.let(Tmdb::backdropUrl), art.rating)
+            row.withArt(art.backdrop?.let(Tmdb::backdropUrl), art.logo?.let(Tmdb::logoUrl), art.certification, art.runtimeMin, art.overview, art.cardBackdrop?.let(Tmdb::backdropUrl), art.rating, art.poster?.let(Tmdb::posterUrl))
         }
     }
 
     private data class TmdbArtRow(
         val backdrop: String?, val logo: String?, val certification: String?, val runtimeMin: Int?, val overview: String?,
-        val cardBackdrop: String?, val rating: Float?,
+        val cardBackdrop: String?, val rating: Float?, val poster: String?,
     )
 }
 
@@ -207,12 +226,17 @@ private fun PosterRow.tmdbKind(): String? {
 
 internal fun PosterRow.withArt(
     backdrop: String?, logo: String?, certification: String?, runtimeMin: Int?, overview: String?, cardBackdrop: String?,
-    tmdbRating: Float? = null,
+    tmdbRating: Float? = null, tmdbPoster: String? = null,
 ): PosterRow {
-    val wide = backdropUrl ?: backdrop
+    // TMDB backdrops are selected from wide images; provider backdrop fields may contain posters.
+    val wide = landscapeBackdrop(backdrop, backdropUrl, posterUrl)
     // Task 87b: card art is a different picture from the banner art - a duplicate is dropped so the
     // card falls back to the banner with the title logo overlaid instead.
     return copy(
+        // Plex art carries its server address and token. When that server moves or the token is
+        // revoked, the exact-ID TMDB poster remains a usable portrait card.
+        posterUrl = if (posterUrl?.contains("X-Plex-Token=", ignoreCase = true) == true)
+            tmdbPoster ?: posterUrl else posterUrl ?: tmdbPoster,
         backdropUrl = wide,
         cardBackdropUrl = cardBackdropUrl ?: cardBackdrop?.takeIf { it != wide },
         logoUrl = logoUrl ?: logo,
@@ -229,3 +253,10 @@ internal fun tmdbRating(voteAverage: Double?, voteCount: Long?): Float? =
     voteAverage?.takeIf { it > 0.0 && (voteCount ?: 0L) >= MIN_TMDB_VOTES }?.toFloat()
 
 private const val MIN_TMDB_VOTES = 20L
+
+
+
+/** Landscape metadata is authoritative; providers sometimes put poster art in their background field. */
+fun landscapeBackdrop(tmdbBackdrop: String?, providerBackdrop: String?, poster: String?): String? =
+    tmdbBackdrop?.takeIf { it.isNotBlank() && it != poster }
+        ?: providerBackdrop?.takeIf { it.isNotBlank() && it != poster }

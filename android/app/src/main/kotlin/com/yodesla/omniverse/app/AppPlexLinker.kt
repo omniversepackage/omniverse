@@ -69,13 +69,26 @@ class AppPlexLinker(
 
     /** Rediscover an existing source without replacing its catalog or watch history. */
     suspend fun reconnect(config: SourceConfig.Plex): SourceConfig.Plex? {
+        // A remembered account can issue a fresh server token. Try it before reusing the old
+        // token with a newly discovered LAN address: the old token may be the broken part.
+        val accountToken = savedToken()
+        if (accountToken != null) {
+            val server = try {
+                PlexLink(http, config.clientId).servers(accountToken).firstOrNull { it.machineId == config.machineId }
+            } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
+            if (server != null) {
+                val uri = server.connections.firstOrNull { reachable(it, config.machineId, config.clientId) }
+                if (uri != null) return SourceConfig.Plex(config.id, config.displayName, uri.trimEnd('/'), server.token,
+                    config.machineId, config.clientId)
+            }
+        }
         val local = try { localConnections(config.machineId) }
             catch (e: CancellationException) { throw e }
             catch (_: Exception) { emptyList() }
         local.firstOrNull { reachable(it, config.machineId, config.clientId) }?.let { uri ->
             return SourceConfig.Plex(config.id, config.displayName, uri, config.token, config.machineId, config.clientId)
         }
-        for (token in listOfNotNull(savedToken(), config.token).distinct()) {
+        for (token in listOfNotNull(config.token).distinct()) {
             val server = try {
                 PlexLink(http, config.clientId).servers(token).firstOrNull { it.machineId == config.machineId }
             } catch (e: CancellationException) { throw e }

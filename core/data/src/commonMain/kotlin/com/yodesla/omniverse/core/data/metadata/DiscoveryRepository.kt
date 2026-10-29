@@ -23,6 +23,7 @@ class DiscoveryRepository(
     private val tmdb: Tmdb?, private val user: UserDataRepository,
     private val catalog: CatalogRepository, private val clock: Clock,
     private val netflix: NetflixCharts? = null,
+    private val sourceHealth: Flow<List<SourceHealthSnapshot>> = flowOf(emptyList()),
 ) {
     private val json = Json { ignoreUnknownKeys = true }
     private val lock = Mutex()
@@ -108,8 +109,17 @@ class DiscoveryRepository(
     ) { vis, hidden, _, _ ->
         { kind: String, source: String, category: String -> "$kind|$source|$category" !in hidden && vis(kind, source, category) }
     }
-    fun home(kind: ContentKind?, visibility: Flow<Visibility>): Flow<List<DiscoveryShelf>> = combine(feed("day"), feed("week"), feed("recent"), homeVisibility(visibility)) { day, week, recent, vis ->
-        val visible: (PosterRow) -> Boolean = { p -> p.categoryId?.let { vis(p.key.kind.name, p.key.sourceId.value, it.value) } ?: true }
+    fun home(kind: ContentKind?, visibility: Flow<Visibility>): Flow<List<DiscoveryShelf>> = combine(feed("day"), feed("week"), feed("recent"), homeVisibility(visibility), sourceHealth) { day, week, recent, vis, health ->
+        // A chart title may have several catalog copies. Skip sources that the recent health pass
+        // confirmed cannot answer, then let exact-ID resolution pick a working alternative.
+        val unavailable = health.filter { snapshot ->
+            clock.nowMs() - snapshot.checkedAtMs in 0..SourceHealth.DAY &&
+                (snapshot.lastErrorKind == SourceErrorKind.AUTH.name || snapshot.lastErrorKind == SourceErrorKind.NETWORK.name)
+        }.mapTo(HashSet()) { it.sourceId }
+        val visible: (PosterRow) -> Boolean = { p ->
+            p.key.sourceId.value !in unavailable &&
+                (p.categoryId?.let { vis(p.key.kind.name, p.key.sourceId.value, it.value) } ?: true)
+        }
         val used = HashSet<TitleIdentity>()
         suspend fun row(id: String, title: String, f: DiscoveryFeed): DiscoveryShelf {
             // Daily wins, then weekly, then releases; fill each row AFTER excluding earlier rows.

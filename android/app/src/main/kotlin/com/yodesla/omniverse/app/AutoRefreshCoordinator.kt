@@ -4,8 +4,8 @@ import com.yodesla.omniverse.core.data.AutoRefreshPolicy
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.time.Instant
-import java.time.ZoneId
+import java.util.Calendar
+import java.util.TimeZone
 
 /** Shared startup/background gate. Manual refreshes remain available regardless of policy. */
 class AutoRefreshCoordinator(private val graph: AppGraph) {
@@ -25,16 +25,21 @@ class AutoRefreshCoordinator(private val graph: AppGraph) {
         }
     }
     companion object {
-        fun due(p: AutoRefreshPolicy, last: Long, now: Long, appStart: Boolean, zone: ZoneId = ZoneId.systemDefault()): Boolean {
+        fun due(p: AutoRefreshPolicy, last: Long, now: Long, appStart: Boolean, zone: TimeZone = TimeZone.getDefault()): Boolean {
             if (p.mode == "off") return false
             if (p.mode == "startup") return appStart
             if (last == 0L) return true
             if (now < last) return true // clock corrected backwards
             if (p.mode == "hours") return now - last >= p.hours * 3_600_000L
-            val current = Instant.ofEpochMilli(now).atZone(zone)
-            val today = current.toLocalDate().atTime(java.time.LocalTime.of(p.minute / 60, p.minute % 60)).atZone(zone)
-            val target = if (current >= today) today else today.minusDays(1)
-            return Instant.ofEpochMilli(last) < target.toInstant()
+            val target = Calendar.getInstance(zone).apply {
+                timeInMillis = now
+                set(Calendar.HOUR_OF_DAY, p.minute / 60)
+                set(Calendar.MINUTE, p.minute % 60)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+                if (now < timeInMillis) add(Calendar.DAY_OF_MONTH, -1)
+            }
+            return last < target.timeInMillis
         }
     }
 }

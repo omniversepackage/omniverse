@@ -182,7 +182,7 @@ SELECT p.title, p.start_ms, p.end_ms, p.has_archive, c.source_id, c.remote_id, c
 FROM channel c CROSS JOIN programme p
 WHERE c.removed_ms IS NULL AND c.epg_channel_id IS NOT NULL AND c.epg_channel_id <> ''
   AND p.channel_key = c.epg_channel_id AND p.start_ms > :fromMs AND p.start_ms < :untilMs
-  AND p.source_id = c.source_id AND p.end_ms > :nowMs AND instr(lower(p.title), :head) > 0 AND instr(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(lower(p.title), ' ', ''), '-', ''), ':', ''), '.', ''), '''', ''), '!', ''), ',', ''), '’', ''), '  AND p.source_id = c.source_id AND p.end_ms > :nowMs AND p.title LIKE :pattern', 'and'), 'é', 'e'), 'è', 'e'), 'ê', 'e'), 'á', 'a'), 'à', 'a'), 'ö', 'o'), 'ü', 'u'), 'ñ', 'n'), :needle) > 0
+  AND p.source_id = c.source_id AND p.end_ms > :nowMs AND instr(lower(p.title), :head) > 0 AND instr(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(lower(p.title), ' ', ''), '-', ''), ':', ''), '.', ''), '''', ''), '!', ''), ',', ''), '’', ''), '&', 'and'), 'é', 'e'), 'è', 'e'), 'ê', 'e'), 'á', 'a'), 'à', 'a'), 'ö', 'o'), 'ü', 'u'), 'ñ', 'n'), :needle) > 0
 ORDER BY p.start_ms, c.sort_index
 LIMIT :limit;
 
@@ -1756,3 +1756,51 @@ WHERE c.removed_ms IS NULL AND c.epg_channel_id IS NOT NULL AND c.epg_channel_id
   AND p.source_id = c.source_id AND p.end_ms > :nowMs AND p.title IN :titles
 ORDER BY p.start_ms, c.sort_index
 LIMIT :limit;
+
+
+-- Main-search eligibility is applied before LIMIT so hidden channels cannot crowd out matches.
+searchLiveEligible:
+SELECT search_index.title, search_index.kind, search_index.source_id, search_index.remote_id
+FROM search_index JOIN channel c ON c.source_id = search_index.source_id AND c.remote_id = search_index.remote_id
+WHERE search_index MATCH :query AND search_index.kind = 'LIVE' AND c.removed_ms IS NULL
+  AND ('LIVE|' || c.source_id || '|' || c.primary_category_id) NOT IN :excludedKeys
+LIMIT :limit;
+
+searchLiveSubstringEligible:
+SELECT c.source_id, c.remote_id, c.name
+FROM channel c
+WHERE c.removed_ms IS NULL AND instr(lower(c.name), :head) > 0 AND instr(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(lower(c.name), ' ', ''), '-', ''), ':', ''), '.', ''), '''', ''), '!', ''), ',', ''), '’', ''), '&', 'and'), 'é', 'e'), 'è', 'e'), 'ê', 'e'), 'á', 'a'), 'à', 'a'), 'ö', 'o'), 'ü', 'u'), 'ñ', 'n'), :needle) > 0
+AND ('LIVE|' || c.source_id || '|' || c.primary_category_id) NOT IN :excludedKeys
+LIMIT :fetch;
+
+
+searchProgrammesEligible:
+SELECT p.title, p.start_ms, p.end_ms, p.has_archive, c.source_id, c.remote_id, c.name, c.logo_url, c.primary_category_id
+-- CROSS JOIN keeps channel as the outer loop so each channel's programmes are read through the
+-- (channel_key, start_ms) primary key for [fromMs, untilMs) only; the old programme-first scan
+-- read the whole multi-day guide (~20 s on the Shield).
+FROM channel c CROSS JOIN programme p
+WHERE c.removed_ms IS NULL AND c.epg_channel_id IS NOT NULL AND c.epg_channel_id <> ''
+  AND p.channel_key = c.epg_channel_id AND p.start_ms > :fromMs AND p.start_ms < :untilMs
+  AND p.source_id = c.source_id AND p.end_ms > :nowMs AND instr(lower(p.title), :head) > 0 AND instr(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(lower(p.title), ' ', ''), '-', ''), ':', ''), '.', ''), '''', ''), '!', ''), ',', ''), '’', ''), '&', 'and'), 'é', 'e'), 'è', 'e'), 'ê', 'e'), 'á', 'a'), 'à', 'a'), 'ö', 'o'), 'ü', 'u'), 'ñ', 'n'), :needle) > 0
+AND ('LIVE|' || c.source_id || '|' || c.primary_category_id) NOT IN :excludedKeys
+ORDER BY p.start_ms, c.sort_index
+LIMIT :limit;
+
+
+searchProgrammesByTitlesEligible:
+SELECT p.title, p.start_ms, p.end_ms, p.has_archive, c.source_id, c.remote_id, c.name, c.logo_url, c.primary_category_id
+FROM channel c CROSS JOIN programme p
+WHERE c.removed_ms IS NULL AND c.epg_channel_id IS NOT NULL AND c.epg_channel_id <> ''
+  AND p.channel_key = c.epg_channel_id AND p.start_ms > :fromMs AND p.start_ms < :untilMs
+  AND p.source_id = c.source_id AND p.end_ms > :nowMs AND p.title IN :titles
+AND ('LIVE|' || c.source_id || '|' || c.primary_category_id) NOT IN :excludedKeys
+ORDER BY p.start_ms, c.sort_index
+LIMIT :limit;
+
+
+vodByKeys:
+SELECT * FROM vod WHERE source_id = :sourceId AND remote_id IN :remoteIds AND removed_ms IS NULL;
+
+seriesByKeys:
+SELECT * FROM series WHERE source_id = :sourceId AND remote_id IN :remoteIds AND removed_ms IS NULL;

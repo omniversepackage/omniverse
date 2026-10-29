@@ -127,6 +127,10 @@ class LiveViewModel(
     private val reminders = ReminderStore(userData, clock)
 
     private val selection = MutableStateFlow<Pair<SourceId, String>?>(null)
+    /** Favourites order while one is grabbed (hold-OK › Move); null = the saved order. */
+    private val favoriteOrder = MutableStateFlow<List<ContentKey>?>(null)
+    /** The Favorites list as last shown, so a move starts from what the viewer sees. */
+    @Volatile private var shownFavorites: List<ContentKey> = emptyList()
     /** Task 84g: true while a category is grabbed for hold-OK reorder; incoming lists must not clobber the move. */
     @Volatile private var moving = false
     /**
@@ -147,7 +151,12 @@ class LiveViewModel(
             when {
                 sel == null -> flowOf(PagingData.empty())
                 sel.second == FAVORITES -> combine(userData.favorites(ContentKind.LIVE), browseFavoritesVisibility) { keys, vis ->
-                    PagingData.from(keys.mapNotNull { k -> catalog.channel(k)?.takeIf { vis("LIVE", it.key.sourceId.value, it.categoryId.value) }?.copy(categoryId = RemoteId(FAVORITES)) })
+                    keys.mapNotNull { k -> catalog.channel(k)?.takeIf { vis("LIVE", it.key.sourceId.value, it.categoryId.value) }?.copy(categoryId = RemoteId(FAVORITES)) }
+                }.combine(favoriteOrder) { rows, order ->
+                    // Mid-move the viewer's in-memory order wins; rows are reordered, never looked up again.
+                    val shown = if (order == null) rows else rows.associateBy { it.key }.let { byKey -> order.mapNotNull { byKey[it] } + rows.filter { it.key !in order } }
+                    shownFavorites = shown.map { it.key }
+                    PagingData.from(shown)
                 }
                 sel.second == ALL -> combine(unified.categories(), categoryVisibility) { _, vis ->
                     PagingData.from(unified.rows(ALL, sel.first, vis, providerFilter.hiddenIds.first()))
@@ -368,6 +377,28 @@ class LiveViewModel(
 
     fun toggleFavorite(row: ChannelRow) {
         viewModelScope.launch { userData.setFavorite(row.key, row.key !in _state.value.favorites) }
+    }
+
+    /**
+     * Hold-OK › Move on a favourite: nudge it one step ([delta] = -1 up, +1 down). Only the in-memory
+     * order changes, so each press is instant; [finishFavoriteMove] saves it once on drop.
+     */
+    fun moveFavorite(key: ContentKey, delta: Int) {
+        val list = (favoriteOrder.value ?: shownFavorites).toMutableList()
+        val i = list.indexOf(key)
+        val j = i + delta
+        if (i < 0 || j !in list.indices) return
+        list.add(j, list.removeAt(i))
+        favoriteOrder.value = list
+    }
+
+    /** Drop the grabbed favourite: save the order, then let the saved list take over again. */
+    fun finishFavoriteMove() {
+        val order = favoriteOrder.value ?: return
+        viewModelScope.launch {
+            userData.reorderFavorites(order)
+            favoriteOrder.value = null
+        }
     }
 
     /**

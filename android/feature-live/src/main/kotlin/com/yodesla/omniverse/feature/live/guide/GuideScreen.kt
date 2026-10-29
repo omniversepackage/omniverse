@@ -145,7 +145,10 @@ fun GuideRoute(
     Column(Modifier.fillMaxSize()) {
         // Compact header (Kory: the old one used half the screen): three short rows, then the grid.
         Row(
-            Modifier.fillMaxWidth().padding(start = OmniSpacing.tvSide, end = OmniSpacing.tvSide, top = OmniSpacing.s),
+            Modifier.fillMaxWidth().padding(horizontal = OmniSpacing.m, vertical = OmniSpacing.s)
+                .background(c.background.copy(alpha = 0.86f), androidx.compose.foundation.shape.RoundedCornerShape(16.dp))
+                .padding(start = OmniSpacing.tvSide - OmniSpacing.m, end = OmniSpacing.tvSide - OmniSpacing.m,
+                    top = OmniSpacing.s, bottom = OmniSpacing.s),
             verticalAlignment = Alignment.Top,
         ) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -248,7 +251,14 @@ fun GuideRoute(
                 }
             }
             LaunchedEffect(grid) { gridFocus.requestFocusWhenReady() }
-        } else if (!state.loading) {
+        } else if (state.loading) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(OmniSpacing.m)) {
+                    androidx.compose.material3.CircularProgressIndicator(color = c.accent)
+                    Text("Loading TV guide…", style = OmniTheme.type.body, color = c.textSecondary)
+                }
+            }
+        } else {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(if (state.selectedCategoryId == GuideViewModel.FAVORITES) "No favourites yet. Hold OK on any channel to add it here." else "No channels in this category", style = OmniTheme.type.body, color = c.textTertiary)
             }

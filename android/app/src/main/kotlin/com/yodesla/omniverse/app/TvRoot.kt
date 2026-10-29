@@ -1,5 +1,7 @@
 package com.yodesla.omniverse.app
 
+import com.yodesla.omniverse.feature.vod.primarySeriesEpisode
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.platform.LocalConfiguration
@@ -457,8 +459,8 @@ fun TvRoot(brand: BrandConfig, graph: AppGraph, mobile: Boolean = false) {
         buildList {
             add(NavItem("search", "Search", Icons.Outlined.Search))
             add(NavItem("home", "Home", Icons.Outlined.Home))
-            // Kory 2026-10-17: For You is unfinished — hidden from the menu until it is done.
-            // add(NavItem("for-you", "For You", Icons.Outlined.Favorite))
+            // Hidden 2026-10-17 while unfinished; Kory re-enabled it 2026-10-28.
+            add(NavItem("for-you", "For You", Icons.Outlined.Favorite))
             add(NavItem("live", "Live TV", Icons.Outlined.LiveTv))
             add(NavItem("sports", "Live Sports", Icons.Outlined.SportsSoccer))
             add(NavItem("movies", "Movies", Icons.Outlined.Movie))
@@ -554,12 +556,10 @@ fun TvRoot(brand: BrandConfig, graph: AppGraph, mobile: Boolean = false) {
                 BottomNav(shownNav, selectedId = top.id, onSelect = ::openSection)
             }
         } else if (top is Screen.Section) {
-            // Browsing stays full-width. When navigation opens, reserve its width so the
-            // category column never ends up hidden behind the rail.
+            // Overlay navigation without remeasuring every shelf and recropping all artwork.
             Box(Modifier.fillMaxSize()) {
                 Box(
                     Modifier.fillMaxSize()
-                        .padding(start = if (railOpen) TvNavRailWidth else 0.dp)
                         .focusRequester(contentFocus)
                         // Moving Right out of the rail hides it at once: it only exists to pick a section.
                         .onFocusChanged { if (it.hasFocus && railOpen) railOpen = false }
@@ -608,7 +608,11 @@ fun TvRoot(brand: BrandConfig, graph: AppGraph, mobile: Boolean = false) {
                                 kidsTime = graph.kidsTime, kidsPinEnabled = pinEnabled, onRequestKidsPin = ::requestKidsExtension)
                         }
                         is Screen.Detail -> {
-                            val vm = viewModel(key = "detail-${top.key}-${top.explicitlySelectedSource}") { DetailViewModel(top.key, graph.sources, graph.userData, graph.catalog, graph.parental.visibility, graph.metadataEnricher, graph.rottenTomatoes, tmdb = graph.tmdbEnricher, focusEpisode = top.focusEpisode, explicitlySelectedSource = top.explicitlySelectedSource) }
+                            val vm = viewModel(key = "detail-${top.key}-${top.explicitlySelectedSource}") { DetailViewModel(top.key, graph.sources, graph.userData, graph.catalog, graph.parental.visibility, graph.metadataEnricher, graph.rottenTomatoes, tmdb = graph.tmdbEnricher, focusEpisode = top.focusEpisode, explicitlySelectedSource = top.explicitlySelectedSource,
+                                repairSource = graph::reconnectPlex,
+                                openWorkingCopy = { replacement ->
+                                    if ((stack.lastOrNull() as? Screen.Detail)?.key == top.key) replaceTop(Screen.Detail(replacement, focusEpisode = top.focusEpisode, autoPlay = top.autoPlay))
+                                }) }
                             DetailRoute(vm, graph.parental.visibility, onOpen = { key, start -> push(Screen.Detail(key, autoPlay = start, explicitlySelectedSource = true)) }) { item -> push(Screen.VodPlay(item)) }
                             LaunchedEffect(Unit) { vm.load() } // refresh resume points after playback
                             // Hold-menu Resume / Start over: play as soon as the title has loaded. The flag is
@@ -617,9 +621,7 @@ fun TvRoot(brand: BrandConfig, graph: AppGraph, mobile: Boolean = false) {
                                 LaunchedEffect(top) {
                                     val st = vm.state.first { !it.loading && (it.movie != null || it.series != null) }
                                     val item = if (st.movie != null) vm.moviePlayItem(fromStart) else st.series?.let { series ->
-                                        val all = series.seasons.flatMap { it.episodes }
-                                        val last = st.episodeProgress.values.maxByOrNull { it.updatedMs }?.let { p -> all.firstOrNull { it.remoteId == p.key.remoteId } }
-                                        (last ?: all.firstOrNull())?.let { vm.episodePlayItem(it, fromStart) }
+                                        st.primarySeriesEpisode(fromStart)?.let { vm.episodePlayItem(it, fromStart) }
                                     }
                                     replaceTop(top.copy(autoPlay = null))
                                     item?.let { push(Screen.VodPlay(it)) }
@@ -894,12 +896,13 @@ private fun SectionContent(
 ) {
     when (s) {
         Screen.Home -> {
-            val vm = viewModel(key = "home") { HomeViewModel(graph.catalog, graph.epg, graph.userData, graph.clock, visibility = graph.browseVisibility, upNext = com.yodesla.omniverse.core.data.UpNextResolver(graph.sources), tmdb = graph.tmdbEnricher, sourceAlert = graph.sourceHealth.alert(), myTeams = graph.myTeams, discovery = graph.discovery) }
+            val vm = viewModel(key = "home") { HomeViewModel(graph.catalog, graph.epg, graph.userData, graph.clock, visibility = graph.browseVisibility, upNext = com.yodesla.omniverse.core.data.UpNextResolver(graph.sources), tmdb = graph.tmdbEnricher, sourceAlert = graph.sourceHealth.alert(), myTeams = graph.myTeams, discovery = graph.discovery, sources = graph.sources) }
             val homeState by vm.state.collectAsStateWithLifecycle()
             // Task 101: cached rows on screen is the signal that lets the startup sync begin.
             LaunchedEffect(homeState) {
                 if (homeState.loaded) graph.homeRowsShown(homeState.rows.size, homeState.rows.sumOf { it.cards.size })
             }
+            androidx.activity.compose.ReportDrawnWhen { homeState.loaded }
             val curProfile by graph.profiles.current().collectAsStateWithLifecycle(initialValue = null)
             // Task 84b: the Guest is "no profile" - Home shows no avatar chip in that state.
             HomeRoute(vm, onOpen = { card -> if (card.focusEpisode != null) push(Screen.Detail(card.open, focusEpisode = card.focusEpisode)) else openCard(card.open, card.categoryId) }, onOpenNavigation = onOpenNavigation, onPlay = { key, fromStart -> push(Screen.Detail(key, fromStart)) }, profile = curProfile?.takeIf { !it.isGuest }, onProfileClick = { push(Screen.WhosWatching) })
@@ -909,11 +912,13 @@ private fun SectionContent(
             val vm = viewModel(key = "for-you-${profile?.id}") {
                 com.yodesla.omniverse.feature.home.ForYouViewModel(graph.catalog, graph.userData, graph.search,
                     graph.browseVisibility, graph.followedTeams, graph.myTeams, graph.searchExcludedCategoryKeys,
-                    allowNews = profile != null && profile?.isKids != true)
+                    allowNews = profile != null && profile?.isKids != true,
+                    epg = graph.epg, clock = graph.clock, tmdb = graph.tmdbEnricher, sources = graph.sources)
             }
             com.yodesla.omniverse.feature.home.ForYouRoute(vm, profile?.takeIf { !it.isGuest }?.name,
                 onOpen = { card -> openCard(card.open, card.categoryId) }, onMenu = onOpenNavigation,
-                onMovies = { onOpenSection("movies") }, onShows = { onOpenSection("shows") }, onSports = { onOpenSection("sports") }, allowNews = profile != null && profile?.isKids != true)
+                onMovies = { onOpenSection("movies") }, onShows = { onOpenSection("shows") }, onSports = { onOpenSection("sports") }, allowNews = profile != null && profile?.isKids != true,
+                onPlay = { key, fromStart -> push(Screen.Detail(key, fromStart)) })
         }
         Screen.Sports -> {
             val vm = viewModel(key = "sports") {
@@ -994,7 +999,7 @@ private fun SectionContent(
                 LaunchedEffect(vm, browseEntry) { vm.enterHorizontalSection(browseEntry) }
                 val home = viewModel(key = if (kind == ContentKind.VOD) "movie-home" else "show-home") {
                     HomeViewModel(graph.catalog, graph.epg, graph.userData, graph.clock, visibility = graph.browseVisibility,
-                        upNext = com.yodesla.omniverse.core.data.UpNextResolver(graph.sources), tmdb = graph.tmdbEnricher, contentKind = kind, discovery = graph.discovery)
+                        upNext = com.yodesla.omniverse.core.data.UpNextResolver(graph.sources), tmdb = graph.tmdbEnricher, contentKind = kind, discovery = graph.discovery, sources = graph.sources)
                 }
                 val leftMenu by graph.userData.setting("left_opens_menu").collectAsStateWithLifecycle(initialValue = null)
                 val menuWarning by graph.userData.setting("warn_main_menu").collectAsStateWithLifecycle(initialValue = null)
@@ -1015,7 +1020,7 @@ private fun SectionContent(
                 historySource = graph.userData.setting(com.yodesla.omniverse.feature.home.SEARCH_HISTORY_KEY),
                 saveHistory = { graph.userData.putSetting(com.yodesla.omniverse.feature.home.SEARCH_HISTORY_KEY, it) },
                 reminders = com.yodesla.omniverse.core.data.reminders.ReminderStore(graph.userData, graph.clock), clock = graph.clock,
-                initialQuery = s.query, userData = graph.userData, scope = s.scope) }
+                initialQuery = s.query, userData = graph.userData, scope = s.scope, tmdb = graph.tmdbEnricher) }
             // The VM outlives the section (key "search"), so a voice query arriving on a re-entry
             // must be pushed in explicitly; initialQuery only covers the VM's first creation.
             LaunchedEffect(s.query) { s.query?.let(vm::onQuery) }
@@ -1071,7 +1076,7 @@ private fun SectionContent(
                     ),
                     sourceExtras = { id -> SourceExtras(graph, id, onReenterLogin = { push(Screen.Onboarding(firstRun = false, editSourceId = id)) }) })
                 if (customizeHome) {
-                    val homeVm = viewModel(key = "home") { HomeViewModel(graph.catalog, graph.epg, graph.userData, graph.clock, visibility = graph.browseVisibility, upNext = com.yodesla.omniverse.core.data.UpNextResolver(graph.sources), tmdb = graph.tmdbEnricher, sourceAlert = graph.sourceHealth.alert(), myTeams = graph.myTeams, discovery = graph.discovery) }
+                    val homeVm = viewModel(key = "home") { HomeViewModel(graph.catalog, graph.epg, graph.userData, graph.clock, visibility = graph.browseVisibility, upNext = com.yodesla.omniverse.core.data.UpNextResolver(graph.sources), tmdb = graph.tmdbEnricher, sourceAlert = graph.sourceHealth.alert(), myTeams = graph.myTeams, discovery = graph.discovery, sources = graph.sources) }
                     val hs by homeVm.state.collectAsStateWithLifecycle()
                     com.yodesla.omniverse.feature.home.HomeCustomizePanel(homeVm, hs.panel, hs.compact, onDismiss = { customizeHome = false }, modifier = Modifier.fillMaxSize())
                 }
@@ -1110,3 +1115,4 @@ private fun HiddenNavRows(graph: AppGraph) {
     }
     if (hidden.size > 1) OmniActionRow("Show all hidden menu items", "Show all", onClick = { save(emptySet()) })
 }
+

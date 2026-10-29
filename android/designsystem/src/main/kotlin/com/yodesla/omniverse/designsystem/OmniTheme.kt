@@ -67,7 +67,13 @@ fun OmniverseTheme(
         LocalTextScale provides scale,
         LocalPublicBuild provides publicBuild,
     ) {
-        MaterialTheme(colorScheme = scheme, content = content)
+        androidx.compose.material3.MaterialTheme(
+            colorScheme = androidx.compose.material3.darkColorScheme(
+                primary = accent, background = colors.background, surface = colors.surface,
+                onSurface = colors.textPrimary, onBackground = colors.textPrimary,
+                onSurfaceVariant = colors.textSecondary,
+            ),
+        ) { MaterialTheme(colorScheme = scheme, content = content) }
     }
 }
 

@@ -21,6 +21,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
@@ -62,17 +65,28 @@ fun OmniPickerDialog(
 ) {
     val c = OmniTheme.colors
     val t = OmniTheme.type
+    val initialIndex = options.indexOfFirst { it.value == selected }.coerceAtLeast(0)
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex)
+    val initialFocus = remember { FocusRequester() }
+    LaunchedEffect(selected, options) {
+        if (options.isNotEmpty()) {
+            listState.scrollToItem(initialIndex)
+            initialFocus.requestFocusWhenReady()
+        }
+    }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(Modifier.fillMaxSize().background(c.scrim.copy(alpha = 0.55f)), contentAlignment = Alignment.Center) {
             Column(
-                Modifier.widthIn(max = 560.dp).padding(OmniSpacing.tvSide).glassSurface(corner = 16.dp)
+                Modifier.widthIn(max = 560.dp).padding(OmniSpacing.tvSide)
+                    .background(c.surface, RoundedCornerShape(16.dp)).glassSurface(corner = 16.dp)
                     .padding(OmniSpacing.l),
                 verticalArrangement = Arrangement.spacedBy(OmniSpacing.xs),
             ) {
                 Text(title, style = t.headline, color = c.textPrimary, modifier = Modifier.padding(bottom = OmniSpacing.s))
-                LazyColumn(Modifier.heightIn(max = 320.dp), verticalArrangement = Arrangement.spacedBy(OmniSpacing.xs)) {
+                LazyColumn(Modifier.heightIn(max = 320.dp), state = listState, contentPadding = PaddingValues(OmniSpacing.s),
+                    verticalArrangement = Arrangement.spacedBy(OmniSpacing.s)) {
                     items(options, key = { it.value }) { opt ->
-                        PickerRow(opt, selected = opt.value == selected, onClick = { onSelect(opt.value) })
+                        PickerRow(opt, selected = opt.value == selected, initialFocus = initialFocus.takeIf { options[initialIndex].value == opt.value }, onClick = { onSelect(opt.value) })
                     }
                 }
             }
@@ -81,14 +95,13 @@ fun OmniPickerDialog(
 }
 
 @Composable
-private fun PickerRow(opt: PickerOption, selected: Boolean, onClick: () -> Unit) {
+private fun PickerRow(opt: PickerOption, selected: Boolean, initialFocus: FocusRequester?, onClick: () -> Unit) {
     val c = OmniTheme.colors
     val t = OmniTheme.type
     var focused by remember { mutableStateOf(false) }
-    val fr = remember { FocusRequester() }
-    LaunchedEffect(Unit) { if (selected) fr.requestFocusWhenReady() }
+    val fr = initialFocus ?: remember { FocusRequester() }
     Box(
-        Modifier.fillMaxWidth().height(56.dp)
+        Modifier.fillMaxWidth().heightIn(min = 56.dp).semantics { this.selected = selected }
             .focusRequester(fr)
             .onFocusChanged { focused = it.isFocused }
             .then(if (focused || selected) Modifier.glassSurface(corner = 26.dp, focused = focused, shadow = false) else Modifier)
@@ -100,7 +113,7 @@ private fun PickerRow(opt: PickerOption, selected: Boolean, onClick: () -> Unit)
             ),
         contentAlignment = Alignment.CenterStart,
     ) {
-        Row(Modifier.fillMaxHeight().padding(horizontal = OmniSpacing.l), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(horizontal = OmniSpacing.l, vertical = OmniSpacing.s), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(22.dp), contentAlignment = Alignment.Center) {
                 if (selected) Icon(Icons.Rounded.Check, contentDescription = "Selected", tint = c.accent, modifier = Modifier.size(18.dp))
             }

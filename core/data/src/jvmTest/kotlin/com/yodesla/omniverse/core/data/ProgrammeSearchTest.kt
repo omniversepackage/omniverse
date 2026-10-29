@@ -36,4 +36,21 @@ class ProgrammeSearchTest {
         assertEquals(emptyList(), repo.searchProgrammes("f", nowMs = 2000))
         driver.close()
     }
+    @Test fun visibilityIsAppliedBeforeChannelAndProgrammeLimits() = runTest {
+        val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
+        try {
+            OmniverseDb.Schema.create(driver)
+            repeat(40) { i ->
+                val cat = if (i < 39) "hidden" else "allowed"
+                driver.execute(null, "INSERT INTO channel(source_id,remote_id,name,epg_channel_id,primary_category_id,sort_index,sync_gen) VALUES ('s','$i','Football $i','e$i','$cat',$i,1)", 0)
+                driver.execute(null, "INSERT INTO search_index(title,kind,source_id,remote_id) VALUES ('Football $i','LIVE','s','$i')", 0)
+                driver.execute(null, "INSERT INTO programme(source_id,channel_key,start_ms,end_ms,title) VALUES ('s','e$i',1000,3000,'Football Live')", 0)
+            }
+            val repo = SearchRepositoryImpl(OmniverseDb(driver), UnconfinedTestDispatcher(testScheduler))
+            val hidden = listOf("LIVE|s|hidden")
+            assertEquals(listOf("39"), repo.searchLiveVisible("football", hidden, 1).map { it.key.remoteId.value })
+            assertEquals(listOf("39"), repo.searchProgrammesVisible("football", 2000, hidden, limit = 1).map { it.channel.remoteId.value })
+        } finally { driver.close() }
+    }
+
 }

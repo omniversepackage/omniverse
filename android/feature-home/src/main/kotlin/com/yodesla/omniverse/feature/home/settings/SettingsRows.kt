@@ -37,6 +37,11 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
 import com.yodesla.omniverse.designsystem.FocusCard
@@ -51,8 +56,7 @@ import kotlinx.coroutines.delay
  * Task 84e: the uniform "setting row" - title, one-line secondary (max 2 lines), control on the
  * right. The WHOLE row is the focus target (glass highlight like the rest of the app); OK flips
  * a switch, opens a picker or runs an action. Long disclosures hide behind an info affordance:
- * the secondary text truncates to 2 lines, and holding focus for a second (or pressing Info)
- * opens the full text. Nothing is deleted - every disclosure stays reachable.
+ * the secondary text truncates to 2 lines, and pressing Info opens the full text. Nothing is deleted - every disclosure stays reachable.
  */
 
 /** Per-row focus requesters + last-focused memory, so D-pad focus is restored per category. */
@@ -60,6 +64,8 @@ class RowFocusRegistry {
     private val requesters = mutableStateMapOf<String, FocusRequester>()
     val lastFocused = mutableStateMapOf<SettingsCategory, String>()
     val firstKey = mutableStateMapOf<SettingsCategory, String>()
+    val listStates = mutableMapOf<SettingsCategory, androidx.compose.foundation.lazy.LazyListState>()
+    val paneKeys = mutableMapOf<SettingsCategory, List<String>>()
 
     fun requester(key: String): FocusRequester = requesters.getOrPut(key) { FocusRequester() }
 
@@ -71,7 +77,11 @@ class RowFocusRegistry {
 
     /** Focus the row the viewer last used in this category, else its first row. */
     suspend fun focusReady(category: SettingsCategory): Boolean {
-        val key = lastFocused[category] ?: firstKey[category] ?: return false
+        val keys = paneKeys[category].orEmpty()
+        val key = (lastFocused[category] ?: firstKey[category])?.takeIf { it in keys }
+            ?: keys.firstOrNull { it != SettingsRowKeys.TITLE } ?: return false
+        val idx = keys.indexOf(key)
+        if (idx >= 0) listStates[category]?.scrollToItem(idx)
         return requester(key).requestFocusWhenReady()
     }
 }
@@ -94,7 +104,7 @@ fun OmniSwitchRow(
     ctx: RowCtx? = null,
     key: String? = null,
 ) {
-    SettingRow(title, secondary, disclosure, onClick = { onCheckedChange(nextSwitchState(checked)) }, modifier, ctx, key) {
+    SettingRow(title, secondary, disclosure, onClick = { onCheckedChange(nextSwitchState(checked)) }, modifier.semantics { role = Role.Switch; toggleableState = ToggleableState(checked) }, ctx, key) {
         OmniSwitch(checked)
     }
 }
@@ -166,24 +176,20 @@ private fun SettingRow(
     val c = OmniTheme.colors
     val t = OmniTheme.type
     var focused by remember { mutableStateOf(false) }
-    var infoShown by remember(disclosure) { mutableStateOf(false) }
     val fr = if (ctx != null && key != null) ctx.registry.requester(key) else null
-    LaunchedEffect(focused) {
-        if (focused && disclosure != null && ctx != null && !infoShown) {
-            delay(1_000)
-            if (focused) {
-                infoShown = true
-                ctx.onInfo(title, disclosure)
-            }
-        }
-    }
     FocusCard(
         onClick = onClick ?: {},
+        onLongClick = if (disclosure != null && ctx != null) ({ ctx.onInfo(title, disclosure) }) else null,
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = 52.dp)
             .then(if (fr != null) Modifier.focusRequester(fr) else Modifier)
-            .onKeyEvent { e -> disclosure != null && e.type == KeyEventType.KeyDown && e.key == Key.Info }
+            .onKeyEvent { e ->
+                if (disclosure != null && ctx != null && e.key == Key.Info) {
+                    if (e.type == KeyEventType.KeyDown) ctx.onInfo(title, disclosure)
+                    true
+                } else false
+            }
             .onFocusChanged {
                 focused = it.hasFocus
                 if (it.hasFocus && ctx != null && key != null) ctx.registry.noteFocused(ctx.category, key)

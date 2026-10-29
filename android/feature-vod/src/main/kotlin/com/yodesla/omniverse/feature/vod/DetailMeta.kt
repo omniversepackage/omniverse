@@ -43,8 +43,8 @@ internal fun DetailMetaRow(
     val scores = rt?.takeIf { !it.isEmpty }
     if (text.isEmpty() && rating == null && scores == null) return
     FlowRow(modifier, horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        if (text.isNotEmpty()) Text(text, style = t.caption, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        rating?.let { RatingBadge(it) }
+        if (text.isNotEmpty()) Text(text, style = t.caption.copy(shadow = androidx.compose.ui.graphics.Shadow(androidx.compose.ui.graphics.Color.Black, androidx.compose.ui.geometry.Offset(0f, 2f), 6f)), color = c.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        rating?.takeIf { it.isFinite() && it > 0f && it <= 10f }?.let { RatingBadge(it) }
         scores?.let { RtBadges(it) }
     }
 }

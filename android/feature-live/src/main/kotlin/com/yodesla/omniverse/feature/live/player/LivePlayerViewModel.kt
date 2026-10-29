@@ -180,7 +180,12 @@ class LivePlayerViewModel(
                 else -> catalog.channelOrder(key.sourceId, categoryId)
             }
             val hidden = providerFilter.hiddenIds.first()
-            order = order.filter { it.sourceId.value !in hidden }
+            val visible = allowedVisibility.first()
+            order = order.filter { key ->
+                key.sourceId.value !in hidden && catalog.channel(key)?.let {
+                    visible("LIVE", key.sourceId.value, it.categoryId.value)
+                } == true
+            }
             index = order.indexOf(key)
             schedulePreload()
         }
@@ -282,7 +287,12 @@ class LivePlayerViewModel(
         }
     }
 
+    private suspend fun eligible(row: ChannelRow): Boolean =
+        row.key.sourceId.value !in providerFilter.hiddenIds.first() &&
+            allowedVisibility.first()("LIVE", row.key.sourceId.value, row.categoryId.value)
+
     private suspend fun moveTo(row: ChannelRow, settleMs: Long, resetFailures: Boolean = true) {
+        if (!eligible(row)) return
         tuneGeneration++
         if (resetFailures) attemptedSources.clear()
         current = row
@@ -310,6 +320,7 @@ class LivePlayerViewModel(
     }
 
     private suspend fun open(row: ChannelRow) {
+        if (!eligible(row)) { clearPreload(); showError("This channel is unavailable for this profile."); return }
         if (playing == row.key) return
         // Task 94: zapping onto the channel the spare engine already primed reuses its spec object
         // (the UI swaps engines on reference equality) instead of resolving a second stream.
@@ -332,6 +343,7 @@ class LivePlayerViewModel(
             if (current?.key == row.key) { showError("This channel can't be played right now."); onStreamFailed() }
             return
         }
+        if (current?.key != row.key || !eligible(row)) return
         if (playing != null) previous = playing
         playing = row.key
         _state.update { it.copy(spec = spec, error = null, switchTo = null, preload = null) }
@@ -355,13 +367,14 @@ class LivePlayerViewModel(
             val nextKey = order.getOrNull(nextIdx) ?: return@launch
             if (nextKey == key) return@launch
             val row = catalog.channel(nextKey) ?: return@launch
+            if (!eligible(row)) return@launch
             val source = sources.contentSource(row.key.sourceId) ?: return@launch
             val spec = try {
                 source.playback(PlaybackRequest.Live(row.key.sourceId, row.key.remoteId))
             } catch (e: SourceException) {
                 return@launch
             }
-            if (playing != key || !preloadSetting || preloadDisabled) return@launch
+            if (playing != key || !preloadSetting || preloadDisabled || !eligible(row)) return@launch
             preloadKey = nextKey
             preloadSpec = spec
             _state.update { it.copy(preload = spec) }
